@@ -188,6 +188,12 @@ precedenti. Usa particelle non collegate, una griglia spaziale per i vicini e un
 vincolo iterativo di densità per contrastare la compressione. La prima scena
 verifica soltanto stabilità, massa costante e collisioni nella strettoia:
 
+Il corpo usa inoltre tre livelli complementari: il PBF conserva la massa, una
+membrana virtuale limita la crescita del perimetro senza molle permanenti e un
+nucleo ellittico deformabile conserva la propria area. Il nucleo ha collisioni
+proprie e stabilisce una dimensione minima proporzionale alla creatura, quindi
+il limite delle strettoie non dipende dalla risoluzione delle particelle.
+
 ```bash
 uv run creatura-pbf-demo
 ```
@@ -200,6 +206,9 @@ consuma. Dopo avere raccolto i tre nutrienti si sblocca l'uscita verde.
 Controlli aggiuntivi:
 
 - `L`: ricomincia la stanza;
+- `C`: apre il laboratorio con tre aperture di ampiezza diversa;
+- tasto sinistro: estende localmente uno pseudopodio verso il cursore; la
+  portata e la massa coinvolta sono limitate in proporzione alla taglia;
 - `1`-`4`: prove in strettoie di larghezza diversa;
 - `P`, `M`, `G`: taglia piccola, media o grande;
 - `F1`, `F2`, `F3`: punti, membrana o entrambe;

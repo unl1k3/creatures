@@ -82,6 +82,76 @@ def test_pseudopod_locomotion_moves_the_body_towards_target() -> None:
     assert creature.center.x > 3.0
 
 
+def test_manual_pseudopod_extends_a_local_sector_without_translating_body() -> None:
+    creature = PBFCreature.create(center=Vec2(), radius=35.0)
+    initial_front = max(point.x for point in creature.positions)
+    for _ in range(120):
+        creature.step(DT, [])
+        active = creature.extend_pseudopod_towards(Vec2(200.0, 0.0), DT)
+
+    assert active < creature.particle_count // 2
+    assert max(point.x for point in creature.positions) > initial_front + 5.0
+    assert abs(creature.center.x) < 1.0
+    assert creature.diagnostics.connected_particles == creature.particle_count
+
+
+def test_manual_pseudopod_has_a_size_proportional_reach_limit() -> None:
+    creature = PBFCreature.create(center=Vec2(), radius=35.0)
+    allowed_front = creature.reference_radius * (
+        1.0 + creature.config.manual_pseudopod_reach_ratio
+    )
+    peak_front = 0.0
+    for _ in range(720):
+        creature.step(DT, [])
+        active = creature.extend_pseudopod_towards(Vec2(500.0, 0.0), DT)
+        peak_front = max(
+            peak_front,
+            max(point.x - creature.center.x for point in creature.positions),
+        )
+
+    mass_limit = round(
+        creature.particle_count * creature.config.manual_pseudopod_mass_fraction
+    )
+    assert active <= mass_limit
+    assert peak_front <= allowed_front + 2.0
+    assert creature.diagnostics.connected_particles == creature.particle_count
+
+
+def test_nucleus_size_does_not_depend_on_particle_resolution() -> None:
+    normal = PBFCreature.create(center=Vec2(), radius=57.0)
+    detailed = PBFCreature.create(
+        center=Vec2(),
+        radius=57.0,
+        config=PBFConfig(particle_spacing=5.0, smoothing_radius=10.0),
+    )
+
+    normal_radius = (normal.nucleus_axes[0] * normal.nucleus_axes[1]) ** 0.5
+    detailed_radius = (detailed.nucleus_axes[0] * detailed.nucleus_axes[1]) ** 0.5
+    assert abs(normal_radius - detailed_radius) < 0.5
+
+
+def test_deformable_nucleus_conserves_area_and_limits_aspect() -> None:
+    creature = PBFCreature.create(center=Vec2(), radius=35.0)
+    resting_area_factor = creature.nucleus_axes[0] * creature.nucleus_axes[1]
+    creature.travel_direction = Vec2(1.0, 0.0)
+    creature.positions = [Vec2(point.x * 2.2, point.y * 0.45) for point in creature.positions]
+
+    major, minor = creature.nucleus_axes
+    assert abs(major * minor - resting_area_factor) < 1e-6
+    assert major / minor <= creature.config.nucleus_maximum_aspect + 1e-6
+
+
+def test_excess_perimeter_generates_internal_membrane_recovery() -> None:
+    creature = PBFCreature.create(center=Vec2(), radius=35.0)
+    creature.positions = [Vec2(point.x * 3.0, point.y) for point in creature.positions]
+    accelerations = creature._perimeter_recovery_accelerations()
+
+    assert creature.perimeter_ratio > creature.config.maximum_perimeter_ratio
+    assert sum(accelerations, Vec2()).length() < 1e-6
+    front = max(range(creature.particle_count), key=lambda index: creature.positions[index].x)
+    assert accelerations[front].x < 0.0
+
+
 def test_dynamic_cohesion_does_not_use_permanent_pairs() -> None:
     creature = PBFCreature.create(center=Vec2(), radius=35.0)
     creature.set_target(Vec2(300.0, 0.0))

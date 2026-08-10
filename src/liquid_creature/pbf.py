@@ -45,6 +45,14 @@ class PBFConfig:
     maximum_shape_acceleration: float = 85.0
     turn_recovery_duration: float = 0.80
     locomotion_speed_multiplier: float = 1.0
+    manual_pseudopod_acceleration: float = 650.0
+    manual_pseudopod_reach_ratio: float = 0.45
+    manual_pseudopod_mass_fraction: float = 0.42
+    manual_pseudopod_limit_recovery: float = 18.0
+    maximum_perimeter_ratio: float = 1.48
+    perimeter_recovery_strength: float = 52.0
+    nucleus_radius_ratio: float = 0.23
+    nucleus_maximum_aspect: float = 1.65
 
 
 @dataclass(slots=True)
@@ -55,6 +63,8 @@ class PBFDiagnostics:
     connected_particles: int = 0
     locomotion_phase: str = "riposo"
     pseudopod_count: int = 0
+    perimeter_ratio: float = 1.0
+    nucleus_aspect: float = 1.0
 
 
 @dataclass(slots=True)
@@ -71,9 +81,12 @@ class PBFCreature:
     locomotion_cycle: int = -1
     reference_variance: float = 1.0
     reference_radius: float = 1.0
+    reference_perimeter: float = 1.0
     travel_direction: Vec2 = field(default_factory=Vec2)
     turn_recovery_time: float = 0.0
     adhesion_weights: list[float] = field(default_factory=list)
+    manual_pseudopod_count: int = 0
+    manual_pseudopod_extension: float = 0.0
     diagnostics: PBFDiagnostics = field(default_factory=PBFDiagnostics)
     _neighbors: list[list[int]] = field(default_factory=list)
     _densities: list[float] = field(default_factory=list)
@@ -119,6 +132,7 @@ class PBFCreature:
         body.rest_density = ordered[len(ordered) // 2]
         body.reference_variance = body._mean_axis_variance()
         body.reference_radius = 2.0 * sqrt(body.reference_variance)
+        body.reference_perimeter = body._particle_hull_perimeter(body.positions)
         return body
 
     @property
@@ -128,6 +142,35 @@ class PBFCreature:
     @property
     def center(self) -> Vec2:
         return sum(self.positions, Vec2()) / len(self.positions) if self.positions else Vec2()
+
+    @property
+    def perimeter_ratio(self) -> float:
+        if self.reference_perimeter <= 1e-9:
+            return 1.0
+        return self._particle_hull_perimeter(self.positions) / self.reference_perimeter
+
+    @property
+    def nucleus_axis(self) -> Vec2:
+        length = self.travel_direction.length()
+        return self.travel_direction / length if length > 1e-9 else Vec2(1.0, 0.0)
+
+    @property
+    def nucleus_axes(self) -> tuple[float, float]:
+        """Semiassi del nucleo; l'area resta costante durante la deformazione."""
+        axis = self.nucleus_axis
+        perpendicular = Vec2(-axis.y, axis.x)
+        forward = [point.dot(axis) for point in self.positions]
+        lateral = [point.dot(perpendicular) for point in self.positions]
+        forward_span = max(forward) - min(forward)
+        lateral_span = max(lateral) - min(lateral)
+        body_aspect = forward_span / max(lateral_span, 1e-9)
+        aspect_ratio = min(
+            self.config.nucleus_maximum_aspect,
+            max(1.0, body_aspect),
+        )
+        stretch = sqrt(aspect_ratio)
+        radius = self.reference_radius * self.config.nucleus_radius_ratio
+        return radius * stretch, radius / stretch
 
     def set_target(self, target: Vec2 | None) -> None:
         if target is not None and self.travel_direction.length() > 1e-9:
@@ -145,6 +188,81 @@ class PBFCreature:
             self.locomotion_cycle = -1
             self.adhesion_weights = [0.0 for _ in self.positions]
 
+    def extend_pseudopod_towards(self, target: Vec2, dt: float) -> int:
+        """Spinge solo un piccolo settore periferico, senza traslare il corpo."""
+        if dt <= 0.0 or not self.positions:
+            self.manual_pseudopod_count = 0
+            self.manual_pseudopod_extension = 0.0
+            return 0
+        delta = target - self.center
+        distance = delta.length()
+        if distance <= 1e-9:
+            self.manual_pseudopod_count = 0
+            self.manual_pseudopod_extension = 0.0
+            return 0
+        direction = delta / distance
+        perpendicular = Vec2(-direction.y, direction.x)
+        scale = max(
+            self.config.particle_spacing * 3.0,
+            max((point - self.center).length() for point in self.positions),
+        )
+        weights: list[float] = []
+        for point in self.positions:
+            local = point - self.center
+            forward = local.dot(direction) / scale
+            lateral = abs(local.dot(perpendicular)) / scale
+            front = min(1.0, max(0.0, (forward - 0.05) / 0.90))
+            narrowness = exp(-((lateral / 0.28) ** 2))
+            weights.append(front**1.4 * narrowness)
+        candidate_indices = sorted(
+            range(len(weights)), key=weights.__getitem__, reverse=True
+        )
+        mass_limit = max(
+            3,
+            round(len(self.positions) * self.config.manual_pseudopod_mass_fraction),
+        )
+        active = [
+            index
+            for index in candidate_indices[:mass_limit]
+            if weights[index] > 0.08
+        ]
+        if not active:
+            self.manual_pseudopod_count = 0
+            self.manual_pseudopod_extension = 0.0
+            return 0
+        active_set = set(active)
+        normal_front = self.reference_radius
+        maximum_front = normal_front * (1.0 + self.config.manual_pseudopod_reach_ratio)
+        impulses: list[Vec2] = []
+        maximum_projection = normal_front
+        for index, point in enumerate(self.positions):
+            if index not in active_set:
+                impulses.append(Vec2())
+                continue
+            projection = (point - self.center).dot(direction)
+            maximum_projection = max(maximum_projection, projection)
+            remaining = maximum_front - projection
+            limit_fade = min(1.0, max(0.0, remaining / (normal_front * 0.24)))
+            outward = self.config.manual_pseudopod_acceleration * weights[index] * limit_fade
+            impulse = direction * (outward * dt)
+            if remaining <= 0.0:
+                outward_speed = self.velocities[index].dot(direction)
+                impulse = impulse - direction * (
+                    max(0.0, outward_speed)
+                    + (-remaining) * self.config.manual_pseudopod_limit_recovery * dt
+                )
+            impulses.append(impulse)
+        mean_impulse = sum(impulses, Vec2()) / len(impulses)
+        for index, impulse in enumerate(impulses):
+            self.velocities[index] = self.velocities[index] + impulse - mean_impulse
+        self.manual_pseudopod_count = len(active)
+        self.manual_pseudopod_extension = max(0.0, maximum_projection - normal_front)
+        return len(active)
+
+    def release_manual_pseudopod(self) -> None:
+        """Interrompe la spinta; il recupero di forma richiama gradualmente il lobo."""
+        self.manual_pseudopod_count = 0
+
     def step(self, dt: float, obstacles: list[Obstacle]) -> None:
         if dt <= 0.0 or not self.positions:
             return
@@ -154,6 +272,7 @@ class PBFCreature:
         cohesion = self._cohesion_accelerations()
         recovery = self._fragment_recovery_accelerations()
         shape_recovery = self._shape_recovery_accelerations()
+        membrane_recovery = self._perimeter_recovery_accelerations()
         direction = Vec2()
         target_distance = 0.0
         if self.target is not None:
@@ -197,7 +316,13 @@ class PBFCreature:
             new_velocity = (
                 velocity
                 + (desired_velocities[index] - velocity) * response
-                + (cohesion[index] + recovery[index] + shape_recovery[index]) * dt
+                + (
+                    cohesion[index]
+                    + recovery[index]
+                    + shape_recovery[index]
+                    + membrane_recovery[index]
+                )
+                * dt
             ) * self.config.damping
             new_velocity = new_velocity * (
                 1.0 - adhesion[index] * self.config.adhesion_strength
@@ -225,6 +350,7 @@ class PBFCreature:
                 self.predicted[index] = self.predicted[index] + correction
             contacts += self._solve_collisions(obstacles, dt)
             contacts += self._solve_membrane_segment_collisions(obstacles)
+            contacts += self._solve_nucleus_collisions(obstacles)
 
         # Le correzioni interne di densita e coesione non devono modificare
         # la quantita di moto complessiva. Le collisioni, invece, sono esterne.
@@ -269,6 +395,8 @@ class PBFCreature:
             connected_particles=self._largest_connected_component(),
             locomotion_phase=self.locomotion_phase,
             pseudopod_count=self.pseudopod_count,
+            perimeter_ratio=self.perimeter_ratio,
+            nucleus_aspect=self.nucleus_axes[0] / self.nucleus_axes[1],
         )
 
     def _update_locomotion_phase(self) -> None:
@@ -414,6 +542,58 @@ class PBFCreature:
             velocities.append(velocity)
             adhesion.append(grip)
         return velocities, adhesion
+
+    @staticmethod
+    def _particle_hull_indices(points: list[Vec2]) -> list[int]:
+        if len(points) <= 2:
+            return list(range(len(points)))
+        ordered = sorted(range(len(points)), key=lambda index: (points[index].x, points[index].y))
+
+        def cross(first: int, second: int, third: int) -> float:
+            a = points[second] - points[first]
+            b = points[third] - points[first]
+            return a.x * b.y - a.y * b.x
+
+        lower: list[int] = []
+        for index in ordered:
+            while len(lower) >= 2 and cross(lower[-2], lower[-1], index) <= 0.0:
+                lower.pop()
+            lower.append(index)
+        upper: list[int] = []
+        for index in reversed(ordered):
+            while len(upper) >= 2 and cross(upper[-2], upper[-1], index) <= 0.0:
+                upper.pop()
+            upper.append(index)
+        return lower[:-1] + upper[:-1]
+
+    @classmethod
+    def _particle_hull_perimeter(cls, points: list[Vec2]) -> float:
+        hull = cls._particle_hull_indices(points)
+        if len(hull) < 2:
+            return 0.0
+        return sum(
+            (points[hull[(index + 1) % len(hull)]] - points[hull[index]]).length()
+            for index in range(len(hull))
+        )
+
+    def _perimeter_recovery_accelerations(self) -> list[Vec2]:
+        """Simula una membrana finita senza introdurre legami permanenti."""
+        accelerations = [Vec2() for _ in self.positions]
+        ratio = self.perimeter_ratio
+        excess = ratio - self.config.maximum_perimeter_ratio
+        if excess <= 0.0:
+            return accelerations
+        center = self.center
+        hull = self._particle_hull_indices(self.positions)
+        for index in hull:
+            inward = center - self.positions[index]
+            distance = inward.length()
+            if distance > 1e-9:
+                accelerations[index] = inward * (
+                    self.config.perimeter_recovery_strength * excess / distance
+                )
+        mean = sum(accelerations, Vec2()) / len(accelerations)
+        return [acceleration - mean for acceleration in accelerations]
 
     def _mean_axis_variance(self) -> float:
         center = self.center
@@ -741,6 +921,37 @@ class PBFCreature:
                 )
                 point = self.predicted[index]
                 contacts += 1
+        return contacts
+
+    def _solve_nucleus_collisions(self, obstacles: list[Obstacle]) -> int:
+        """Impedisce al nucleo deformabile di attraversare aperture troppo piccole."""
+        if not self.predicted:
+            return 0
+        axis = self.nucleus_axis
+        perpendicular = Vec2(-axis.y, axis.x)
+        major, minor = self.nucleus_axes
+        extent_x = sqrt((major * axis.x) ** 2 + (minor * perpendicular.x) ** 2)
+        extent_y = sqrt((major * axis.y) ** 2 + (minor * perpendicular.y) ** 2)
+        contacts = 0
+        for obstacle in obstacles:
+            center = sum(self.predicted, Vec2()) / len(self.predicted)
+            left = obstacle.left - extent_x
+            right = obstacle.right + extent_x
+            top = obstacle.top - extent_y
+            bottom = obstacle.bottom + extent_y
+            if not (left <= center.x <= right and top <= center.y <= bottom):
+                continue
+            candidates = (
+                (center.x - left, Vec2(left - center.x, 0.0)),
+                (right - center.x, Vec2(right - center.x, 0.0)),
+                (center.y - top, Vec2(0.0, top - center.y)),
+                (bottom - center.y, Vec2(0.0, bottom - center.y)),
+            )
+            _, correction = min(candidates, key=lambda candidate: candidate[0])
+            if correction.length() <= 1e-9:
+                continue
+            self.predicted = [point + correction for point in self.predicted]
+            contacts += 1
         return contacts
 
     def _solve_membrane_segment_collisions(

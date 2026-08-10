@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from math import cos, pi, sin
+
 import pygame
 
 from .pbf import PBFConfig, PBFCreature
@@ -18,6 +20,7 @@ ROOM_START = Vec2(105.0, 310.0)
 ROOM_EXIT = pygame.Rect(738, 270, 48, 80)
 ROOM_ACID = pygame.Rect(490, 420, 92, 130)
 ROOM_NUTRIENTS = (Vec2(390.0, 155.0), Vec2(535.0, 475.0), Vec2(680.0, 310.0))
+LAB_GAPS = ((92, 162, "facile"), (288, 332, "deformabile"), (501, 507, "impossibile"))
 CREATURE_SIZES = {
     pygame.K_p: ("piccola", 35.0),
     pygame.K_m: ("media", 57.0),
@@ -45,6 +48,20 @@ def gameplay_room_obstacles() -> list[Obstacle]:
         Obstacle(380.0, 225.0, 475.0, 395.0),
         Obstacle(600.0, 24.0, 634.0, 278.0),
         Obstacle(600.0, 342.0, 634.0, HEIGHT - 24.0),
+    ]
+
+
+def deformation_room_obstacles() -> list[Obstacle]:
+    """Laboratorio con tre aperture di ampiezza progressivamente minore."""
+    return [
+        Obstacle(0.0, 0.0, ROOM_RIGHT, 24.0),
+        Obstacle(0.0, HEIGHT - 24.0, ROOM_RIGHT, HEIGHT),
+        Obstacle(0.0, 0.0, 24.0, HEIGHT),
+        Obstacle(ROOM_RIGHT - 24.0, 0.0, ROOM_RIGHT, HEIGHT),
+        Obstacle(360.0, 24.0, 610.0, 92.0),
+        Obstacle(360.0, 162.0, 610.0, 288.0),
+        Obstacle(360.0, 332.0, 610.0, 501.0),
+        Obstacle(360.0, 507.0, 610.0, HEIGHT - 24.0),
     ]
 
 
@@ -107,6 +124,7 @@ def main() -> None:
     size_key = pygame.K_m
     high_detail = False
     room_mode = True
+    deformation_mode = False
     obstacles = gameplay_room_obstacles()
     creature = create_creature(size_key, center=ROOM_START)
     nutrients = list(ROOM_NUTRIENTS)
@@ -127,15 +145,30 @@ def main() -> None:
                 elif event.key == pygame.K_r:
                     start = ROOM_START if room_mode else None
                     creature = create_creature(size_key, high_detail, start)
-                    nutrients = list(ROOM_NUTRIENTS) if room_mode else []
+                    if deformation_mode:
+                        obstacles = deformation_room_obstacles()
+                        nutrients = [Vec2(690.0, 310.0)]
+                    else:
+                        nutrients = list(ROOM_NUTRIENTS) if room_mode else []
                     room_complete = False
                     boost_energy = 1.0
                     displayed_contour = []
                 elif event.key == pygame.K_l:
                     room_mode = True
+                    deformation_mode = False
                     obstacles = gameplay_room_obstacles()
                     creature = create_creature(size_key, high_detail, ROOM_START)
                     nutrients = list(ROOM_NUTRIENTS)
+                    room_complete = False
+                    boost_energy = 1.0
+                    displayed_contour = []
+                elif event.key == pygame.K_c:
+                    room_mode = True
+                    deformation_mode = True
+                    obstacles = deformation_room_obstacles()
+                    creature = create_creature(pygame.K_m, high_detail, ROOM_START)
+                    size_key = pygame.K_m
+                    nutrients = [Vec2(690.0, 310.0)]
                     room_complete = False
                     boost_energy = 1.0
                     displayed_contour = []
@@ -156,6 +189,7 @@ def main() -> None:
                     render_mode = event.key - pygame.K_F1 + 1
                 elif pygame.K_1 <= event.key <= pygame.K_4:
                     room_mode = False
+                    deformation_mode = False
                     tunnel_width = TUNNEL_WIDTHS[event.key - pygame.K_1]
                     obstacles = tunnel_obstacles(tunnel_width)
                     creature = create_creature(size_key, high_detail)
@@ -190,7 +224,16 @@ def main() -> None:
             elif room_mode:
                 boost_energy = min(1.0, boost_energy + 0.07 * FIXED_DT)
             creature.step(FIXED_DT, obstacles)
-            if room_mode and any(
+            if deformation_mode:
+                manual_extension = pygame.mouse.get_pressed()[0]
+                if manual_extension:
+                    creature.set_target(None)
+                    creature.extend_pseudopod_towards(
+                        Vec2(*pygame.mouse.get_pos()), FIXED_DT
+                    )
+                else:
+                    creature.release_manual_pseudopod()
+            if room_mode and not deformation_mode and any(
                 ROOM_ACID.collidepoint(point.x, point.y)
                 for point in creature.positions
             ):
@@ -211,11 +254,30 @@ def main() -> None:
                 room_complete = True
 
         screen.fill((14, 18, 26))
+        if deformation_mode and pygame.mouse.get_pressed()[0]:
+            reach = round(
+                creature.reference_radius
+                * (1.0 + creature.config.manual_pseudopod_reach_ratio)
+            )
+            pygame.draw.circle(
+                screen,
+                (70, 94, 111),
+                (round(creature.center.x), round(creature.center.y)),
+                reach,
+                1,
+            )
         if room_mode:
-            acid_surface = pygame.Surface(ROOM_ACID.size, pygame.SRCALPHA)
-            acid_surface.fill((193, 67, 104, 105))
-            screen.blit(acid_surface, ROOM_ACID)
-            pygame.draw.rect(screen, (245, 101, 139), ROOM_ACID, 2)
+            if deformation_mode:
+                for top, bottom, label in LAB_GAPS:
+                    gap_text = font.render(
+                        f"{label}: {bottom - top}px", True, (176, 196, 211)
+                    )
+                    screen.blit(gap_text, (625, (top + bottom) // 2 - 9))
+            else:
+                acid_surface = pygame.Surface(ROOM_ACID.size, pygame.SRCALPHA)
+                acid_surface.fill((193, 67, 104, 105))
+                screen.blit(acid_surface, ROOM_ACID)
+                pygame.draw.rect(screen, (245, 101, 139), ROOM_ACID, 2)
             exit_color = (68, 190, 123) if not nutrients else (73, 86, 103)
             pygame.draw.rect(screen, exit_color, ROOM_EXIT, border_radius=8)
             pygame.draw.rect(screen, (173, 234, 196), ROOM_EXIT, 2, border_radius=8)
@@ -262,6 +324,20 @@ def main() -> None:
         if render_mode in {1, 3}:
             for point in creature.positions:
                 pygame.draw.circle(screen, (100, 211, 196), (point.x, point.y), 4)
+        nucleus_major, nucleus_minor = creature.nucleus_axes
+        nucleus_axis = creature.nucleus_axis
+        nucleus_perpendicular = Vec2(-nucleus_axis.y, nucleus_axis.x)
+        nucleus_polygon = []
+        for index in range(28):
+            angle = 2.0 * pi * index / 28
+            point = (
+                creature.center
+                + nucleus_axis * (cos(angle) * nucleus_major)
+                + nucleus_perpendicular * (sin(angle) * nucleus_minor)
+            )
+            nucleus_polygon.append((point.x, point.y))
+        pygame.draw.polygon(screen, (114, 73, 157), nucleus_polygon)
+        pygame.draw.aalines(screen, (211, 170, 242), True, nucleus_polygon)
         for rect in obstacle_rectangles:
             pygame.draw.rect(screen, (113, 132, 151), rect, 2)
         if creature.target is not None:
@@ -292,9 +368,19 @@ def main() -> None:
             ),
             (
                 f"densita media: {diagnostics.average_density_ratio:.3f}  "
-                f"errore massimo: {diagnostics.maximum_density_error:.3f}"
+                f"errore massimo: {diagnostics.maximum_density_error:.3f}  "
+                f"perimetro: {diagnostics.perimeter_ratio:.2f}/"
+                f"{creature.config.maximum_perimeter_ratio:.2f}  "
+                f"nucleo: {diagnostics.nucleus_aspect:.2f}:1"
             ),
             (f"fase: {diagnostics.locomotion_phase}  pseudopodi: {diagnostics.pseudopod_count}"),
+            (
+                f"estensione locale: {creature.manual_pseudopod_extension:.1f}/"
+                f"{creature.reference_radius * creature.config.manual_pseudopod_reach_ratio:.1f}px  "
+                f"massa: {creature.manual_pseudopod_count}/{creature.particle_count}"
+                if deformation_mode
+                else ""
+            ),
             (
                 f"stanza: nutrienti rimasti {len(nutrients)}  "
                 f"uscita: {'raggiunta' if room_complete else 'attiva' if room_mode and not nutrients else 'bloccata'}"
@@ -302,7 +388,8 @@ def main() -> None:
                 else f"strettoia: {tunnel_width:.0f}px  "
                 f"spazio fisico utile: {tunnel_width - 2 * creature.config.collision_margin:.0f}px"
             ),
-            "destro premuto: guida · SPAZIO: scatto · L: stanza · 1/2/3/4: strettoia",
+            "destro: guida · sinistro: pseudopodio locale · C: sfida deformazione",
+            "L: stanza · 1/2/3/4: strettoia",
             "Estensione · adesione · trazione del retro · rilascio progressivo",
             "F1: punti · F2: membrana · F3: entrambi",
         )
