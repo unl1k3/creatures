@@ -192,6 +192,15 @@ verifica soltanto stabilità, massa costante e collisioni nella strettoia:
 uv run creatura-pbf-demo
 ```
 
-Un click destro imposta la direzione della spinta diagnostica. Questa non è
-ancora locomozione ameboide: adesione e pseudopodi verranno aggiunti soltanto
-dopo avere verificato che il substrato PBF rimanga coeso e incomprimibile.
+La demo si apre nella prima stanza di prova. Tieni premuto il tasto destro del
+mouse per guidare la creatura e usa `Spazio` per uno scatto temporaneo. Lo
+scatto consuma energia; i nutrienti la recuperano, mentre la zona rosa la
+consuma. Dopo avere raccolto i tre nutrienti si sblocca l'uscita verde.
+
+Controlli aggiuntivi:
+
+- `L`: ricomincia la stanza;
+- `1`-`4`: prove in strettoie di larghezza diversa;
+- `P`, `M`, `G`: taglia piccola, media o grande;
+- `F1`, `F2`, `F3`: punti, membrana o entrambe;
+- `R`: riavvia la prova corrente.

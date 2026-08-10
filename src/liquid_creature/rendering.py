@@ -69,7 +69,10 @@ def _add_supported_front_concavities(
 ) -> list[Vec2]:
     """Scava valli poco profonde tra punte frontali senza dividere il bordo."""
     result: list[Vec2] = []
-    minimum_edge = particle_radius * 4.5
+    center = sum(particles, Vec2()) / len(particles)
+    body_radius = max((particle - center).length() for particle in particles)
+    small_body = body_radius < 45.0
+    minimum_edge = particle_radius * (3.0 if small_body else 4.5)
     maximum_depth = particle_radius * 2.2
     support_distance_squared = (particle_radius * 4.25) ** 2
     for index, first in enumerate(hull):
@@ -90,7 +93,8 @@ def _add_supported_front_concavities(
         if len(anchor_projections) < 2:
             continue
         anchor_span = anchor_projections[-1] - anchor_projections[0]
-        if anchor_span < 0.18:
+        minimum_anchor_span = 0.10 if small_body else 0.18
+        if anchor_span < minimum_anchor_span:
             continue
         inward = outward * -1.0
         best: tuple[float, Vec2] | None = None

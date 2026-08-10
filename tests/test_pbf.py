@@ -1,4 +1,4 @@
-from liquid_creature.pbf import PBFCreature
+from liquid_creature.pbf import PBFConfig, PBFCreature
 from liquid_creature.physics import Vec2
 from liquid_creature.world import Obstacle
 
@@ -12,6 +12,18 @@ def test_creature_sizes_share_resolution_and_scale_particle_count() -> None:
     assert counts[0] < counts[1] < counts[2]
     assert all(creature.config.particle_spacing == 10.0 for creature in creatures)
     assert counts[2] / counts[0] > 4.0
+
+
+def test_small_high_resolution_body_keeps_size_with_more_particles() -> None:
+    normal = PBFCreature.create(center=Vec2(), radius=35.0)
+    detailed = PBFCreature.create(
+        center=Vec2(),
+        radius=35.0,
+        config=PBFConfig(particle_spacing=5.0, smoothing_radius=10.0),
+    )
+
+    assert detailed.particle_count > normal.particle_count * 3
+    assert abs(detailed.reference_radius - normal.reference_radius) < 2.0
 
 
 def test_pbf_creation_has_stable_particle_mass() -> None:

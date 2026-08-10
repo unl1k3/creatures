@@ -44,6 +44,7 @@ class PBFConfig:
     moving_shape_memory: float = 0.20
     maximum_shape_acceleration: float = 85.0
     turn_recovery_duration: float = 0.80
+    locomotion_speed_multiplier: float = 1.0
 
 
 @dataclass(slots=True)
@@ -409,6 +410,7 @@ class PBFCreature:
                     + perpendicular * inward
                 )
                 grip = best_activity * (1.0 - release) ** 2
+            velocity = velocity * self.config.locomotion_speed_multiplier
             velocities.append(velocity)
             adhesion.append(grip)
         return velocities, adhesion
