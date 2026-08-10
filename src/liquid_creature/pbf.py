@@ -67,6 +67,7 @@ class PBFCreature:
     locomotion_time: float = 0.0
     locomotion_phase: str = "riposo"
     pseudopod_count: int = 0
+    locomotion_cycle: int = -1
     reference_variance: float = 1.0
     reference_radius: float = 1.0
     travel_direction: Vec2 = field(default_factory=Vec2)
@@ -138,6 +139,7 @@ class PBFCreature:
             self.locomotion_time = 0.0
             self.locomotion_phase = "riposo"
             self.pseudopod_count = 0
+            self.locomotion_cycle = -1
 
     def step(self, dt: float, obstacles: list[Obstacle]) -> None:
         if dt <= 0.0 or not self.positions:
@@ -273,7 +275,11 @@ class PBFCreature:
         )
         cycle = int(self.locomotion_time / cycle_duration)
         local_time = self.locomotion_time - cycle * cycle_duration
-        self.pseudopod_count = 2 + (1 if cycle % 3 == 1 else 0)
+        if cycle != self.locomotion_cycle:
+            self.locomotion_cycle = cycle
+            self.pseudopod_count = self._select_pseudopod_count(
+                self.travel_direction
+            )
         if local_time < config.extension_duration:
             self.locomotion_phase = "estensione"
         elif local_time < config.extension_duration + config.grip_duration:
@@ -284,6 +290,25 @@ class PBFCreature:
             self.locomotion_phase = "trazione"
         else:
             self.locomotion_phase = "rilascio"
+
+    def _select_pseudopod_count(self, direction: Vec2) -> int:
+        """Sceglie quanti lobi possono occupare il fronte senza sovrapporsi."""
+        if direction.length() <= 1e-9:
+            return 1
+        center = self.center
+        perpendicular = Vec2(-direction.y, direction.x)
+        front = [
+            (point - center).dot(perpendicular)
+            for index, point in enumerate(self.positions)
+            if len(self._neighbors[index]) <= 13
+            and (point - center).dot(direction) > -self.reference_radius * 0.08
+        ]
+        if len(front) < 2:
+            return 1
+        usable_width = max(front) - min(front)
+        count = round(usable_width / (self.config.particle_spacing * 2.8))
+        size_limit = max(1, min(4, round(self.reference_radius / 18.0)))
+        return min(size_limit, max(1, count))
 
     def _locomotion_field(
         self, direction: Vec2, target_distance: float
@@ -303,10 +328,16 @@ class PBFCreature:
         )
         cycle = int(self.locomotion_time / cycle_duration)
         wobble = 0.045 * sin(cycle * 2.17 + 0.8)
-        if self.pseudopod_count == 3:
-            offsets = (-0.43 + wobble, 0.02 - wobble, 0.44 + 0.5 * wobble)
+        if self.pseudopod_count <= 1:
+            offsets = (wobble,)
         else:
-            offsets = (-0.31 + wobble, 0.34 - 0.6 * wobble)
+            span = min(0.48, 0.20 + 0.12 * (self.pseudopod_count - 1))
+            offsets = tuple(
+                -span
+                + 2.0 * span * index / (self.pseudopod_count - 1)
+                + wobble * sin(index * 1.71 + cycle)
+                for index in range(self.pseudopod_count)
+            )
 
         velocities: list[Vec2] = []
         adhesion: list[float] = []
@@ -326,7 +357,7 @@ class PBFCreature:
 
             phase = self.locomotion_phase
             if phase == "estensione":
-                lateral_push = perpendicular * (best_offset * 0.24 * best_activity)
+                lateral_push = perpendicular * (best_offset * 0.10 * best_activity)
                 heading = direction + lateral_push
                 heading_length = heading.length()
                 if heading_length > 1e-9:

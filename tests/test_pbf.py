@@ -69,7 +69,27 @@ def test_locomotion_cycles_through_pseudopod_phases() -> None:
         phases.add(creature.locomotion_phase)
         pseudopod_counts.add(creature.pseudopod_count)
     assert {"estensione", "adesione", "trazione", "rilascio"} <= phases
-    assert pseudopod_counts == {2, 3}
+    assert pseudopod_counts
+    assert min(pseudopod_counts) >= 1
+    assert max(pseudopod_counts) <= 4
+
+
+def test_pseudopod_count_follows_available_front_width() -> None:
+    creature = PBFCreature.create(center=Vec2(), radius=57.0)
+    direction = Vec2(1.0, 0.0)
+    wide_count = creature._select_pseudopod_count(direction)
+
+    center = creature.center
+    creature.positions = [
+        center + Vec2(point.x - center.x, (point.y - center.y) * 0.32)
+        for point in creature.positions
+    ]
+    creature.predicted = [Vec2(point.x, point.y) for point in creature.positions]
+    creature._rebuild_neighbors()
+    narrow_count = creature._select_pseudopod_count(direction)
+
+    assert wide_count >= 2
+    assert narrow_count < wide_count
 
 
 def test_rear_does_not_spread_sideways_during_locomotion() -> None:
