@@ -6,6 +6,7 @@ import pygame
 
 from .pbf import PBFCreature
 from .physics import Vec2
+from .rendering import creature_contour, stabilize_contour
 from .world import Obstacle
 
 WIDTH, HEIGHT = 960, 620
@@ -32,6 +33,40 @@ def create_creature(size_key: int) -> PBFCreature:
     return PBFCreature.create(radius=radius)
 
 
+def clip_contour_to_obstacles(
+    contour: list[Vec2], obstacles: list[Obstacle]
+) -> list[list[tuple[int, int]]]:
+    """Sottrae i solidi e riconverte la parte visibile in poligoni."""
+    if len(contour) < 3:
+        return []
+    origin_x = int(min(point.x for point in contour)) - 2
+    origin_y = int(min(point.y for point in contour)) - 2
+    width = int(max(point.x for point in contour)) - origin_x + 4
+    height = int(max(point.y for point in contour)) - origin_y + 4
+    canvas = pygame.Surface((width, height), pygame.SRCALPHA)
+    local_polygon = [(round(point.x - origin_x), round(point.y - origin_y)) for point in contour]
+    pygame.draw.polygon(canvas, (255, 255, 255, 255), local_polygon)
+    mask = pygame.mask.from_surface(canvas)
+    bounds = pygame.Rect(origin_x, origin_y, width, height)
+    for obstacle in obstacles:
+        solid = pygame.Rect(
+            round(obstacle.left),
+            round(obstacle.top),
+            round(obstacle.right - obstacle.left),
+            round(obstacle.bottom - obstacle.top),
+        ).clip(bounds)
+        if solid.width <= 0 or solid.height <= 0:
+            continue
+        blocker = pygame.Mask((solid.width, solid.height), fill=True)
+        mask.erase(blocker, (solid.x - origin_x, solid.y - origin_y))
+    polygons: list[list[tuple[int, int]]] = []
+    for component in mask.connected_components(4):
+        outline = component.outline(every=2)
+        if len(outline) >= 3:
+            polygons.append([(x + origin_x, y + origin_y) for x, y in outline])
+    return polygons
+
+
 def main() -> None:
     pygame.init()
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
@@ -43,6 +78,8 @@ def main() -> None:
     obstacles = tunnel_obstacles(tunnel_width)
     creature = create_creature(size_key)
     accumulator = 0.0
+    render_mode = 2
+    displayed_contour: list[Vec2] = []
     running = True
     while running:
         accumulator += min(clock.tick(60) / 1000.0, 0.05)
@@ -54,13 +91,18 @@ def main() -> None:
                     running = False
                 elif event.key == pygame.K_r:
                     creature = create_creature(size_key)
+                    displayed_contour = []
+                elif event.key in {pygame.K_F1, pygame.K_F2, pygame.K_F3}:
+                    render_mode = event.key - pygame.K_F1 + 1
                 elif pygame.K_1 <= event.key <= pygame.K_4:
                     tunnel_width = TUNNEL_WIDTHS[event.key - pygame.K_1]
                     obstacles = tunnel_obstacles(tunnel_width)
                     creature = create_creature(size_key)
+                    displayed_contour = []
                 elif event.key in CREATURE_SIZES:
                     size_key = event.key
                     creature = create_creature(size_key)
+                    displayed_contour = []
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
                 creature.set_target(Vec2(*event.pos))
         while accumulator >= FIXED_DT:
@@ -68,6 +110,7 @@ def main() -> None:
             accumulator -= FIXED_DT
 
         screen.fill((14, 18, 26))
+        obstacle_rectangles: list[pygame.Rect] = []
         for obstacle in obstacles:
             rect = pygame.Rect(
                 obstacle.left,
@@ -75,10 +118,40 @@ def main() -> None:
                 obstacle.right - obstacle.left,
                 obstacle.bottom - obstacle.top,
             )
+            obstacle_rectangles.append(rect)
             pygame.draw.rect(screen, (49, 57, 70), rect)
+        if render_mode in {2, 3}:
+            render_direction = None
+            if creature.target is not None:
+                target_delta = creature.target - creature.center
+                if target_delta.length() > 1e-9:
+                    render_direction = target_delta / target_delta.length()
+            raw_contour = creature_contour(
+                creature.positions,
+                direction=render_direction,
+                anchor_points=[
+                    point
+                    for point, adhesion in zip(
+                        creature.positions,
+                        creature.adhesion_weights,
+                        strict=True,
+                    )
+                    if adhesion > 0.48
+                ],
+            )
+            displayed_contour = stabilize_contour(
+                displayed_contour,
+                raw_contour,
+            )
+            if len(displayed_contour) >= 3:
+                for polygon in clip_contour_to_obstacles(displayed_contour, obstacles):
+                    pygame.draw.polygon(screen, (56, 157, 146), polygon)
+                    pygame.draw.aalines(screen, (146, 235, 218), True, polygon)
+        if render_mode in {1, 3}:
+            for point in creature.positions:
+                pygame.draw.circle(screen, (100, 211, 196), (point.x, point.y), 4)
+        for rect in obstacle_rectangles:
             pygame.draw.rect(screen, (113, 132, 151), rect, 2)
-        for point in creature.positions:
-            pygame.draw.circle(screen, (100, 211, 196), (point.x, point.y), 4)
         if creature.target is not None:
             pygame.draw.circle(
                 screen, (255, 204, 88), (creature.target.x, creature.target.y), 13, 2
@@ -96,16 +169,14 @@ def main() -> None:
                 f"densita media: {diagnostics.average_density_ratio:.3f}  "
                 f"errore massimo: {diagnostics.maximum_density_error:.3f}"
             ),
-            (
-                f"fase: {diagnostics.locomotion_phase}  "
-                f"pseudopodi: {diagnostics.pseudopod_count}"
-            ),
+            (f"fase: {diagnostics.locomotion_phase}  pseudopodi: {diagnostics.pseudopod_count}"),
             (
                 f"strettoia: {tunnel_width:.0f}px  "
                 f"spazio fisico utile: {tunnel_width - 2 * creature.config.collision_margin:.0f}px"
             ),
             "P/M/G: taglia · 1/2/3/4: strettoia · click destro: bersaglio · R: reset",
             "Estensione · adesione · trazione del retro · rilascio progressivo",
+            "F1: punti · F2: membrana · F3: entrambi",
         )
         for row, line in enumerate(lines):
             color = (230, 235, 242) if row < 2 else (158, 171, 188)

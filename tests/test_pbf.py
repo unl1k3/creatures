@@ -42,6 +42,26 @@ def test_pbf_particles_do_not_enter_obstacle() -> None:
     assert all(not obstacle.contains(point, margin) for point in creature.positions)
 
 
+def test_surface_between_neighboring_particles_does_not_cross_obstacle() -> None:
+    creature = PBFCreature.create(center=Vec2(100.0, 100.0), radius=35.0)
+    obstacle = Obstacle(125.0, 55.0, 180.0, 145.0)
+    creature.set_target(Vec2(250.0, 100.0))
+    for _ in range(180):
+        creature.step(DT, [obstacle])
+
+    margin = creature.config.collision_margin - 0.15
+    for first, neighbors in enumerate(creature._neighbors):
+        for second in neighbors:
+            if second <= first:
+                continue
+            edge = creature.positions[second] - creature.positions[first]
+            if edge.length() > creature.config.particle_spacing * 1.7:
+                continue
+            for ratio in (0.25, 0.5, 0.75):
+                sample = creature.positions[first] + edge * ratio
+                assert not obstacle.contains(sample, margin)
+
+
 def test_pseudopod_locomotion_moves_the_body_towards_target() -> None:
     creature = PBFCreature.create(center=Vec2())
     creature.set_target(Vec2(300.0, 0.0))

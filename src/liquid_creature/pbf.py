@@ -72,6 +72,7 @@ class PBFCreature:
     reference_radius: float = 1.0
     travel_direction: Vec2 = field(default_factory=Vec2)
     turn_recovery_time: float = 0.0
+    adhesion_weights: list[float] = field(default_factory=list)
     diagnostics: PBFDiagnostics = field(default_factory=PBFDiagnostics)
     _neighbors: list[list[int]] = field(default_factory=list)
     _densities: list[float] = field(default_factory=list)
@@ -110,6 +111,7 @@ class PBFCreature:
             config=config,
         )
         body._resize_work_buffers()
+        body.adhesion_weights = [0.0 for _ in points]
         body._rebuild_neighbors()
         initial_densities = body._compute_densities()
         ordered = sorted(initial_densities)
@@ -140,6 +142,7 @@ class PBFCreature:
             self.locomotion_phase = "riposo"
             self.pseudopod_count = 0
             self.locomotion_cycle = -1
+            self.adhesion_weights = [0.0 for _ in self.positions]
 
     def step(self, dt: float, obstacles: list[Obstacle]) -> None:
         if dt <= 0.0 or not self.positions:
@@ -166,6 +169,7 @@ class PBFCreature:
         desired_velocities, adhesion = self._locomotion_field(
             direction, target_distance
         )
+        self.adhesion_weights = adhesion
         if self.turn_recovery_time > 0.0:
             recovery_ratio = min(
                 1.0,
@@ -219,6 +223,7 @@ class PBFCreature:
             for index, correction in enumerate(self._position_corrections()):
                 self.predicted[index] = self.predicted[index] + correction
             contacts += self._solve_collisions(obstacles, dt)
+            contacts += self._solve_membrane_segment_collisions(obstacles)
 
         # Le correzioni interne di densita e coesione non devono modificare
         # la quantita di moto complessiva. Le collisioni, invece, sono esterne.
@@ -734,4 +739,51 @@ class PBFCreature:
                 )
                 point = self.predicted[index]
                 contacts += 1
+        return contacts
+
+    def _solve_membrane_segment_collisions(
+        self, obstacles: list[Obstacle]
+    ) -> int:
+        """Controlla la pelle tra vicini senza introdurre legami permanenti."""
+        contacts = 0
+        maximum_span = self.config.particle_spacing * 1.7
+        maximum_span_squared = maximum_span * maximum_span
+        for first, neighbors in enumerate(self._neighbors):
+            for second in neighbors:
+                if second <= first:
+                    continue
+                edge = self.predicted[second] - self.predicted[first]
+                if edge.dot(edge) > maximum_span_squared:
+                    continue
+                for obstacle in obstacles:
+                    deepest: tuple[float, Vec2, Vec2, float] | None = None
+                    for ratio in (0.25, 0.5, 0.75):
+                        sample = self.predicted[first] + edge * ratio
+                        contact = obstacle.contact_correction(
+                            sample,
+                            self.config.collision_margin,
+                        )
+                        if contact is None:
+                            continue
+                        correction, normal = contact
+                        depth = correction.length()
+                        if depth <= 1e-9:
+                            continue
+                        if deepest is None or depth > deepest[0]:
+                            deepest = (depth, correction, normal, ratio)
+                    if deepest is None:
+                        continue
+                    _, correction, _normal, ratio = deepest
+                    first_weight = 1.0 - ratio
+                    second_weight = ratio
+                    denominator = first_weight**2 + second_weight**2
+                    self.predicted[first] = (
+                        self.predicted[first]
+                        + correction * (first_weight / denominator)
+                    )
+                    self.predicted[second] = (
+                        self.predicted[second]
+                        + correction * (second_weight / denominator)
+                    )
+                    contacts += 1
         return contacts
