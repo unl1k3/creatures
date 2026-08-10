@@ -53,6 +53,12 @@ The purple ellipse drawn inside the creature is the nucleus. The red outline is
 the reconstructed visual membrane; physical obstacle contacts are still solved
 locally from particles and nearby membrane segments.
 
+Corners are handled conservatively. The solver tries to reconnect a temporary
+fragment only when the path back to the main body does not cross a solid
+obstacle. If a simulation step would leave any group isolated on the opposite
+side of a wall, the entire advancement step is rejected and its velocity is
+dissipated. No particle is deleted or pulled through the obstacle.
+
 ### Controls
 
 - Hold the **right mouse button** to guide the whole creature.

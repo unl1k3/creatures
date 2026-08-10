@@ -152,6 +152,29 @@ def test_excess_perimeter_generates_internal_membrane_recovery() -> None:
     assert accelerations[front].x < 0.0
 
 
+def test_fragment_recovery_does_not_pull_a_particle_through_a_wall() -> None:
+    creature = PBFCreature.create(center=Vec2(), radius=35.0)
+    creature.positions[0] = Vec2(100.0, 0.0)
+    creature.predicted = [Vec2(point.x, point.y) for point in creature.positions]
+    creature._rebuild_neighbors()
+    wall = Obstacle(40.0, -100.0, 60.0, 100.0)
+
+    recovery = creature._fragment_recovery_accelerations([wall])
+
+    assert recovery[0].length() == 0.0
+
+
+def test_obstacle_separated_fragment_invalidates_advancement() -> None:
+    creature = PBFCreature.create(center=Vec2(), radius=35.0)
+    creature.positions[0] = Vec2(100.0, 0.0)
+    creature.predicted = [Vec2(point.x, point.y) for point in creature.positions]
+    creature._rebuild_neighbors()
+    wall = Obstacle(40.0, -100.0, 60.0, 100.0)
+
+    assert creature._has_obstacle_separated_fragment([wall])
+    assert creature.particle_count == 44
+
+
 def test_dynamic_cohesion_does_not_use_permanent_pairs() -> None:
     creature = PBFCreature.create(center=Vec2(), radius=35.0)
     creature.set_target(Vec2(300.0, 0.0))

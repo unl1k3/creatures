@@ -270,7 +270,7 @@ class PBFCreature:
         self.predicted = [Vec2(point.x, point.y) for point in self.positions]
         self._rebuild_neighbors()
         cohesion = self._cohesion_accelerations()
-        recovery = self._fragment_recovery_accelerations()
+        recovery = self._fragment_recovery_accelerations(obstacles)
         shape_recovery = self._shape_recovery_accelerations()
         membrane_recovery = self._perimeter_recovery_accelerations()
         direction = Vec2()
@@ -351,6 +351,14 @@ class PBFCreature:
             contacts += self._solve_collisions(obstacles, dt)
             contacts += self._solve_membrane_segment_collisions(obstacles)
             contacts += self._solve_nucleus_collisions(obstacles)
+
+        # Se uno spigolo separa una parte del corpo, il passo non e valido:
+        # nessuna particella viene persa o richiamata attraverso il solido.
+        if self._has_obstacle_separated_fragment(obstacles):
+            self.predicted = [Vec2(point.x, point.y) for point in self.positions]
+            self._rebuild_neighbors()
+            self._densities = self._compute_densities()
+            contacts += 1
 
         # Le correzioni interne di densita e coesione non devono modificare
         # la quantita di moto complessiva. Le collisioni, invece, sono esterne.
@@ -855,8 +863,10 @@ class PBFCreature:
             components.append(component)
         return components
 
-    def _fragment_recovery_accelerations(self) -> list[Vec2]:
-        """Richiama frammenti accidentali senza creare legami persistenti."""
+    def _fragment_recovery_accelerations(
+        self, obstacles: list[Obstacle]
+    ) -> list[Vec2]:
+        """Richiama solo frammenti raggiungibili senza attraversare solidi."""
         accelerations = [Vec2() for _ in self.predicted]
         components = self._connected_components()
         if len(components) <= 1:
@@ -867,12 +877,29 @@ class PBFCreature:
             if component is main:
                 continue
             for index in component:
-                nearest = min(
+                candidates = sorted(
                     main_set,
                     key=lambda candidate: (
                         self.predicted[candidate] - self.predicted[index]
                     ).dot(self.predicted[candidate] - self.predicted[index]),
                 )
+                nearest = next(
+                    (
+                        candidate
+                        for candidate in candidates
+                        if not any(
+                            self._segment_intersects_obstacle(
+                                self.predicted[index],
+                                self.predicted[candidate],
+                                obstacle,
+                            )
+                            for obstacle in obstacles
+                        )
+                    ),
+                    None,
+                )
+                if nearest is None:
+                    continue
                 delta = self.predicted[nearest] - self.predicted[index]
                 distance = delta.length()
                 if distance > 1e-9:
@@ -882,6 +909,61 @@ class PBFCreature:
                     accelerations[index] = accelerations[index] + pull
                     accelerations[nearest] = accelerations[nearest] - pull
         return accelerations
+
+    def _segment_intersects_obstacle(
+        self, start: Vec2, end: Vec2, obstacle: Obstacle
+    ) -> bool:
+        """Liang-Barsky test against a rectangle expanded by particle radius."""
+        margin = self.config.collision_margin
+        left = obstacle.left - margin
+        right = obstacle.right + margin
+        top = obstacle.top - margin
+        bottom = obstacle.bottom + margin
+        delta = end - start
+        entry = 0.0
+        exit_ = 1.0
+        for origin, movement, minimum, maximum in (
+            (start.x, delta.x, left, right),
+            (start.y, delta.y, top, bottom),
+        ):
+            if abs(movement) <= 1e-12:
+                if origin < minimum or origin > maximum:
+                    return False
+                continue
+            near = (minimum - origin) / movement
+            far = (maximum - origin) / movement
+            if near > far:
+                near, far = far, near
+            entry = max(entry, near)
+            exit_ = min(exit_, far)
+            if entry > exit_:
+                return False
+        return True
+
+    def _has_obstacle_separated_fragment(self, obstacles: list[Obstacle]) -> bool:
+        """Rileva componenti che potrebbero ricongiungersi solo attraversando un solido."""
+        components = self._connected_components()
+        if len(components) <= 1:
+            return False
+        main = max(components, key=len)
+        for component in components:
+            if component is main:
+                continue
+            has_clear_recovery_path = any(
+                not any(
+                    self._segment_intersects_obstacle(
+                        self.predicted[index],
+                        self.predicted[candidate],
+                        obstacle,
+                    )
+                    for obstacle in obstacles
+                )
+                for index in component
+                for candidate in main
+            )
+            if not has_clear_recovery_path:
+                return True
+        return False
 
     def _solve_collisions(self, obstacles: list[Obstacle], dt: float) -> int:
         contacts = 0
