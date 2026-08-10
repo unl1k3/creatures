@@ -12,6 +12,11 @@ WIDTH, HEIGHT = 960, 620
 FIXED_DT = 1.0 / 60.0
 TUNNEL_CENTER_Y = 310.0
 TUNNEL_WIDTHS = (88.0, 64.0, 48.0, 36.0)
+CREATURE_SIZES = {
+    pygame.K_p: ("piccola", 35.0),
+    pygame.K_m: ("media", 57.0),
+    pygame.K_g: ("grande", 78.0),
+}
 
 
 def tunnel_obstacles(width: float) -> list[Obstacle]:
@@ -22,6 +27,11 @@ def tunnel_obstacles(width: float) -> list[Obstacle]:
     ]
 
 
+def create_creature(size_key: int) -> PBFCreature:
+    _, radius = CREATURE_SIZES[size_key]
+    return PBFCreature.create(radius=radius)
+
+
 def main() -> None:
     pygame.init()
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
@@ -29,8 +39,9 @@ def main() -> None:
     clock = pygame.time.Clock()
     font = pygame.font.Font(None, 24)
     tunnel_width = TUNNEL_WIDTHS[1]
+    size_key = pygame.K_m
     obstacles = tunnel_obstacles(tunnel_width)
-    creature = PBFCreature.create()
+    creature = create_creature(size_key)
     accumulator = 0.0
     running = True
     while running:
@@ -42,11 +53,14 @@ def main() -> None:
                 if event.key == pygame.K_ESCAPE:
                     running = False
                 elif event.key == pygame.K_r:
-                    creature = PBFCreature.create()
+                    creature = create_creature(size_key)
                 elif pygame.K_1 <= event.key <= pygame.K_4:
                     tunnel_width = TUNNEL_WIDTHS[event.key - pygame.K_1]
                     obstacles = tunnel_obstacles(tunnel_width)
-                    creature = PBFCreature.create()
+                    creature = create_creature(size_key)
+                elif event.key in CREATURE_SIZES:
+                    size_key = event.key
+                    creature = create_creature(size_key)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
                 creature.set_target(Vec2(*event.pos))
         while accumulator >= FIXED_DT:
@@ -71,8 +85,10 @@ def main() -> None:
             )
         pygame.draw.circle(screen, (244, 248, 250), (creature.center.x, creature.center.y), 3)
         diagnostics = creature.diagnostics
+        size_name, nominal_radius = CREATURE_SIZES[size_key]
         lines = (
             (
+                f"taglia: {size_name} ({nominal_radius:.0f}px)  "
                 f"particelle: {creature.particle_count}  contatti: {diagnostics.contacts}  "
                 f"connesse: {diagnostics.connected_particles}/{creature.particle_count}"
             ),
@@ -88,7 +104,7 @@ def main() -> None:
                 f"strettoia: {tunnel_width:.0f}px  "
                 f"spazio fisico utile: {tunnel_width - 2 * creature.config.collision_margin:.0f}px"
             ),
-            "click destro: bersaglio · 1/2/3/4: 88/64/48/36px · R: reset · Esc: esci",
+            "P/M/G: taglia · 1/2/3/4: strettoia · click destro: bersaglio · R: reset",
             "Estensione · adesione · trazione del retro · rilascio progressivo",
         )
         for row, line in enumerate(lines):

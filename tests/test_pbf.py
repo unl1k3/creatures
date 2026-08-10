@@ -5,6 +5,15 @@ from liquid_creature.world import Obstacle
 DT = 1.0 / 120.0
 
 
+def test_creature_sizes_share_resolution_and_scale_particle_count() -> None:
+    radii = (35.0, 57.0, 78.0)
+    creatures = [PBFCreature.create(center=Vec2(), radius=radius) for radius in radii]
+    counts = [creature.particle_count for creature in creatures]
+    assert counts[0] < counts[1] < counts[2]
+    assert all(creature.config.particle_spacing == 10.0 for creature in creatures)
+    assert counts[2] / counts[0] > 4.0
+
+
 def test_pbf_creation_has_stable_particle_mass() -> None:
     creature = PBFCreature.create(center=Vec2())
     initial_count = creature.particle_count
