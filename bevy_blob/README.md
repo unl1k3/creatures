@@ -10,9 +10,13 @@ La creatura usa una scala fisica globale del 65%. La stessa scala viene
 propagata a collisioni, nucleo, indicatori e alle creature ottenute dalla
 divisione.
 
-Durante la divisione la risoluzione della membrana raddoppia: le due parti
-usano complessivamente 48 punti mantenendo invariate area, massa e dimensioni.
-Al ricongiungimento la membrana torna ai 24 punti della creatura unica.
+Durante la divisione la risoluzione della membrana aumenta mantenendo invariate
+area, massa e dimensioni. Una creatura selezionata può essere divisa nuovamente,
+fino a un massimo di quattro parti attive. Ogni parte conserva la propria
+genealogia: il ricongiungimento fonde prima i fratelli e risale progressivamente
+fino alla creatura originale. Un tentativo che non raggiunge il contatto entro
+quattro secondi viene annullato automaticamente. La divisione a cascata è
+consentita soltanto ai frammenti con almeno 16 punti fisici.
 
 ## Avvio
 
@@ -26,8 +30,8 @@ cargo run
 - `A`/`D` oppure frecce: movimento laterale.
 - Tieni `Freccia giù`: comprimi e carica il blob.
 - Rilascia `Freccia giù`: salta; la durata della carica determina l'impulso.
-- `R`: dopo la divisione attiva il ricongiungimento; con un solo blob effettua il reset.
-- `X`: divide il blob in due creature indipendenti.
+- `R`: richiama il fratello della creatura selezionata; con un solo blob effettua il reset.
+- `X`: divide la creatura selezionata, fino a quattro parti attive.
 - `Tab`: seleziona alternativamente una delle due creature.
 - `Esc`: chiude il gioco.
 

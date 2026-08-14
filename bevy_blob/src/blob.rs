@@ -2,7 +2,10 @@ use bevy::prelude::*;
 
 pub const PARTICLE_COUNT: usize = 24;
 pub const REFERENCE_RADIUS: f32 = 58.0;
+pub const DEFAULT_CREATURE_SCALE: f32 = 0.65;
+const DEFAULT_GAMEPLAY_RADIUS: f32 = REFERENCE_RADIUS * DEFAULT_CREATURE_SCALE;
 const SPLIT_RESOLUTION_MULTIPLIER: usize = 2;
+const MIN_SPLIT_SOURCE_PARTICLES: usize = 16;
 const SOLVER_ITERATIONS: usize = 8;
 const GRAVITY: f32 = 1_150.0;
 const GROUND_ACCELERATION: f32 = 1_050.0;
@@ -11,6 +14,7 @@ const MAX_GROUND_SPEED: f32 = 410.0;
 const MAX_AIR_SPEED: f32 = 285.0;
 const MAX_VERTICAL_SPEED: f32 = 1_450.0;
 const MAX_STRETCH_RATIO: f32 = 1.58;
+const MIN_COLLAPSE_RATIO: f32 = 0.34;
 const CHARGE_DURATION: f32 = 0.70;
 const JUMP_MIN_SPEED: f32 = 340.0;
 const JUMP_MAX_SPEED: f32 = 1_280.0;
@@ -86,6 +90,10 @@ impl Blob {
     #[cfg(test)]
     pub fn split_pair(&self, dt: f32) -> [Self; 2] {
         self.split_pair_uneven(dt, self.particles.len() / 2, true)
+    }
+
+    pub fn can_split(&self) -> bool {
+        self.particles.len() >= MIN_SPLIT_SOURCE_PARTICLES
     }
 
     /// Splits mass, points and area according to the requested smaller child.
@@ -249,6 +257,7 @@ impl Blob {
         } else {
             MAX_AIR_SPEED
         };
+        let jump_size_factor = jump_size_factor(self.rest_radius);
         for particle in &mut self.particles {
             let mut velocity = particle.position - particle.previous;
 
@@ -283,9 +292,10 @@ impl Blob {
                 -MAX_PARTICLE_HORIZONTAL_SPEED * dt,
                 MAX_PARTICLE_HORIZONTAL_SPEED * dt,
             );
-            velocity.y = velocity
-                .y
-                .clamp(-MAX_VERTICAL_SPEED * dt, MAX_VERTICAL_SPEED * dt);
+            velocity.y = velocity.y.clamp(
+                -MAX_VERTICAL_SPEED * dt,
+                MAX_VERTICAL_SPEED * jump_size_factor * dt,
+            );
 
             particle.previous = particle.position;
             particle.position += velocity + Vec2::NEG_Y * GRAVITY * dt * dt;
@@ -303,9 +313,14 @@ impl Blob {
                 // propagate through the body instead of translating it rigidly.
                 let lower_weight =
                     ((center.y - particle.position.y) / self.rest_edge).clamp(0.0, 2.5) / 2.5;
-                let jump_speed = jump_speed_for_charge(self.charge);
+                let jump_speed = jump_speed_for_charge(self.charge, self.rest_radius);
                 let impulse = jump_speed * dt;
-                particle.previous.y -= impulse * (0.82 + lower_weight * 0.28);
+                // Small fragments jump faster, so their non-uniform impulse
+                // must be reduced to avoid folding the membrane through its
+                // own centre. The common impulse, and therefore jump height,
+                // remains unchanged.
+                let deformation = 0.28 / jump_size_factor;
+                particle.previous.y -= impulse * (0.82 + lower_weight * deformation);
             }
         }
         if jump_released {
@@ -331,6 +346,7 @@ impl Blob {
             self.solve_edges();
             self.solve_curvature();
             self.solve_area();
+            self.limit_collapse();
             self.limit_stretch();
             self.solve_collisions(platforms);
         }
@@ -502,47 +518,69 @@ impl Blob {
         }
     }
 
+    /// Keeps the ordered membrane outside a small core around its centroid.
+    /// Without this bound, a very small blob can fold through itself during a
+    /// powerful launch and briefly produce a figure-eight silhouette.
+    fn limit_collapse(&mut self) {
+        let minimum_radius = self.rest_radius * MIN_COLLAPSE_RATIO;
+        for _ in 0..4 {
+            let center = self.center();
+            for particle in &mut self.particles {
+                let offset = particle.position - center;
+                let distance = offset.length();
+                if distance >= minimum_radius {
+                    continue;
+                }
+
+                let direction = if distance > 0.0001 {
+                    offset / distance
+                } else {
+                    Vec2::Y
+                };
+                let velocity = particle.position - particle.previous;
+                particle.position = center + direction * minimum_radius;
+                let outward_speed = velocity.dot(direction).max(0.0);
+                let tangential_velocity = velocity - direction * velocity.dot(direction);
+                particle.previous =
+                    particle.position - tangential_velocity * 0.55 - direction * outward_speed;
+            }
+        }
+    }
+
     fn solve_collisions(&mut self, platforms: &[Platform]) {
         let skin = 4.0 * self.size_scale();
         for particle in &mut self.particles {
             for platform in platforms {
-                let min = platform.center - platform.half_size;
-                let max = platform.center + platform.half_size;
-                if particle.position.x < min.x - skin
-                    || particle.position.x > max.x + skin
-                    || particle.position.y < min.y - skin
-                    || particle.position.y > max.y + skin
+                let min = platform.center - platform.half_size - Vec2::splat(skin);
+                let max = platform.center + platform.half_size + Vec2::splat(skin);
+                if particle.position.x < min.x
+                    || particle.position.x > max.x
+                    || particle.position.y < min.y
+                    || particle.position.y > max.y
                 {
                     continue;
                 }
 
-                let distances = [
-                    (particle.position.x - min.x).abs(),
-                    (max.x - particle.position.x).abs(),
-                    (particle.position.y - min.y).abs(),
-                    (max.y - particle.position.y).abs(),
-                ];
-                let side = distances
-                    .iter()
-                    .enumerate()
-                    .min_by(|a, b| a.1.total_cmp(b.1))
-                    .map(|(index, _)| index)
-                    .unwrap_or(3);
+                // A fast, small blob can cross the middle of a thin platform
+                // in one frame. Use the entry face from its swept path so all
+                // membrane points are returned to the side they came from,
+                // instead of splitting the contour across both faces.
+                let side = collision_entry_side(particle, min, max);
                 match side {
                     0 => {
-                        particle.position.x = min.x - skin;
+                        particle.position.x = min.x;
                         damp_normal_velocity(particle, Vec2::NEG_X, 0.12);
                     }
                     1 => {
-                        particle.position.x = max.x + skin;
+                        particle.position.x = max.x;
                         damp_normal_velocity(particle, Vec2::X, 0.12);
                     }
                     2 => {
-                        particle.position.y = min.y - skin;
+                        particle.position.y = min.y;
                         damp_normal_velocity(particle, Vec2::NEG_Y, 0.08);
                     }
                     _ => {
-                        particle.position.y = max.y + skin;
+                        particle.position.y = max.y;
                         damp_normal_velocity(particle, Vec2::Y, 0.0);
                         self.grounded = true;
                     }
@@ -552,11 +590,62 @@ impl Blob {
     }
 }
 
-fn jump_speed_for_charge(charge: f32) -> f32 {
+fn collision_entry_side(particle: &Particle, min: Vec2, max: Vec2) -> usize {
+    let movement = particle.position - particle.previous;
+    let mut entry: Option<(f32, usize)> = None;
+    let candidates = [
+        (
+            particle.previous.x < min.x && movement.x > 0.0,
+            (min.x - particle.previous.x) / movement.x,
+            0,
+        ),
+        (
+            particle.previous.x > max.x && movement.x < 0.0,
+            (max.x - particle.previous.x) / movement.x,
+            1,
+        ),
+        (
+            particle.previous.y < min.y && movement.y > 0.0,
+            (min.y - particle.previous.y) / movement.y,
+            2,
+        ),
+        (
+            particle.previous.y > max.y && movement.y < 0.0,
+            (max.y - particle.previous.y) / movement.y,
+            3,
+        ),
+    ];
+    for (valid, time, side) in candidates {
+        if valid && (0.0..=1.0).contains(&time) && entry.is_none_or(|(best, _)| time < best) {
+            entry = Some((time, side));
+        }
+    }
+    entry.map(|(_, side)| side).unwrap_or_else(|| {
+        [
+            (particle.position.x - min.x).abs(),
+            (max.x - particle.position.x).abs(),
+            (particle.position.y - min.y).abs(),
+            (max.y - particle.position.y).abs(),
+        ]
+        .iter()
+        .enumerate()
+        .min_by(|a, b| a.1.total_cmp(b.1))
+        .map(|(side, _)| side)
+        .unwrap_or(3)
+    })
+}
+
+fn jump_size_factor(radius: f32) -> f32 {
+    (DEFAULT_GAMEPLAY_RADIUS / radius.max(1.0))
+        .sqrt()
+        .clamp(0.75, 2.0)
+}
+
+fn jump_speed_for_charge(charge: f32, radius: f32) -> f32 {
     // Short taps remain small, the middle range stays broad and controllable,
     // and only a complete charge reaches maximum launch speed.
     let response = charge.clamp(0.0, 1.0).powf(1.2);
-    JUMP_MIN_SPEED + (JUMP_MAX_SPEED - JUMP_MIN_SPEED) * response
+    (JUMP_MIN_SPEED + (JUMP_MAX_SPEED - JUMP_MIN_SPEED) * response) * jump_size_factor(radius)
 }
 
 fn damp_normal_velocity(particle: &mut Particle, normal: Vec2, restitution: f32) {
@@ -581,6 +670,31 @@ pub fn polygon_area(particles: &[Particle]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn polygon_self_intersects(particles: &[Particle]) -> bool {
+        let count = particles.len();
+        for first in 0..count {
+            let first_next = (first + 1) % count;
+            for second in (first + 1)..count {
+                let second_next = (second + 1) % count;
+                if first == second_next || first_next == second || first == second {
+                    continue;
+                }
+                let a = particles[first].position;
+                let b = particles[first_next].position;
+                let c = particles[second].position;
+                let d = particles[second_next].position;
+                let ab_c = (b - a).perp_dot(c - a);
+                let ab_d = (b - a).perp_dot(d - a);
+                let cd_a = (d - c).perp_dot(a - c);
+                let cd_b = (d - c).perp_dot(b - c);
+                if ab_c * ab_d < 0.0 && cd_a * cd_b < 0.0 {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 
     #[test]
     fn initial_blob_has_expected_area() {
@@ -626,6 +740,96 @@ mod tests {
             .map(|particle| particle.position.distance(center))
             .fold(0.0, f32::max);
         assert!(furthest <= blob.rest_radius * MAX_STRETCH_RATIO + 0.001);
+    }
+
+    #[test]
+    fn collapse_limit_keeps_particles_outside_the_inner_core() {
+        let mut blob = Blob::new_with_count(Vec2::ZERO, 15.0, 14);
+        blob.particles[0].position = Vec2::new(0.1, 0.0);
+        blob.particles[0].previous = Vec2::new(2.0, 0.0);
+        blob.limit_collapse();
+
+        let center = blob.center();
+        let nearest = blob
+            .particles
+            .iter()
+            .map(|particle| particle.position.distance(center))
+            .fold(f32::INFINITY, f32::min);
+        assert!(nearest >= blob.rest_radius * MIN_COLLAPSE_RATIO - 0.01);
+    }
+
+    #[test]
+    fn tiny_blob_does_not_fold_during_a_full_jump() {
+        let radius = 15.0;
+        let floor = Platform {
+            center: Vec2::new(0.0, -radius - 10.0),
+            half_size: Vec2::new(300.0, 10.0),
+        };
+        let mut blob = Blob::new_with_count(Vec2::ZERO, radius, 14);
+        let dt = 1.0 / 120.0;
+
+        for _ in 0..60 {
+            blob.step(dt, 0.0, false, &[floor]);
+        }
+        for _ in 0..90 {
+            blob.step(dt, 0.0, true, &[floor]);
+        }
+        blob.step(dt, 0.0, false, &[floor]);
+        for _ in 0..180 {
+            blob.step(dt, 0.0, false, &[floor]);
+            assert!(!polygon_self_intersects(&blob.particles));
+        }
+    }
+
+    #[test]
+    fn fast_particle_is_returned_to_the_face_it_entered() {
+        let particle = Particle {
+            previous: Vec2::new(0.0, -20.0),
+            position: Vec2::new(0.0, 8.0),
+        };
+        assert_eq!(
+            collision_entry_side(&particle, Vec2::new(-50.0, -10.0), Vec2::new(50.0, 10.0)),
+            2
+        );
+    }
+
+    #[test]
+    fn tiny_blob_does_not_wrap_around_a_ceiling() {
+        let radius = 15.0;
+        let floor = Platform {
+            center: Vec2::new(0.0, -radius - 10.0),
+            half_size: Vec2::new(300.0, 10.0),
+        };
+        let ceiling = Platform {
+            center: Vec2::new(0.0, 105.0),
+            half_size: Vec2::new(300.0, 14.0),
+        };
+        let mut blob = Blob::new_with_count(Vec2::ZERO, radius, 14);
+        let dt = 1.0 / 120.0;
+
+        for _ in 0..60 {
+            blob.step(dt, 0.0, false, &[floor, ceiling]);
+        }
+        for _ in 0..90 {
+            blob.step(dt, 0.0, true, &[floor, ceiling]);
+        }
+        blob.step(dt, 0.0, false, &[floor, ceiling]);
+        for _ in 0..240 {
+            blob.step(dt, 0.0, false, &[floor, ceiling]);
+            assert!(!polygon_self_intersects(&blob.particles));
+
+            let underside = ceiling.center.y - ceiling.half_size.y;
+            let top = ceiling.center.y + ceiling.half_size.y;
+            let below = blob
+                .particles
+                .iter()
+                .any(|particle| particle.position.y <= underside);
+            let above = blob
+                .particles
+                .iter()
+                .any(|particle| particle.position.y >= top);
+            assert!(!(below && above));
+        }
     }
 
     #[test]
@@ -731,9 +935,9 @@ mod tests {
 
     #[test]
     fn jump_charge_has_distinct_low_mid_and_full_power() {
-        let low = jump_speed_for_charge(0.1);
-        let middle = jump_speed_for_charge(0.5);
-        let full = jump_speed_for_charge(1.0);
+        let low = jump_speed_for_charge(0.1, DEFAULT_GAMEPLAY_RADIUS);
+        let middle = jump_speed_for_charge(0.5, DEFAULT_GAMEPLAY_RADIUS);
+        let full = jump_speed_for_charge(1.0, DEFAULT_GAMEPLAY_RADIUS);
 
         assert!(low < 450.0, "low charge is too strong: {low}");
         assert!(
@@ -743,6 +947,21 @@ mod tests {
         assert_eq!(full, JUMP_MAX_SPEED);
         assert!(middle - low > 250.0);
         assert!(full - middle > 400.0);
+    }
+
+    #[test]
+    fn jump_height_is_inverse_to_creature_radius() {
+        let small_radius = DEFAULT_GAMEPLAY_RADIUS * 0.5;
+        let large_radius = DEFAULT_GAMEPLAY_RADIUS;
+        let small_speed = jump_speed_for_charge(1.0, small_radius);
+        let large_speed = jump_speed_for_charge(1.0, large_radius);
+
+        assert!(small_speed > large_speed);
+        // Ballistic height is proportional to speed squared. Therefore this
+        // ratio must match the inverse ratio of the radii.
+        let height_ratio = small_speed.powi(2) / large_speed.powi(2);
+        let expected_ratio = large_radius / small_radius;
+        assert!((height_ratio - expected_ratio).abs() < 0.001);
     }
 
     #[test]
@@ -884,5 +1103,70 @@ mod tests {
         let combined_center = (small.center() * small.mass() + large.center() * large.mass())
             / (small.mass() + large.mass());
         assert!(combined_center.distance(parent.center()) < 0.0001);
+    }
+
+    #[test]
+    fn cascading_split_requires_enough_source_particles() {
+        assert!(!Blob::new_with_count(Vec2::ZERO, 20.0, 15).can_split());
+        assert!(Blob::new_with_count(Vec2::ZERO, 20.0, 16).can_split());
+    }
+
+    #[test]
+    fn smaller_split_child_reaches_a_higher_apex() {
+        let parent = Blob::new(Vec2::ZERO, DEFAULT_GAMEPLAY_RADIUS);
+        let [first, second] = parent.split_pair_uneven(1.0 / 120.0, 9, true);
+        let (small, large) = if first.rest_radius < second.rest_radius {
+            (first, second)
+        } else {
+            (second, first)
+        };
+
+        let small_height = measured_full_jump_height(small);
+        let large_height = measured_full_jump_height(large);
+        assert!(
+            small_height > large_height * 1.08,
+            "small child rose {small_height}px, large child rose {large_height}px"
+        );
+    }
+
+    #[test]
+    fn recursive_fragments_have_monotonic_jump_heights() {
+        let root = Blob::new(Vec2::ZERO, DEFAULT_GAMEPLAY_RADIUS);
+        let [first, second] = root.split_pair_uneven(1.0 / 120.0, 9, true);
+        let [a, b] = first.split_pair_uneven(1.0 / 120.0, 7, true);
+        let [c, d] = second.split_pair_uneven(1.0 / 120.0, 10, false);
+        let mut samples = [a, b, c, d]
+            .into_iter()
+            .map(|blob| (blob.rest_radius, measured_full_jump_height(blob)))
+            .collect::<Vec<_>>();
+        samples.sort_by(|left, right| left.0.total_cmp(&right.0));
+        for pair in samples.windows(2) {
+            assert!(
+                pair[0].1 >= pair[1].1,
+                "radius/height samples are {samples:?}"
+            );
+        }
+    }
+
+    fn measured_full_jump_height(mut blob: Blob) -> f32 {
+        let floor = Platform {
+            center: Vec2::new(blob.center().x, -70.0),
+            half_size: Vec2::new(500.0, 10.0),
+        };
+        let dt = 1.0 / 120.0;
+        for _ in 0..120 {
+            blob.step(dt, 0.0, false, &[floor]);
+        }
+        for _ in 0..90 {
+            blob.step(dt, 0.0, true, &[floor]);
+        }
+        let launch_height = blob.center().y;
+        blob.step(dt, 0.0, false, &[floor]);
+        let mut apex = blob.center().y;
+        for _ in 0..240 {
+            blob.step(dt, 0.0, false, &[floor]);
+            apex = apex.max(blob.center().y);
+        }
+        apex - launch_height
     }
 }
