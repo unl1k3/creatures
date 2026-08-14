@@ -2,6 +2,7 @@ use bevy::prelude::*;
 
 pub const PARTICLE_COUNT: usize = 24;
 pub const REFERENCE_RADIUS: f32 = 58.0;
+const SPLIT_RESOLUTION_MULTIPLIER: usize = 2;
 const SOLVER_ITERATIONS: usize = 8;
 const GRAVITY: f32 = 1_150.0;
 const GROUND_ACCELERATION: f32 = 1_050.0;
@@ -82,6 +83,7 @@ impl Blob {
     }
 
     /// Creates the symmetric pair used by deterministic physics tests.
+    #[cfg(test)]
     pub fn split_pair(&self, dt: f32) -> [Self; 2] {
         self.split_pair_uneven(dt, self.particles.len() / 2, true)
     }
@@ -98,13 +100,15 @@ impl Blob {
         let total_count = self.particles.len();
         let smaller_count = smaller_count.clamp(6, total_count.saturating_sub(6));
         let larger_count = total_count - smaller_count;
-        let (left_count, right_count) = if smaller_on_left {
+        let (left_mass_units, right_mass_units) = if smaller_on_left {
             (smaller_count, larger_count)
         } else {
             (larger_count, smaller_count)
         };
-        let left_fraction = left_count as f32 / total_count as f32;
-        let right_fraction = right_count as f32 / total_count as f32;
+        let left_fraction = left_mass_units as f32 / total_count as f32;
+        let right_fraction = right_mass_units as f32 / total_count as f32;
+        let left_count = left_mass_units * SPLIT_RESOLUTION_MULTIPLIER;
+        let right_count = right_mass_units * SPLIT_RESOLUTION_MULTIPLIER;
         let radius_for = |count: usize, area_fraction: f32| {
             let polygon_factor = count as f32 * (std::f32::consts::TAU / count as f32).sin();
             (2.0 * self.rest_area * area_fraction / polygon_factor).sqrt()
@@ -130,13 +134,13 @@ impl Blob {
     }
 
     pub fn merge_pair(first: &Self, second: &Self) -> Self {
-        let particle_count = first.particles.len() + second.particles.len();
+        let particle_count = PARTICLE_COUNT;
         let total_area = first.rest_area + second.rest_area;
         let polygon_factor =
             particle_count as f32 * (std::f32::consts::TAU / particle_count as f32).sin();
         let radius = (2.0 * total_area / polygon_factor).sqrt();
-        let first_mass = first.particles.len() as f32;
-        let second_mass = second.particles.len() as f32;
+        let first_mass = first.mass();
+        let second_mass = second.mass();
         let total_mass = first_mass + second_mass;
         let center = (first.center() * first_mass + second.center() * second_mass) / total_mass;
         let velocity =
@@ -155,6 +159,10 @@ impl Blob {
             .map(|particle| particle.position - particle.previous)
             .sum::<Vec2>()
             / self.particles.len() as f32
+    }
+
+    pub fn mass(&self) -> f32 {
+        self.rest_area
     }
 
     pub fn translate(&mut self, offset: Vec2) {
@@ -826,7 +834,7 @@ mod tests {
     }
 
     #[test]
-    fn split_creates_two_half_particle_half_area_children() {
+    fn split_creates_two_high_resolution_half_area_children() {
         let mut parent = Blob::new(Vec2::new(12.0, 34.0), 50.0);
         let inherited_velocity = Vec2::new(1.5, -0.75);
         for particle in &mut parent.particles {
@@ -834,8 +842,8 @@ mod tests {
         }
 
         let [left, right] = parent.split_pair(1.0 / 120.0);
-        assert_eq!(left.particles.len(), parent.particles.len() / 2);
-        assert_eq!(right.particles.len(), parent.particles.len() / 2);
+        assert_eq!(left.particles.len(), parent.particles.len());
+        assert_eq!(right.particles.len(), parent.particles.len());
         let midpoint = (left.center() + right.center()) * 0.5;
         assert!(midpoint.distance(parent.center()) < 0.0001);
         assert!(left.center().distance(right.center()) > left.rest_radius + right.rest_radius);
@@ -843,17 +851,9 @@ mod tests {
             ((left.rest_area + right.rest_area) - parent.rest_area).abs() / parent.rest_area;
         assert!(relative_area_error < 0.0001);
 
-        let children_momentum = [&left, &right]
-            .into_iter()
-            .flat_map(|blob| &blob.particles)
-            .map(|particle| particle.position - particle.previous)
-            .sum::<Vec2>();
-        let parent_momentum = parent
-            .particles
-            .iter()
-            .map(|particle| particle.position - particle.previous)
-            .sum::<Vec2>();
-        assert!(children_momentum.distance(parent_momentum) < 0.0001);
+        let children_momentum = left.velocity() * left.mass() + right.velocity() * right.mass();
+        let parent_momentum = parent.velocity() * parent.mass();
+        assert!(children_momentum.distance(parent_momentum) / parent.mass() < 0.00001);
     }
 
     #[test]
@@ -862,14 +862,13 @@ mod tests {
         let [mut left, mut right] = parent.split_pair(1.0 / 120.0);
         left.add_velocity(Vec2::new(0.8, 0.3));
         right.add_velocity(Vec2::new(-0.2, 0.5));
-        let expected_momentum = left.velocity() * left.particles.len() as f32
-            + right.velocity() * right.particles.len() as f32;
+        let expected_momentum = left.velocity() * left.mass() + right.velocity() * right.mass();
 
         let merged = Blob::merge_pair(&left, &right);
         assert_eq!(merged.particles.len(), parent.particles.len());
         assert!((merged.rest_area - parent.rest_area).abs() / parent.rest_area < 0.0001);
-        let merged_momentum = merged.velocity() * merged.particles.len() as f32;
-        assert!(merged_momentum.distance(expected_momentum) < 0.0001);
+        let merged_momentum = merged.velocity() * merged.mass();
+        assert!(merged_momentum.distance(expected_momentum) / merged.mass() < 0.00001);
     }
 
     #[test]
@@ -877,12 +876,13 @@ mod tests {
         let parent = Blob::new(Vec2::new(4.0, 7.0), 50.0);
         let [small, large] = parent.split_pair_uneven(1.0 / 120.0, 9, true);
 
-        assert_eq!(small.particles.len(), 9);
-        assert_eq!(large.particles.len(), 15);
+        assert_eq!(small.particles.len(), 18);
+        assert_eq!(large.particles.len(), 30);
         assert!(small.rest_radius < large.rest_radius);
         assert!(small.rest_area < large.rest_area);
         assert!((small.rest_area + large.rest_area - parent.rest_area).abs() < 0.01);
-        let combined_center = (small.center() * 9.0 + large.center() * 15.0) / 24.0;
+        let combined_center = (small.center() * small.mass() + large.center() * large.mass())
+            / (small.mass() + large.mass());
         assert!(combined_center.distance(parent.center()) < 0.0001);
     }
 }

@@ -10,6 +10,10 @@ La creatura usa una scala fisica globale del 65%. La stessa scala viene
 propagata a collisioni, nucleo, indicatori e alle creature ottenute dalla
 divisione.
 
+Durante la divisione la risoluzione della membrana raddoppia: le due parti
+usano complessivamente 48 punti mantenendo invariate area, massa e dimensioni.
+Al ricongiungimento la membrana torna ai 24 punti della creatura unica.
+
 ## Avvio
 
 ```bash

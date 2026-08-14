@@ -194,9 +194,7 @@ fn update_rejoining(blobs: &mut BlobWorld, platforms: &[Platform]) {
         return;
     }
     let pair_scale = (blobs.active[0].size_scale() + blobs.active[1].size_scale()) * 0.5;
-    let surface_gap = first_center.distance(second_center)
-        - blobs.active[0].rest_radius
-        - blobs.active[1].rest_radius;
+    let surface_gap = blob_surface_gap(&blobs.active[0], &blobs.active[1]);
     if surface_gap <= 2.0 * pair_scale {
         let merged = Blob::merge_pair(&blobs.active[0], &blobs.active[1]);
         blobs.active = vec![merged];
@@ -253,14 +251,21 @@ fn resolve_blob_collisions(blobs: &mut [Blob]) {
                 Vec2::X
             };
             let pair_scale = (first.size_scale() + second.size_scale()) * 0.5;
-            let minimum_distance = first.rest_radius + second.rest_radius + 1.5 * pair_scale;
-            if distance >= minimum_distance {
+            let first_extent = support_extent(first, normal);
+            let second_extent = support_extent(second, -normal);
+            let required_distance = first_extent + second_extent + 1.5 * pair_scale;
+            if distance >= required_distance {
                 continue;
             }
 
-            let correction = normal * (minimum_distance - distance) * 0.5;
-            first.translate(-correction);
-            second.translate(correction);
+            // Weight separation inversely by particle count: the smaller blob
+            // yields more, while the combined centre of mass remains fixed.
+            let first_mass = first.mass();
+            let second_mass = second.mass();
+            let total_mass = first_mass + second_mass;
+            let penetration = required_distance - distance;
+            first.translate(-normal * penetration * second_mass / total_mass);
+            second.translate(normal * penetration * first_mass / total_mass);
 
             let relative_normal_speed = (second.velocity() - first.velocity()).dot(normal);
             if relative_normal_speed < 0.0 {
@@ -269,6 +274,25 @@ fn resolve_blob_collisions(blobs: &mut [Blob]) {
             }
         }
     }
+}
+
+fn support_extent(blob: &Blob, direction: Vec2) -> f32 {
+    let center = blob.center();
+    blob.particles
+        .iter()
+        .map(|particle| (particle.position - center).dot(direction))
+        .fold(0.0, f32::max)
+}
+
+fn blob_surface_gap(first: &Blob, second: &Blob) -> f32 {
+    let delta = second.center() - first.center();
+    let distance = delta.length();
+    let normal = if distance > 0.001 {
+        delta / distance
+    } else {
+        Vec2::X
+    };
+    distance - support_extent(first, normal) - support_extent(second, -normal)
 }
 
 fn draw_world(mut gizmos: Gizmos, blobs: Res<BlobWorld>, level: Res<Level>) {
@@ -343,6 +367,33 @@ mod tests {
         let distance = blobs[0].center().distance(blobs[1].center());
         let scaled_gap = 1.5 * blobs[0].size_scale();
         assert!(distance >= blobs[0].rest_radius + blobs[1].rest_radius + scaled_gap - 0.01);
+    }
+
+    #[test]
+    fn collision_uses_deformed_outline_instead_of_rest_radius() {
+        let mut first = Blob::new(Vec2::new(-34.0, 0.0), 30.0);
+        let mut second = Blob::new(Vec2::new(34.0, 0.0), 30.0);
+        // Push the facing membrane points beyond their nominal radii while the
+        // two rest circles remain separated.
+        first.particles[0].position.x += 12.0;
+        first.particles[0].previous.x += 12.0;
+        let leftmost = second.particles.len() / 2;
+        second.particles[leftmost].position.x -= 12.0;
+        second.particles[leftmost].previous.x -= 12.0;
+        let center_of_mass_before = (first.center() * first.mass()
+            + second.center() * second.mass())
+            / (first.mass() + second.mass());
+        let mut blobs = vec![first, second];
+
+        assert!(blob_surface_gap(&blobs[0], &blobs[1]) < 0.0);
+        resolve_blob_collisions(&mut blobs);
+
+        let expected_gap = 1.5 * (blobs[0].size_scale() + blobs[1].size_scale()) * 0.5;
+        assert!(blob_surface_gap(&blobs[0], &blobs[1]) >= expected_gap - 0.01);
+        let center_of_mass_after = (blobs[0].center() * blobs[0].mass()
+            + blobs[1].center() * blobs[1].mass())
+            / (blobs[0].mass() + blobs[1].mass());
+        assert!(center_of_mass_after.distance(center_of_mass_before) < 0.0001);
     }
 
     #[test]
