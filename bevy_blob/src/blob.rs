@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 pub const PARTICLE_COUNT: usize = 24;
+pub const REFERENCE_RADIUS: f32 = 58.0;
 const SOLVER_ITERATIONS: usize = 8;
 const GRAVITY: f32 = 1_150.0;
 const GROUND_ACCELERATION: f32 = 1_050.0;
@@ -28,7 +29,7 @@ pub struct Platform {
     pub half_size: Vec2,
 }
 
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub struct Blob {
     pub particles: Vec<Particle>,
     pub rest_edge: f32,
@@ -46,9 +47,14 @@ pub struct Blob {
 
 impl Blob {
     pub fn new(center: Vec2, radius: f32) -> Self {
-        let particles = (0..PARTICLE_COUNT)
+        Self::new_with_count(center, radius, PARTICLE_COUNT)
+    }
+
+    pub fn new_with_count(center: Vec2, radius: f32, particle_count: usize) -> Self {
+        assert!(particle_count >= 6, "a blob needs at least six particles");
+        let particles = (0..particle_count)
             .map(|index| {
-                let angle = index as f32 / PARTICLE_COUNT as f32 * std::f32::consts::TAU;
+                let angle = index as f32 / particle_count as f32 * std::f32::consts::TAU;
                 let position = center + Vec2::from_angle(angle) * radius;
                 Particle {
                     position,
@@ -75,12 +81,105 @@ impl Blob {
         }
     }
 
+    /// Creates the symmetric pair used by deterministic physics tests.
+    pub fn split_pair(&self, dt: f32) -> [Self; 2] {
+        self.split_pair_uneven(dt, self.particles.len() / 2, true)
+    }
+
+    /// Splits mass, points and area according to the requested smaller child.
+    /// Position and separation impulse are mass-weighted, preserving the
+    /// parent's centre of mass and total momentum.
+    pub fn split_pair_uneven(
+        &self,
+        dt: f32,
+        smaller_count: usize,
+        smaller_on_left: bool,
+    ) -> [Self; 2] {
+        let total_count = self.particles.len();
+        let smaller_count = smaller_count.clamp(6, total_count.saturating_sub(6));
+        let larger_count = total_count - smaller_count;
+        let (left_count, right_count) = if smaller_on_left {
+            (smaller_count, larger_count)
+        } else {
+            (larger_count, smaller_count)
+        };
+        let left_fraction = left_count as f32 / total_count as f32;
+        let right_fraction = right_count as f32 / total_count as f32;
+        let radius_for = |count: usize, area_fraction: f32| {
+            let polygon_factor = count as f32 * (std::f32::consts::TAU / count as f32).sin();
+            (2.0 * self.rest_area * area_fraction / polygon_factor).sqrt()
+        };
+        let left_radius = radius_for(left_count, left_fraction);
+        let right_radius = radius_for(right_count, right_fraction);
+        let center = self.center();
+        let parent_velocity = self.velocity();
+
+        let mut left = Self::new_with_count(center, left_radius, left_count);
+        let mut right = Self::new_with_count(center, right_radius, right_count);
+        let separation = Vec2::X * 85.0 * self.size_scale() * dt;
+        for particle in &mut left.particles {
+            particle.previous = particle.position - parent_velocity + separation * right_fraction;
+        }
+        for particle in &mut right.particles {
+            particle.previous = particle.position - parent_velocity - separation * left_fraction;
+        }
+        let separation_distance = (left_radius + right_radius) * 1.35;
+        left.translate(Vec2::NEG_X * separation_distance * right_fraction);
+        right.translate(Vec2::X * separation_distance * left_fraction);
+        [left, right]
+    }
+
+    pub fn merge_pair(first: &Self, second: &Self) -> Self {
+        let particle_count = first.particles.len() + second.particles.len();
+        let total_area = first.rest_area + second.rest_area;
+        let polygon_factor =
+            particle_count as f32 * (std::f32::consts::TAU / particle_count as f32).sin();
+        let radius = (2.0 * total_area / polygon_factor).sqrt();
+        let first_mass = first.particles.len() as f32;
+        let second_mass = second.particles.len() as f32;
+        let total_mass = first_mass + second_mass;
+        let center = (first.center() * first_mass + second.center() * second_mass) / total_mass;
+        let velocity =
+            (first.velocity() * first_mass + second.velocity() * second_mass) / total_mass;
+
+        let mut merged = Self::new_with_count(center, radius, particle_count);
+        for particle in &mut merged.particles {
+            particle.previous = particle.position - velocity;
+        }
+        merged
+    }
+
+    pub fn velocity(&self) -> Vec2 {
+        self.particles
+            .iter()
+            .map(|particle| particle.position - particle.previous)
+            .sum::<Vec2>()
+            / self.particles.len() as f32
+    }
+
+    pub fn translate(&mut self, offset: Vec2) {
+        for particle in &mut self.particles {
+            particle.position += offset;
+            particle.previous += offset;
+        }
+    }
+
+    pub fn add_velocity(&mut self, velocity: Vec2) {
+        for particle in &mut self.particles {
+            particle.previous -= velocity;
+        }
+    }
+
     pub fn center(&self) -> Vec2 {
         self.particles
             .iter()
             .map(|particle| particle.position)
             .sum::<Vec2>()
             / self.particles.len() as f32
+    }
+
+    pub fn size_scale(&self) -> f32 {
+        self.rest_radius / REFERENCE_RADIUS
     }
 
     pub fn step(&mut self, dt: f32, horizontal: f32, charging: bool, platforms: &[Platform]) {
@@ -204,8 +303,9 @@ impl Blob {
         if jump_released {
             // Clear the contact skin immediately. Without this separation the
             // launch can be repeatedly projected back onto the floor.
+            let takeoff_clearance = 3.0 * self.size_scale();
             for particle in &mut self.particles {
-                particle.position.y += 3.0;
+                particle.position.y += takeoff_clearance;
             }
             self.remove_angular_velocity();
             self.charge = 0.0;
@@ -395,7 +495,7 @@ impl Blob {
     }
 
     fn solve_collisions(&mut self, platforms: &[Platform]) {
-        let skin = 4.0;
+        let skin = 4.0 * self.size_scale();
         for particle in &mut self.particles {
             for platform in platforms {
                 let min = platform.center - platform.half_size;
@@ -723,5 +823,66 @@ mod tests {
 
         assert!(average_velocity.distance(translation) < 0.0001);
         assert!(residual_spin.abs() < 0.001);
+    }
+
+    #[test]
+    fn split_creates_two_half_particle_half_area_children() {
+        let mut parent = Blob::new(Vec2::new(12.0, 34.0), 50.0);
+        let inherited_velocity = Vec2::new(1.5, -0.75);
+        for particle in &mut parent.particles {
+            particle.previous = particle.position - inherited_velocity;
+        }
+
+        let [left, right] = parent.split_pair(1.0 / 120.0);
+        assert_eq!(left.particles.len(), parent.particles.len() / 2);
+        assert_eq!(right.particles.len(), parent.particles.len() / 2);
+        let midpoint = (left.center() + right.center()) * 0.5;
+        assert!(midpoint.distance(parent.center()) < 0.0001);
+        assert!(left.center().distance(right.center()) > left.rest_radius + right.rest_radius);
+        let relative_area_error =
+            ((left.rest_area + right.rest_area) - parent.rest_area).abs() / parent.rest_area;
+        assert!(relative_area_error < 0.0001);
+
+        let children_momentum = [&left, &right]
+            .into_iter()
+            .flat_map(|blob| &blob.particles)
+            .map(|particle| particle.position - particle.previous)
+            .sum::<Vec2>();
+        let parent_momentum = parent
+            .particles
+            .iter()
+            .map(|particle| particle.position - particle.previous)
+            .sum::<Vec2>();
+        assert!(children_momentum.distance(parent_momentum) < 0.0001);
+    }
+
+    #[test]
+    fn merge_restores_particle_count_area_and_momentum() {
+        let parent = Blob::new(Vec2::ZERO, 50.0);
+        let [mut left, mut right] = parent.split_pair(1.0 / 120.0);
+        left.add_velocity(Vec2::new(0.8, 0.3));
+        right.add_velocity(Vec2::new(-0.2, 0.5));
+        let expected_momentum = left.velocity() * left.particles.len() as f32
+            + right.velocity() * right.particles.len() as f32;
+
+        let merged = Blob::merge_pair(&left, &right);
+        assert_eq!(merged.particles.len(), parent.particles.len());
+        assert!((merged.rest_area - parent.rest_area).abs() / parent.rest_area < 0.0001);
+        let merged_momentum = merged.velocity() * merged.particles.len() as f32;
+        assert!(merged_momentum.distance(expected_momentum) < 0.0001);
+    }
+
+    #[test]
+    fn uneven_split_creates_different_sizes_and_preserves_mass() {
+        let parent = Blob::new(Vec2::new(4.0, 7.0), 50.0);
+        let [small, large] = parent.split_pair_uneven(1.0 / 120.0, 9, true);
+
+        assert_eq!(small.particles.len(), 9);
+        assert_eq!(large.particles.len(), 15);
+        assert!(small.rest_radius < large.rest_radius);
+        assert!(small.rest_area < large.rest_area);
+        assert!((small.rest_area + large.rest_area - parent.rest_area).abs() < 0.01);
+        let combined_center = (small.center() * 9.0 + large.center() * 15.0) / 24.0;
+        assert!(combined_center.distance(parent.center()) < 0.0001);
     }
 }
