@@ -1,8 +1,10 @@
+mod acid;
 mod blob;
 mod camera;
 mod input;
 mod rendering;
 
+use acid::{AcidWorld, draw_acid, fire_acid, simulate_acid};
 use avian2d::prelude::PhysicsPlugins;
 use bevy::{app::AppExit, prelude::*, window::WindowResolution};
 use blob::{Blob, DEFAULT_CREATURE_SCALE, Platform, REFERENCE_RADIUS};
@@ -14,7 +16,7 @@ use input::next_selection;
 use input::{cycle_selection, exit_on_escape, handle_blob_actions};
 #[cfg(test)]
 use rendering::blob_family_color;
-use rendering::draw_world;
+use rendering::{draw_world, sync_blob_meshes};
 use std::{
     collections::HashMap,
     time::{SystemTime, UNIX_EPOCH},
@@ -80,15 +82,18 @@ fn main() {
         }))
         .add_plugins(PhysicsPlugins::default())
         .add_systems(Startup, setup)
-        .add_systems(FixedUpdate, simulate_blob)
+        .add_systems(FixedUpdate, (simulate_blob, simulate_acid).chain())
         .add_systems(
             Update,
             (
                 exit_on_escape,
                 handle_blob_actions,
+                fire_acid,
                 cycle_selection,
                 follow_camera,
+                sync_blob_meshes,
                 draw_world,
+                draw_acid,
             )
                 .chain(),
         )
@@ -115,6 +120,7 @@ fn setup(mut commands: Commands) {
         .unwrap_or(0x9e37_79b9_7f4a_7c15)
         .max(1);
     commands.insert_resource(SplitRng(seed));
+    commands.insert_resource(AcidWorld::new(seed.rotate_left(29)));
     commands.insert_resource(Level {
         platforms: vec![
             platform(0.0, -370.0, 660.0, 38.0),

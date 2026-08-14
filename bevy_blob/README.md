@@ -32,6 +32,7 @@ cargo run
 - Rilascia `Freccia giù`: salta; la durata della carica determina l'impulso.
 - `R`: richiama il fratello della creatura selezionata; con un solo blob effettua il reset.
 - `X`: divide la creatura selezionata, fino a quattro parti attive.
+- `Spazio`: espelle una raffica radiale di acido, se il blob è abbastanza grande.
 - `Tab`: passa alla creatura attiva successiva.
 - `Esc`: chiude il gioco.
 

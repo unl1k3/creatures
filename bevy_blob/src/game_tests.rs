@@ -97,6 +97,42 @@ mod tests {
     }
 
     #[test]
+    fn selected_blob_fill_is_visibly_different_but_keeps_its_family() {
+        let selected = crate::rendering::blob_fill_color(Some(4), true);
+        let inactive_sibling = crate::rendering::blob_fill_color(Some(4), false);
+        let selected_other_family = crate::rendering::blob_fill_color(Some(5), true);
+
+        assert_ne!(selected, inactive_sibling);
+        assert_ne!(selected, selected_other_family);
+    }
+
+    #[test]
+    fn rendered_blob_mesh_has_a_triangle_for_every_membrane_edge() {
+        let blob = Blob::new(Vec2::ZERO, INITIAL_RADIUS);
+        let mesh = crate::rendering::create_blob_mesh(&blob);
+
+        assert_eq!(mesh.count_vertices(), blob.particles.len() + 1);
+        assert_eq!(
+            mesh.indices().map(|indices| indices.len()),
+            Some(blob.particles.len() * 3)
+        );
+    }
+
+    #[test]
+    fn jump_charge_indicator_stays_outside_a_deformed_blob() {
+        let mut blob = Blob::new(Vec2::ZERO, INITIAL_RADIUS);
+        blob.particles[0].position += Vec2::X * 12.0;
+        let center = blob.center();
+        let outermost = blob
+            .particles
+            .iter()
+            .map(|particle| particle.position.distance(center))
+            .fold(0.0, f32::max);
+
+        assert!(crate::rendering::charge_indicator_radius(&blob) > outermost);
+    }
+
+    #[test]
     fn platform_blocks_rejoining_line_of_sight() {
         let wall = Platform {
             center: Vec2::ZERO,
