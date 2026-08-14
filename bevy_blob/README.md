@@ -32,8 +32,18 @@ cargo run
 - Rilascia `Freccia giù`: salta; la durata della carica determina l'impulso.
 - `R`: richiama il fratello della creatura selezionata; con un solo blob effettua il reset.
 - `X`: divide la creatura selezionata, fino a quattro parti attive.
-- `Tab`: seleziona alternativamente una delle due creature.
+- `Tab`: passa alla creatura attiva successiva.
 - `Esc`: chiude il gioco.
+
+## Struttura del codice
+
+- `main.rs`: stato del mondo, simulazione e ricongiungimento;
+- `blob.rs`: modello e solver fisico della creatura;
+- `input.rs`: comandi, selezione, divisione e reset;
+- `camera.rs`: inseguimento della creatura selezionata;
+- `rendering.rs`: piattaforme, contorni, colori familiari e indicatori;
+- `blob_tests.rs`: prove dedicate alla fisica della membrana;
+- `game_tests.rs`: prove di divisione, fusione, collisioni e camera.
 
 ## Prossimi passi
 
