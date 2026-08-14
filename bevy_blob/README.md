@@ -1,54 +1,133 @@
-# Prototipo Bevy del blob
+# Bevy Blob Prototype
 
-Prima migrazione giocabile del progetto verso Bevy 0.19. Il corpo usa una
-membrana a particelle con integrazione Verlet, vincoli di distanza, conservazione
-dell'area e collisioni contro un livello verticale. Avian è già integrato per i
-futuri oggetti rigidi e le query del mondo; il comportamento interno del blob
-resta un solver dedicato.
+A playable 2D vertical-platformer prototype built with Bevy 0.19. The player
+controls a deformable blob that can roll, compress, jump, split into smaller
+independent creatures, merge back together, and fire radial bursts of acid.
 
-La creatura usa una scala fisica globale del 65%. La stessa scala viene
-propagata a collisioni, nucleo, indicatori e alle creature ottenute dalla
-divisione.
+The body is simulated by a dedicated soft-body solver based on Verlet
+integration. It combines membrane distance constraints, curvature resistance,
+area preservation, collision response, deformation limits, and automatic
+topology recovery. Avian is included for future rigid bodies and world queries,
+while the blob itself currently uses the custom solver.
 
-Durante la divisione la risoluzione della membrana aumenta mantenendo invariate
-area, massa e dimensioni. Una creatura selezionata può essere divisa nuovamente,
-fino a un massimo di quattro parti attive. Ogni parte conserva la propria
-genealogia: il ricongiungimento fonde prima i fratelli e risale progressivamente
-fino alla creatura originale. Un tentativo che non raggiunge il contatto entro
-quattro secondi viene annullato automaticamente. La divisione a cascata è
-consentita soltanto ai frammenti con almeno 16 punti fisici.
+## Features
 
-## Avvio
+- Soft-body movement with visible rolling instead of rigid translation.
+- Proportional jump charging through body compression.
+- Size-dependent jumps: smaller fragments can jump higher.
+- Air-control damping and impact-shape recovery.
+- Dynamic filled meshes that follow every membrane particle.
+- Uneven random splitting with preserved area, mass, and momentum.
+- Recursive splitting up to four active blobs when enough particles remain.
+- Independent fragment selection and camera tracking.
+- Family colors that identify fragments that can merge together.
+- Deliberate sibling rejoining with attraction, obstacle checks, and timeout.
+- Radial acid bursts for blobs above the minimum physical size.
+- Automated protection against collapsed or self-intersecting membranes.
+
+The initial creature uses a global physical scale of 65%. Collision margins,
+indicators, rendering, and split fragments all derive their dimensions from the
+same physical scale.
+
+## Requirements
+
+- A recent stable Rust toolchain with Cargo.
+- A graphics adapter and drivers supported by Bevy/wgpu.
+
+## Running the Game
+
+From the repository root:
 
 ```bash
 cd bevy_blob
 cargo run
 ```
 
-## Comandi
+Run the automated checks with:
 
-- `A`/`D` oppure frecce: movimento laterale.
-- Tieni `Freccia giù`: comprimi e carica il blob.
-- Rilascia `Freccia giù`: salta; la durata della carica determina l'impulso.
-- `R`: richiama il fratello della creatura selezionata; con un solo blob effettua il reset.
-- `X`: divide la creatura selezionata, fino a quattro parti attive.
-- `Spazio`: espelle una raffica radiale di acido, se il blob è abbastanza grande.
-- `Tab`: passa alla creatura attiva successiva.
-- `Esc`: chiude il gioco.
+```bash
+cargo test
+```
 
-## Struttura del codice
+## Controls
 
-- `main.rs`: stato del mondo, simulazione e ricongiungimento;
-- `blob.rs`: modello e solver fisico della creatura;
-- `input.rs`: comandi, selezione, divisione e reset;
-- `camera.rs`: inseguimento della creatura selezionata;
-- `rendering.rs`: piattaforme, contorni, colori familiari e indicatori;
-- `blob_tests.rs`: prove dedicate alla fisica della membrana;
-- `game_tests.rs`: prove di divisione, fusione, collisioni e camera.
+| Input | Action |
+| --- | --- |
+| `A` / `D` or Left / Right Arrow | Roll and move horizontally |
+| Hold Down Arrow | Compress the selected blob and charge a jump |
+| Release Down Arrow | Jump with power based on the accumulated charge |
+| `X` | Split the selected blob, up to four active fragments |
+| `Tab` | Select the next active blob |
+| `R` | Start rejoining the selected blob with its sibling |
+| `R` with one blob | Reset the creature to its initial state |
+| `Space` | Fire a radial acid burst when the blob is large enough |
+| `Esc` | Exit the game |
 
-## Prossimi passi
+## Splitting and Rejoining
 
-1. sostituire la visualizzazione diagnostica con una mesh piena interpolata;
-2. aggiungere contatti Avian accurati per pareti e piattaforme mobili;
-3. introdurre ancoraggio e allungamento controllato;
-4. rifinire visivamente la transizione di divisione e fusione già funzionante.
+Splitting creates two uneven fragments with a randomized size ratio. The
+membrane resolution is increased while physical area, mass, dimensions, and
+momentum are preserved. A selected fragment may split again only when it still
+contains at least 16 source particles, and no more than four blobs may be active
+at the same time.
+
+Each fragment retains its lineage. Siblings share a family color and must merge
+before the reconstructed parent can merge at the next level. Pressing `R`
+enables attraction only for the selected sibling pair. They roll toward one
+another and merge on contact if no platform blocks the path. The attempt is
+cancelled after four seconds when contact cannot be achieved.
+
+## Acid Defense
+
+Pressing `Space` emits droplets from points around the selected blob's membrane.
+The directions contain random variation but are distributed over the full
+circle, keeping the burst useful as an area-defense action. Larger creatures
+produce more droplets.
+
+The weapon is available only when the blob radius is at least 55% of the
+initial radius. This makes splitting a strategic trade-off: small fragments are
+more mobile and jump higher, but sufficiently small fragments lose access to
+the acid burst. The weapon has a short cooldown, produces mild recoil, and its
+droplets disappear after hitting level geometry or reaching their lifetime.
+
+## Project Layout
+
+```text
+bevy_blob/
+├── Cargo.toml          Rust package metadata and dependencies
+├── Cargo.lock          Reproducible dependency versions
+├── README.md           Project documentation
+├── src/                Game source code and automated tests
+│   ├── main.rs         Application setup, world state, simulation, split/merge flow
+│   ├── blob.rs         Soft-body model, constraints, movement, and collisions
+│   ├── acid.rs         Acid weapon, droplets, cooldown, simulation, and rendering
+│   ├── input.rs        Keyboard input, selection, reset, and player actions
+│   ├── camera.rs       Smooth tracking of the selected creature
+│   ├── rendering.rs    Dynamic meshes, family colors, outlines, and indicators
+│   ├── blob_tests.rs   Soft-body and movement regression tests
+│   └── game_tests.rs   Split, merge, camera, collision, and rendering tests
+└── target/             Generated Cargo build output; not tracked by Git
+```
+
+The repository also contains a separate Python project outside `bevy_blob/`.
+It is independent from this Bevy prototype and is not required to build or run
+the game.
+
+## Current Architecture
+
+The physics simulation runs at a fixed 120 Hz. Each active blob owns its soft
+body and genealogy metadata. Rendering systems create one dynamic mesh per blob
+and update its vertices from the simulated membrane. Mesh entities are added and
+removed automatically when creatures split, merge, or reset.
+
+The selected creature is shown with a brighter, more opaque material, while its
+family color remains visible. The camera follows that creature in both axes and
+smoothly changes target after pressing `Tab`.
+
+## Roadmap
+
+1. Add controlled anchoring and stretching as a gameplay ability.
+2. Add enemies, damage, and acid-hit reactions.
+3. Introduce shader-based organic shading and liquid highlights.
+4. Improve the visual transitions for splitting and merging.
+5. Add moving platforms and more advanced Avian world interactions.
