@@ -63,6 +63,24 @@ cargo test
 | `Space` | Fire a radial acid burst when the blob is large enough |
 | `Esc` | Exit the game |
 
+## Movement and Jumping
+
+Horizontal movement applies torque to the membrane while the creature is on a
+surface, producing visible rolling instead of translating the body rigidly.
+Air control is intentionally weaker and does not inject rotation into the soft
+body.
+
+Holding the Down Arrow compresses the creature and progressively charges the
+jump. Short, medium, and full charges produce clearly different launch power.
+Jump strength is scaled non-linearly by physical size: large blobs have a lower,
+more controllable jump, while smaller fragments gain a substantially greater
+vertical advantage. The multiplier is capped so the smallest valid fragments
+cannot reach unstable speeds.
+
+Pressing `R` performs a complete gameplay reset. It restores the original blob,
+selection and genealogy state, cancels rejoining, and removes active acid drops
+and weapon cooldowns.
+
 ## Splitting and Rejoining
 
 Splitting creates two uneven fragments with a randomized size ratio. The
@@ -87,8 +105,8 @@ produce more droplets.
 The weapon is available only when the blob radius is at least 55% of the
 initial radius. This makes splitting a strategic trade-off: small fragments are
 more mobile and jump higher, but sufficiently small fragments lose access to
-the acid burst. The weapon has a short cooldown, produces mild recoil, and its
-droplets disappear after hitting level geometry or reaching their lifetime.
+the acid burst. The weapon has a 0.85-second cooldown, produces mild recoil, and
+its droplets disappear after hitting level geometry or reaching their lifetime.
 
 ## Project Layout
 
@@ -109,10 +127,6 @@ bevy_blob/
 └── target/             Generated Cargo build output; not tracked by Git
 ```
 
-The repository also contains a separate Python project outside `bevy_blob/`.
-It is independent from this Bevy prototype and is not required to build or run
-the game.
-
 ## Current Architecture
 
 The physics simulation runs at a fixed 120 Hz. Each active blob owns its soft
@@ -123,6 +137,13 @@ removed automatically when creatures split, merge, or reset.
 The selected creature is shown with a brighter, more opaque material, while its
 family color remains visible. The camera follows that creature in both axes and
 smoothly changes target after pressing `Tab`.
+
+## Validation
+
+The current automated suite contains 42 tests covering soft-body constraints,
+jump charging and size scaling, rolling, collision recovery, topology repair,
+recursive splitting, hierarchical merging, camera targeting, dynamic mesh
+generation, acid bursts, and complete weapon reset behavior.
 
 ## Roadmap
 
