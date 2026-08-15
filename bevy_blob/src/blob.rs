@@ -16,8 +16,8 @@ const MAX_VERTICAL_SPEED: f32 = 1_450.0;
 const MAX_STRETCH_RATIO: f32 = 1.58;
 const MIN_COLLAPSE_RATIO: f32 = 0.34;
 const CHARGE_DURATION: f32 = 0.70;
-const JUMP_MIN_SPEED: f32 = 340.0;
-const JUMP_MAX_SPEED: f32 = 1_280.0;
+const JUMP_MIN_SPEED: f32 = 300.0;
+const JUMP_MAX_SPEED: f32 = 960.0;
 const GROUND_ROLL_RATE: f32 = 5.2;
 const MAX_PARTICLE_HORIZONTAL_SPEED: f32 = 760.0;
 const INTERNAL_DAMPING_AIR: f32 = 0.955;
@@ -707,8 +707,8 @@ fn has_self_intersections(particles: &[Particle]) -> bool {
 
 fn jump_size_factor(radius: f32) -> f32 {
     (DEFAULT_GAMEPLAY_RADIUS / radius.max(1.0))
-        .sqrt()
-        .clamp(0.75, 2.0)
+        .powf(0.8)
+        .clamp(0.72, 1.75)
 }
 
 fn jump_speed_for_charge(charge: f32, radius: f32) -> f32 {

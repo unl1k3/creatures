@@ -37,6 +37,11 @@ impl AcidWorld {
         self.rng ^= self.rng << 17;
         (self.rng as u32) as f32 / u32::MAX as f32
     }
+
+    pub(super) fn reset(&mut self) {
+        self.drops.clear();
+        self.cooldowns.clear();
+    }
 }
 
 pub(super) fn fire_acid(
@@ -192,5 +197,20 @@ mod tests {
         assert!(directions.iter().any(|direction| direction.x < -0.7));
         assert!(directions.iter().any(|direction| direction.y > 0.7));
         assert!(directions.iter().any(|direction| direction.y < -0.7));
+    }
+
+    #[test]
+    fn reset_removes_drops_and_weapon_cooldowns() {
+        let mut blob = ActiveBlob {
+            id: 3,
+            parent_id: None,
+            body: Blob::new(Vec2::ZERO, INITIAL_RADIUS),
+        };
+        let mut acid = AcidWorld::new(42);
+        emit_acid(&mut blob, &mut acid);
+
+        acid.reset();
+        assert!(acid.drops.is_empty());
+        assert!(acid.cooldowns.is_empty());
     }
 }

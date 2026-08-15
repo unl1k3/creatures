@@ -74,7 +74,7 @@ fn main() {
         .insert_resource(Time::<Fixed>::from_hz(120.0))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Blob — X divide, R ricongiunge, TAB seleziona".into(),
+                title: "Blob — X divide, E ricongiunge, R reset, TAB seleziona".into(),
                 resolution: WindowResolution::new(900, 900),
                 ..default()
             }),

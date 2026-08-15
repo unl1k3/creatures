@@ -20,11 +20,16 @@ pub(super) fn handle_blob_actions(
     fixed_time: Res<Time<Fixed>>,
     mut blobs: ResMut<BlobWorld>,
     mut split_rng: ResMut<SplitRng>,
+    mut acid: ResMut<AcidWorld>,
 ) {
     if keyboard.just_pressed(KeyCode::KeyR) {
-        if !start_selected_rejoin(&mut blobs) && blobs.active.len() == 1 {
-            reset_world(&mut blobs);
-        }
+        reset_world(&mut blobs);
+        acid.reset();
+        return;
+    }
+
+    if keyboard.just_pressed(KeyCode::KeyE) {
+        start_selected_rejoin(&mut blobs);
         return;
     }
 

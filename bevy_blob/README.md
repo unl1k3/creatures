@@ -58,8 +58,8 @@ cargo test
 | Release Down Arrow | Jump with power based on the accumulated charge |
 | `X` | Split the selected blob, up to four active fragments |
 | `Tab` | Select the next active blob |
-| `R` | Start rejoining the selected blob with its sibling |
-| `R` with one blob | Reset the creature to its initial state |
+| `E` | Start rejoining the selected blob with its sibling |
+| `R` | Reset the game and restore the initial creature |
 | `Space` | Fire a radial acid burst when the blob is large enough |
 | `Esc` | Exit the game |
 
@@ -72,7 +72,7 @@ contains at least 16 source particles, and no more than four blobs may be active
 at the same time.
 
 Each fragment retains its lineage. Siblings share a family color and must merge
-before the reconstructed parent can merge at the next level. Pressing `R`
+before the reconstructed parent can merge at the next level. Pressing `E`
 enables attraction only for the selected sibling pair. They roll toward one
 another and merge on contact if no platform blocks the path. The attempt is
 cancelled after four seconds when contact cannot be achieved.

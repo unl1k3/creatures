@@ -269,14 +269,14 @@ mod tests {
         let middle = jump_speed_for_charge(0.5, DEFAULT_GAMEPLAY_RADIUS);
         let full = jump_speed_for_charge(1.0, DEFAULT_GAMEPLAY_RADIUS);
 
-        assert!(low < 450.0, "low charge is too strong: {low}");
+        assert!(low < 380.0, "low charge is too strong: {low}");
         assert!(
-            middle > 700.0 && middle < 850.0,
+            middle > 540.0 && middle < 640.0,
             "middle charge is {middle}"
         );
         assert_eq!(full, JUMP_MAX_SPEED);
-        assert!(middle - low > 250.0);
-        assert!(full - middle > 400.0);
+        assert!(middle - low > 220.0);
+        assert!(full - middle > 350.0);
     }
 
     #[test]
@@ -287,10 +287,11 @@ mod tests {
         let large_speed = jump_speed_for_charge(1.0, large_radius);
 
         assert!(small_speed > large_speed);
-        // Ballistic height is proportional to speed squared. Therefore this
-        // ratio must match the inverse ratio of the radii.
+        // Ballistic height is proportional to speed squared. The stronger
+        // size exponent intentionally gives small blobs more than the former
+        // inverse-radius height advantage.
         let height_ratio = small_speed.powi(2) / large_speed.powi(2);
-        let expected_ratio = large_radius / small_radius;
+        let expected_ratio = (large_radius / small_radius).powf(1.6);
         assert!((height_ratio - expected_ratio).abs() < 0.001);
     }
 
