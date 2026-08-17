@@ -1,4 +1,5 @@
 use super::*;
+use bevy::sprite::Anchor;
 use bevy::{asset::RenderAssetUsages, mesh::Indices, render::render_resource::PrimitiveTopology};
 use std::collections::HashSet;
 
@@ -9,6 +10,51 @@ pub(super) struct BlobMesh {
     selected: bool,
     life_state: LifeState,
     energy_band: u8,
+}
+
+#[derive(Component)]
+pub(super) struct RouteMarker {
+    scenario: u8,
+    index: usize,
+}
+
+pub(super) fn sync_route_markers(
+    mut commands: Commands,
+    scenario: Res<TestScenario>,
+    progress: Res<RouteProgress>,
+    level: Res<Level>,
+    markers: Query<(Entity, &RouteMarker)>,
+) {
+    let mut existing = HashSet::new();
+    for (entity, marker) in &markers {
+        if marker.scenario != scenario.0
+            || marker.index < progress.next
+            || marker.index >= level.route.len()
+        {
+            commands.entity(entity).despawn();
+        } else {
+            existing.insert(marker.index);
+        }
+    }
+    for index in progress.next..level.route.len() {
+        if existing.contains(&index) {
+            continue;
+        }
+        commands.spawn((
+            RouteMarker {
+                scenario: scenario.0,
+                index,
+            },
+            Text2d::new(index.to_string()),
+            TextFont {
+                font_size: FontSize::Px((16.0 + index as f32 * 1.8).min(30.0)),
+                ..default()
+            },
+            TextColor(Color::srgb(1.0, 0.82, 0.28)),
+            Anchor::CENTER,
+            Transform::from_translation(level.route[index].extend(0.35)),
+        ));
+    }
 }
 
 fn blob_vital_color(parent_id: Option<u64>, selected: bool, vitality: Vitality) -> Color {
@@ -186,6 +232,7 @@ pub(super) fn draw_world(
     blobs: Res<BlobWorld>,
     vitality_world: Res<VitalityWorld>,
     level: Res<Level>,
+    route_progress: Res<RouteProgress>,
 ) {
     for platform in &level.platforms {
         gizmos.rect_2d(
@@ -196,6 +243,10 @@ pub(super) fn draw_world(
     }
     for fixture in &level.fixtures {
         gizmos.lineloop_2d(fixture.iter().copied(), Color::srgb(0.24, 0.38, 0.52));
+    }
+    for (index, checkpoint) in level.route.iter().enumerate().skip(route_progress.next) {
+        let radius = (7.0 + index as f32 * 1.5).min(20.0);
+        gizmos.circle_2d(*checkpoint, radius, Color::srgba(1.0, 0.72, 0.18, 0.72));
     }
 
     for active_blob in &blobs.active {

@@ -4,6 +4,21 @@ These layouts are the reference cases for validating living blobs, corpses, and
 irregular support surfaces. Test each one with a large and a small blob and
 observe it for at least ten seconds after contact settles.
 
+The cases are grouped in the running prototype: `F2` is the supports lab, `F3`
+is the curves lab, `F4` combines a U pocket and low passage, `F5` is a distinct
+fall-and-impact course, and `F6` combines the V valley and split bridge.
+
+Numbered amber checkpoints identify the intended traversable route. Their size
+increases with the sequence, and each marker disappears when the selected blob
+reaches it in order. An automated check also applies conservative rise and
+horizontal-gap limits to every consecutive pair, preventing new geometry from
+silently creating an impossible mandatory jump.
+
+The route audit also samples several possible jump arcs using the large blob's
+clearance radius. A route fails if every viable arc intersects the occupied
+volume of a platform or convex fixture, even when its checkpoint distances are
+otherwise acceptable.
+
 ## A. Living Blob on a Corpse
 
 ```text

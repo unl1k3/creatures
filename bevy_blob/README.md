@@ -239,10 +239,20 @@ bevy_blob/
 Use [PHYSICS_TEST_SCENARIOS.md](PHYSICS_TEST_SCENARIOS.md) as the shared manual
 test plan for irregular supports, blob stacks, and movable corpses.
 
-Press `F1` through `F5` to load the standard level, narrow-pedestal, staircase,
-ramp, and semicircular-support test layouts. Each switch resets the active blob.
-All test geometry uses actual static Avian colliders; the semicircle uses a
-tessellated convex profile shared by collision detection and rendering.
+Press `F1` through `F6` to load the standard level or one of five grouped test
+laboratories. `F2` combines narrow supports, stairs, corners, and a bridge; `F3`
+combines a shallow ramp, semicircle, and segmented wave; `F4` combines a U-shaped
+pocket with a low horizontal passage; `F5` is a separate fall-and-impact course
+with narrow landings, alternating ledges, a drop shaft, and overhead contacts;
+`F6` contains the V-shaped valley and split bridge. Each switch resets the active
+blob.
+All test geometry uses actual static Avian colliders, with the same tessellated
+profiles used for collision detection and rendering.
+
+Test laboratories use a wider camera scale and a small upward look-ahead so the
+next structure is visible before committing to a jump. Numbered amber markers
+grow progressively with their sequence and disappear after the selected blob
+reaches them in order. Resetting the scenario restores the complete route.
 
 ## Current Architecture
 

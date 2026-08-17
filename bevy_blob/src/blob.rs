@@ -51,6 +51,7 @@ pub struct Blob {
     support_normal: Vec2,
     support_normal_sum: Vec2,
     support_contact_count: usize,
+    charge_direction: f32,
     was_charging: bool,
     jump_armed: bool,
     idle_phase: f32,
@@ -94,6 +95,7 @@ impl Blob {
             support_normal: Vec2::Y,
             support_normal_sum: Vec2::ZERO,
             support_contact_count: 0,
+            charge_direction: 0.0,
             was_charging: false,
             jump_armed: false,
             idle_phase: 0.0,
@@ -264,6 +266,7 @@ impl Blob {
 
     pub fn cancel_jump_charge(&mut self) {
         self.charge = 0.0;
+        self.charge_direction = 0.0;
         self.was_charging = false;
         self.jump_armed = false;
     }
@@ -321,6 +324,11 @@ impl Blob {
         }
         let jump_normal = self.support_normal.normalize_or(Vec2::Y);
         let jump_tangent = jump_normal.perp();
+        let right_tangent = if jump_tangent.x >= 0.0 {
+            jump_tangent
+        } else {
+            -jump_tangent
+        };
         self.support_normal_sum = Vec2::ZERO;
         self.support_contact_count = 0;
         let target_tonicity = if retain_tonicity { 1.0 } else { 0.0 };
@@ -350,6 +358,9 @@ impl Blob {
         }
         if charging && self.jump_armed {
             self.charge = (self.charge + dt / CHARGE_DURATION).min(1.0);
+            if horizontal.abs() > 0.01 {
+                self.charge_direction = horizontal.signum();
+            }
         }
 
         let jump_released = self.was_charging && !charging && self.charge > 0.0 && self.jump_armed;
@@ -456,6 +467,7 @@ impl Blob {
                 // remains unchanged.
                 let deformation = 0.28 / jump_size_factor;
                 particle.previous -= jump_normal * impulse * (0.82 + lower_weight * deformation);
+                particle.previous -= right_tangent * impulse * self.charge_direction * 0.42;
             }
         }
         if jump_released {
@@ -471,9 +483,11 @@ impl Blob {
             self.jump_armed = false;
             self.grounded = false;
             self.launch_grace = 0.12;
+            self.charge_direction = 0.0;
         } else if self.was_charging && !charging {
             self.charge = 0.0;
             self.jump_armed = false;
+            self.charge_direction = 0.0;
         }
         self.was_charging = charging;
 

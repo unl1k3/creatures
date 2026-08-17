@@ -12,7 +12,7 @@ const METRICS_LAYER: usize = 2;
 // WindowResolution describes the client area and excludes native borders and
 // title bars. Keep enough logical space for those decorations on every OS.
 const NATIVE_WINDOW_GAP: f32 = 64.0;
-const CONTROLS: &str = "CONTROLS\n\nA / D or arrows   Roll and move\nHold Down         Charge jump\nRelease Down      Jump\nQ                 Pseudo-spine shield\nSpace             Radial acid burst\nX                 Split selected blob\nTab               Select next blob\nE                 Rejoin siblings\nR                 Reset game\nF1                Standard level\nF2                Narrow pedestal\nF3                Stair test\nF4                Ramp test\nF5                Semicircle test\nH                 Show / hide this window\nEsc               Exit";
+const CONTROLS: &str = "CONTROLS\n\nA / D or arrows   Roll and move\nHold Down         Charge jump\nRelease Down      Jump\nQ                 Pseudo-spine shield\nSpace             Radial acid burst\nX                 Split selected blob\nTab               Select next blob\nE                 Rejoin siblings\nR                 Reset game\nF1                Standard level\nF2                Supports lab\nF3                Curves lab\nF4                U and low passage\nF5                Fall and impact lab\nF6                V and split bridge\nH                 Show / hide this window\nEsc               Exit";
 
 #[derive(Resource)]
 pub(super) struct LegendState {

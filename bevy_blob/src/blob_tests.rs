@@ -107,6 +107,28 @@ mod tests {
     }
 
     #[test]
+    fn charged_jump_remembers_the_selected_movement_direction() {
+        let floor = Platform {
+            center: Vec2::new(0.0, -55.0),
+            half_size: Vec2::new(400.0, 10.0),
+        };
+        let dt = 1.0 / 120.0;
+        let mut blob = Blob::new(Vec2::ZERO, 40.0);
+        for _ in 0..60 {
+            blob.step_with_vigor(dt, 0.0, false, &[floor], &[], 1.0, true, true);
+        }
+        for _ in 0..60 {
+            blob.step_with_vigor(dt, 1.0, true, &[floor], &[], 1.0, true, true);
+        }
+        let before = blob.velocity();
+        blob.step_with_vigor(dt, 0.0, false, &[floor], &[], 1.0, true, true);
+        let launch_impulse = blob.velocity() - before;
+
+        assert!(launch_impulse.y > 0.0);
+        assert!(launch_impulse.x > 0.0);
+    }
+
+    #[test]
     fn edge_constraint_recovers_a_stretched_edge() {
         let mut blob = Blob::new(Vec2::ZERO, 50.0);
         blob.particles[1].position += Vec2::X * 20.0;

@@ -27,10 +27,16 @@ pub(super) struct Level {
     pub(super) platforms: Vec<Platform>,
     pub(super) fixtures: Vec<Vec<Vec2>>,
     pub(super) spawn_position: Vec2,
+    pub(super) route: Vec<Vec2>,
 }
 
 #[derive(Resource, Default)]
 pub(super) struct TestScenario(pub(super) u8);
+
+#[derive(Resource, Default)]
+pub(super) struct RouteProgress {
+    pub(super) next: usize,
+}
 
 #[derive(Resource, Default)]
 pub(super) struct AvianContactDiagnostics {
@@ -72,6 +78,7 @@ impl Level {
             ],
             fixtures: Vec::new(),
             spawn_position: BLOB_START,
+            route: Vec::new(),
         }
     }
 
@@ -81,61 +88,186 @@ impl Level {
                 Self {
                     platforms: vec![
                         platform(0.0, -370.0, 760.0, 38.0),
-                        platform(0.0, -245.0, 70.0, 210.0),
+                        platform(-245.0, -265.0, 70.0, 170.0),
+                        platform(-105.0, -315.0, 105.0, 70.0),
+                        platform(10.0, -270.0, 105.0, 160.0),
+                        platform(170.0, -225.0, 105.0, 250.0),
+                        platform(295.0, 55.0, 120.0, 28.0),
                     ],
                     fixtures: Vec::new(),
-                    spawn_position: Vec2::new(0.0, -80.0),
+                    spawn_position: Vec2::new(-320.0, -285.0),
+                    route: vec![
+                        Vec2::new(-320.0, -285.0),
+                        Vec2::new(-245.0, -140.0),
+                        Vec2::new(-105.0, -240.0),
+                        Vec2::new(10.0, -150.0),
+                        Vec2::new(170.0, -60.0),
+                        Vec2::new(295.0, 110.0),
+                    ],
                 },
-                Vec2::new(0.0, -80.0),
+                Vec2::new(-320.0, -285.0),
             ),
             3 => (
                 Self {
                     platforms: vec![
-                        platform(0.0, -370.0, 760.0, 38.0),
-                        platform(-210.0, -310.0, 130.0, 80.0),
-                        platform(-70.0, -265.0, 130.0, 170.0),
-                        platform(70.0, -220.0, 130.0, 260.0),
-                        platform(210.0, -175.0, 130.0, 350.0),
+                        platform(0.0, -390.0, 760.0, 38.0),
+                        platform(350.0, 0.0, 105.0, 24.0),
+                        platform(470.0, 145.0, 80.0, 24.0),
                     ],
-                    fixtures: Vec::new(),
-                    spawn_position: Vec2::new(-285.0, -275.0),
+                    fixtures: {
+                        let mut fixtures = vec![vec![
+                            Vec2::new(-340.0, -370.0),
+                            Vec2::new(80.0, -370.0),
+                            Vec2::new(80.0, -280.0),
+                        ]];
+                        fixtures.push(semicircle_fixture(Vec2::new(220.0, -250.0), 105.0, 28.0));
+                        fixtures.extend(wave_fixtures(-330.0, 330.0, 285.0, 220.0, 9));
+                        fixtures
+                    },
+                    spawn_position: Vec2::new(-300.0, -285.0),
+                    route: vec![
+                        Vec2::new(-300.0, -285.0),
+                        Vec2::new(-150.0, -270.0),
+                        Vec2::new(20.0, -220.0),
+                        Vec2::new(220.0, -105.0),
+                        Vec2::new(350.0, 55.0),
+                        Vec2::new(470.0, 200.0),
+                        Vec2::new(320.0, 330.0),
+                        Vec2::new(120.0, 330.0),
+                        Vec2::new(-80.0, 330.0),
+                        Vec2::new(-260.0, 320.0),
+                    ],
                 },
-                Vec2::new(-285.0, -275.0),
+                Vec2::new(-300.0, -285.0),
             ),
             4 => (
                 Self {
-                    platforms: vec![platform(0.0, -370.0, 760.0, 38.0)],
-                    fixtures: vec![vec![
-                        Vec2::new(-300.0, -350.0),
-                        Vec2::new(300.0, -350.0),
-                        Vec2::new(300.0, 20.0),
-                    ]],
-                    spawn_position: Vec2::new(-245.0, -270.0),
+                    platforms: vec![
+                        platform(0.0, -390.0, 760.0, 38.0),
+                        platform(-210.0, -285.0, 28.0, 190.0),
+                        platform(10.0, -285.0, 28.0, 190.0),
+                        platform(-100.0, -365.0, 248.0, 28.0),
+                        platform(235.0, -250.0, 250.0, 28.0),
+                    ],
+                    fixtures: Vec::new(),
+                    spawn_position: Vec2::new(-100.0, -245.0),
+                    route: vec![
+                        Vec2::new(-100.0, -245.0),
+                        Vec2::new(-25.0, -145.0),
+                        Vec2::new(80.0, -310.0),
+                        Vec2::new(220.0, -310.0),
+                        Vec2::new(355.0, -310.0),
+                    ],
                 },
-                Vec2::new(-245.0, -270.0),
+                Vec2::new(-100.0, -245.0),
             ),
-            5 => {
-                let radius = 220.0;
-                let base = -350.0;
-                let mut mound = vec![Vec2::new(-radius, base - 24.0)];
-                for step in 0..=16 {
-                    let x = -radius + radius * 2.0 * step as f32 / 16.0;
-                    let y = base + (radius * radius - x * x).max(0.0).sqrt();
-                    mound.push(Vec2::new(x, y));
-                }
-                mound.push(Vec2::new(radius, base - 24.0));
-                (
-                    Self {
-                        platforms: vec![platform(0.0, -390.0, 760.0, 38.0)],
-                        fixtures: vec![mound],
-                        spawn_position: Vec2::new(0.0, -65.0),
-                    },
-                    Vec2::new(0.0, -65.0),
-                )
-            }
+            5 => (
+                Self {
+                    platforms: vec![
+                        platform(0.0, -390.0, 760.0, 38.0),
+                        platform(-185.0, -245.0, 125.0, 24.0),
+                        platform(20.0, -105.0, 105.0, 24.0),
+                        platform(245.0, 45.0, 105.0, 24.0),
+                        platform(20.0, 185.0, 115.0, 24.0),
+                        platform(-220.0, 335.0, 95.0, 24.0),
+                        platform(-40.0, 475.0, 110.0, 24.0),
+                        platform(130.0, 600.0, 120.0, 24.0),
+                        platform(245.0, 470.0, 26.0, 260.0),
+                        platform(365.0, 470.0, 26.0, 260.0),
+                    ],
+                    fixtures: Vec::new(),
+                    spawn_position: Vec2::new(-300.0, -285.0),
+                    route: vec![
+                        Vec2::new(-300.0, -285.0),
+                        Vec2::new(-185.0, -190.0),
+                        Vec2::new(20.0, -50.0),
+                        Vec2::new(245.0, 100.0),
+                        Vec2::new(20.0, 240.0),
+                        Vec2::new(-220.0, 390.0),
+                        Vec2::new(-40.0, 530.0),
+                        Vec2::new(130.0, 655.0),
+                        Vec2::new(305.0, 650.0),
+                    ],
+                },
+                Vec2::new(-300.0, -285.0),
+            ),
+            6 => (
+                Self {
+                    platforms: vec![
+                        platform(0.0, -390.0, 760.0, 38.0),
+                        platform(270.0, -40.0, 105.0, 24.0),
+                        platform(155.0, 115.0, 130.0, 24.0),
+                        platform(-45.0, 115.0, 130.0, 24.0),
+                    ],
+                    fixtures: v_valley_fixtures(Vec2::new(0.0, -180.0), 300.0, 120.0),
+                    spawn_position: Vec2::new(0.0, -125.0),
+                    route: vec![
+                        Vec2::new(0.0, -125.0),
+                        Vec2::new(145.0, -15.0),
+                        Vec2::new(270.0, 15.0),
+                        Vec2::new(155.0, 170.0),
+                        Vec2::new(-45.0, 170.0),
+                    ],
+                },
+                Vec2::new(0.0, -125.0),
+            ),
             _ => (Self::prototype(), BLOB_START),
         }
     }
+}
+
+fn semicircle_fixture(center: Vec2, radius: f32, depth: f32) -> Vec<Vec2> {
+    let mut vertices = vec![center + Vec2::new(-radius, -depth)];
+    for step in 0..=16 {
+        let x = -radius + radius * 2.0 * step as f32 / 16.0;
+        let y = (radius * radius - x * x).max(0.0).sqrt();
+        vertices.push(center + Vec2::new(x, y));
+    }
+    vertices.push(center + Vec2::new(radius, -depth));
+    vertices
+}
+
+fn wave_fixtures(
+    minimum_x: f32,
+    maximum_x: f32,
+    baseline: f32,
+    bottom: f32,
+    segments: usize,
+) -> Vec<Vec<Vec2>> {
+    (0..segments)
+        .map(|segment| {
+            let fraction_a = segment as f32 / segments as f32;
+            let fraction_b = (segment + 1) as f32 / segments as f32;
+            let x_a = minimum_x + (maximum_x - minimum_x) * fraction_a;
+            let x_b = minimum_x + (maximum_x - minimum_x) * fraction_b;
+            let y_a = baseline + (fraction_a * std::f32::consts::TAU * 1.5).sin() * 48.0;
+            let y_b = baseline + (fraction_b * std::f32::consts::TAU * 1.5).sin() * 48.0;
+            vec![
+                Vec2::new(x_a, bottom),
+                Vec2::new(x_b, bottom),
+                Vec2::new(x_b, y_b),
+                Vec2::new(x_a, y_a),
+            ]
+        })
+        .collect()
+}
+
+fn v_valley_fixtures(center: Vec2, width: f32, depth: f32) -> Vec<Vec<Vec2>> {
+    let half = width * 0.5;
+    vec![
+        vec![
+            center + Vec2::new(-half, -depth),
+            center + Vec2::new(0.0, -depth),
+            center,
+            center + Vec2::new(-half, depth),
+        ],
+        vec![
+            center + Vec2::new(0.0, -depth),
+            center + Vec2::new(half, -depth),
+            center + Vec2::new(half, depth),
+            center,
+        ],
+    ]
 }
 
 pub(super) fn setup_environment(mut commands: Commands) {
@@ -143,6 +275,7 @@ pub(super) fn setup_environment(mut commands: Commands) {
     spawn_level_colliders(&mut commands, &level);
     commands.insert_resource(level);
     commands.insert_resource(TestScenario::default());
+    commands.insert_resource(RouteProgress { next: 1 });
     commands.insert_resource(AvianContactDiagnostics::default());
     commands.insert_resource(AvianContactManifolds::default());
 }
@@ -196,17 +329,19 @@ pub(super) fn switch_test_scenario(
     mut commands: Commands,
     colliders: Query<Entity, With<EnvironmentCollider>>,
     mut scenario: ResMut<TestScenario>,
+    mut route_progress: ResMut<RouteProgress>,
     mut level: ResMut<Level>,
     mut blobs: ResMut<BlobWorld>,
     mut vitality: ResMut<VitalityWorld>,
 ) {
-    let requested = (1..=5).find(|index| {
+    let requested = (1..=6).find(|index| {
         keyboard.just_pressed(match index {
             1 => KeyCode::F1,
             2 => KeyCode::F2,
             3 => KeyCode::F3,
             4 => KeyCode::F4,
-            _ => KeyCode::F5,
+            5 => KeyCode::F5,
+            _ => KeyCode::F6,
         })
     });
     let Some(requested) = requested else {
@@ -219,8 +354,26 @@ pub(super) fn switch_test_scenario(
     spawn_level_colliders(&mut commands, &new_level);
     *level = new_level;
     scenario.0 = requested;
+    route_progress.next = 1;
     reset_world_at(&mut blobs, spawn);
     vitality.reset();
+}
+
+pub(super) fn advance_route_progress(
+    blobs: Res<BlobWorld>,
+    level: Res<Level>,
+    mut progress: ResMut<RouteProgress>,
+) {
+    let Some(blob) = blobs.active.get(blobs.selected) else {
+        return;
+    };
+    while let Some(checkpoint) = level.route.get(progress.next) {
+        let reach = (blob.body.rest_radius * 1.45).max(52.0);
+        if blob.body.center().distance(*checkpoint) > reach {
+            break;
+        }
+        progress.next += 1;
+    }
 }
 
 pub(super) fn resolve_avian_environment(
@@ -569,6 +722,90 @@ mod tests {
     fn isolated_corner_contact_is_not_treated_as_full_body_impact() {
         assert_eq!(contact_patch_impact(&mut [1_000.0]), 680.0);
         assert!(contact_patch_impact(&mut [1_000.0, 900.0, 800.0]) > 900.0);
+    }
+
+    #[test]
+    fn every_test_route_uses_conservative_jump_gaps() {
+        for scenario in 2..=6 {
+            let (level, _) = Level::test_scenario(scenario);
+            assert!(level.route.len() >= 2);
+            for pair in level.route.windows(2) {
+                let delta = pair[1] - pair[0];
+                assert!(
+                    delta.y <= 240.0,
+                    "scenario {scenario} requires an excessive rise of {}",
+                    delta.y
+                );
+                assert!(
+                    delta.x.abs() <= 260.0,
+                    "scenario {scenario} requires an excessive horizontal gap of {}",
+                    delta.x.abs()
+                );
+                assert!(
+                    route_segment_has_clear_arc(pair[0], pair[1], &level),
+                    "scenario {scenario} has no clear blob-sized route from {:?} to {:?}",
+                    pair[0],
+                    pair[1]
+                );
+            }
+        }
+    }
+
+    fn route_segment_has_clear_arc(start: Vec2, end: Vec2, level: &Level) -> bool {
+        const CLEARANCE: f32 = 39.0;
+        [30.0, 45.0, 65.0, 110.0, 160.0, 215.0, 260.0]
+            .into_iter()
+            .any(|arc_height| {
+                (3..=14).all(|step| {
+                    let t = step as f32 / 20.0;
+                    let point = start.lerp(end, t) + Vec2::Y * arc_height * 4.0 * t * (1.0 - t);
+                    !level
+                        .platforms
+                        .iter()
+                        .any(|platform| point_inside_expanded_platform(point, *platform, CLEARANCE))
+                        && !level.fixtures.iter().any(|vertices| {
+                            point_inside_or_near_polygon(point, vertices, CLEARANCE)
+                        })
+                })
+            })
+    }
+
+    fn point_inside_expanded_platform(point: Vec2, platform: Platform, clearance: f32) -> bool {
+        let extent = platform.half_size + Vec2::splat(clearance);
+        let delta = (point - platform.center).abs();
+        delta.x < extent.x && delta.y < extent.y
+    }
+
+    fn point_inside_or_near_polygon(point: Vec2, vertices: &[Vec2], clearance: f32) -> bool {
+        if vertices.len() < 3 {
+            return false;
+        }
+        let inside = vertices
+            .iter()
+            .zip(vertices.iter().cycle().skip(1))
+            .take(vertices.len())
+            .fold(None, |sign: Option<f32>, (first, second)| {
+                let cross = (*second - *first).perp_dot(point - *first);
+                match sign {
+                    None if cross.abs() > 0.001 => Some(cross.signum()),
+                    Some(previous) if cross.signum() != previous && cross.abs() > 0.001 => {
+                        Some(0.0)
+                    }
+                    value => value,
+                }
+            })
+            .is_some_and(|sign| sign != 0.0);
+        inside
+            || vertices
+                .iter()
+                .zip(vertices.iter().cycle().skip(1))
+                .take(vertices.len())
+                .any(|(first, second)| {
+                    let edge = *second - *first;
+                    let t = ((point - *first).dot(edge) / edge.length_squared().max(0.001))
+                        .clamp(0.0, 1.0);
+                    point.distance(*first + edge * t) < clearance
+                })
     }
 
     #[test]

@@ -19,12 +19,12 @@ use bevy::{
     window::{ExitCondition, WindowPosition, WindowResolution},
 };
 use blob::{Blob, DEFAULT_CREATURE_SCALE, Platform, REFERENCE_RADIUS};
-use camera::follow_camera;
 #[cfg(test)]
 use camera::selected_camera_target;
+use camera::{GameCamera, follow_camera};
 use environment::{
-    AvianContactDiagnostics, Level, resolve_avian_environment, sample_avian_contacts,
-    setup_environment, switch_test_scenario,
+    AvianContactDiagnostics, Level, RouteProgress, TestScenario, advance_route_progress,
+    resolve_avian_environment, sample_avian_contacts, setup_environment, switch_test_scenario,
 };
 use hud::{arrange_auxiliary_windows, setup_legend, toggle_legend, update_metrics};
 #[cfg(test)]
@@ -32,7 +32,7 @@ use input::next_selection;
 use input::{cycle_selection, exit_on_escape, handle_blob_actions};
 #[cfg(test)]
 use rendering::blob_family_color;
-use rendering::{draw_world, sync_blob_meshes};
+use rendering::{draw_world, sync_blob_meshes, sync_route_markers};
 use shield::{ShieldWorld, draw_shields, simulate_shields};
 use std::{
     collections::HashMap,
@@ -120,9 +120,11 @@ fn main() {
                 fire_acid,
                 cycle_selection,
                 follow_camera,
+                advance_route_progress,
                 sample_avian_contacts,
                 update_metrics,
                 sync_blob_meshes,
+                sync_route_markers,
                 draw_world,
                 draw_acid,
                 draw_shields,
@@ -133,7 +135,7 @@ fn main() {
 }
 
 fn setup(mut commands: Commands) {
-    commands.spawn(Camera2d);
+    commands.spawn((Camera2d, GameCamera));
     commands.insert_resource(BlobWorld {
         active: vec![ActiveBlob {
             id: 0,

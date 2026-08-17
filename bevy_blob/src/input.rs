@@ -33,12 +33,14 @@ pub(super) fn handle_blob_actions(
     mut acid: ResMut<AcidWorld>,
     mut shields: ResMut<ShieldWorld>,
     mut vitality: ResMut<VitalityWorld>,
+    mut route_progress: ResMut<RouteProgress>,
 ) {
     if keyboard.just_pressed(KeyCode::KeyR) {
         reset_world_at(&mut blobs, level.spawn_position);
         acid.reset();
         shields.reset();
         vitality.reset();
+        route_progress.next = 1;
         return;
     }
 
