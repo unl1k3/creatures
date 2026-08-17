@@ -57,6 +57,7 @@ pub(super) fn simulate_shields(
     mut blobs: ResMut<BlobWorld>,
     mut shields: ResMut<ShieldWorld>,
     vitality: Res<VitalityWorld>,
+    nutrition: Res<NutritionWorld>,
 ) {
     let dt = time.delta_secs();
     let active_ids = blobs
@@ -75,7 +76,12 @@ pub(super) fn simulate_shields(
             && vitality.is_alive(active_blob.id)
             && active_blob.body.rest_radius >= MIN_SHIELD_RADIUS
             && !rejoining;
-        update_status(status, wants_shield, dt, vitality.vigor(active_blob.id));
+        update_status(
+            status,
+            wants_shield,
+            dt,
+            vitality.vigor(active_blob.id) * nutrition.capability_factor(active_blob.id),
+        );
         if status.extension > 0.02 {
             active_blob.body.cancel_jump_charge();
         }

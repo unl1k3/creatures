@@ -12,7 +12,7 @@ const METRICS_LAYER: usize = 2;
 // WindowResolution describes the client area and excludes native borders and
 // title bars. Keep enough logical space for those decorations on every OS.
 const NATIVE_WINDOW_GAP: f32 = 64.0;
-const CONTROLS: &str = "CONTROLS\n\nA / D or arrows   Roll and move\nHold Down         Charge jump\nRelease Down      Jump\nQ                 Pseudo-spine shield\nSpace             Radial acid burst\nX                 Split selected blob\nTab               Select next blob\nE                 Rejoin siblings\nR                 Reset game\nF1                Standard level\nF2                Supports lab\nF3                Curves lab\nF4                U and low passage\nF5                Fall and impact lab\nF6                V and split bridge\nH                 Show / hide this window\nEsc               Exit";
+const CONTROLS: &str = "CONTROLS\n\nA / D or arrows   Roll and move\nHold Down         Charge jump\nRelease Down      Jump\nHold C            Probe for nutrient\nQ                 Pseudo-spine shield\nSpace             Radial acid burst\nX                 Split selected blob\nTab               Select next blob\nE                 Rejoin siblings\nR                 Reset game\nF1                Standard level\nF2                Supports lab\nF3                Curves lab\nF4                U and low passage\nF5                Fall and impact lab\nF6                V and split bridge\nH                 Show / hide this window\nEsc               Exit";
 
 #[derive(Resource)]
 pub(super) struct LegendState {
@@ -182,6 +182,7 @@ pub(super) fn update_metrics(
     shields: Res<ShieldWorld>,
     acid: Res<AcidWorld>,
     vitality_world: Res<VitalityWorld>,
+    nutrition: Res<NutritionWorld>,
     avian_contacts: Res<AvianContactDiagnostics>,
     mut metrics: Single<&mut Text2d, With<MetricsText>>,
 ) {
@@ -202,12 +203,17 @@ pub(super) fn update_metrics(
         LifeState::Corpse(DeathCause::Wasting) => "corpse: wasting",
         LifeState::Corpse(DeathCause::Trauma) => "corpse: trauma",
     };
+    let digestion = nutrition
+        .digestion_progress(selected.id)
+        .map(|progress| format!("{:5.1}%", progress * 100.0))
+        .unwrap_or_else(|| "   -- ".to_string());
     metrics.0 = format!(
-        "METRICS\n\nFPS          {fps:5.1}\nFrame        {frame_time:5.2} ms\nPhysics      120 Hz\nBlobs        {}\nPoints       {}\nSize         {:5.1}%\nState        {state}\nEnergy       {:5.1}%\nHealth       {:5.1}%\nTrauma       {:5.1}%\nImpact       {:5.0}\nShield       {:5.1}%\nAcid drops   {}\nAvian touch  {} / {}\nAgreement    {:5.1}%\nContact pts  {}\nSurfaces     {}\nGround pts   {}\nMax depth    {:5.2}\nSpan         {:5.1}",
+        "METRICS\n\nFPS          {fps:5.1}\nFrame        {frame_time:5.2} ms\nPhysics      120 Hz\nBlobs        {}\nPoints       {}\nSize         {:5.1}%\nState        {state}\nEnergy       {:5.1}%\nDigestion    {digestion}\nCapacity     {:5.1}%\nHealth       {:5.1}%\nTrauma       {:5.1}%\nImpact       {:5.0}\nShield       {:5.1}%\nAcid drops   {}\nAvian touch  {} / {}\nAgreement    {:5.1}%\nContact pts  {}\nSurfaces     {}\nGround pts   {}\nMax depth    {:5.2}\nSpan         {:5.1}",
         blobs.active.len(),
         selected.body.particles.len(),
         selected.body.rest_radius / INITIAL_RADIUS * 100.0,
         vitality.energy * 100.0,
+        nutrition.capability_factor(selected.id) * 100.0,
         vitality.health * 100.0,
         vitality.trauma.min(1.0) * 100.0,
         vitality.last_impact,

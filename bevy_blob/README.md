@@ -106,6 +106,7 @@ cargo test
 | `Tab` | Select the next active blob |
 | `E` | Start rejoining the selected blob with its sibling |
 | `R` | Reset the game and restore the initial creature |
+| Hold `C` | Extend the proboscis and probe for a nutrient |
 | `Space` | Fire a radial acid burst when the blob is large enough |
 | Hold `Q` | Deploy the pseudo-spine shield |
 | `H` | Show or hide the controls legend |
@@ -226,6 +227,7 @@ bevy_blob/
 │   ├── acid.rs         Acid weapon, droplets, cooldown, simulation, and rendering
 │   ├── shield.rs       Pseudo-spines, defensive energy, and movement penalties
 │   ├── vitality.rs     Energy, wasting, impact trauma, death, and carcasses
+│   ├── nutrition.rs    Nutrient ingestion, digestion, energy recovery, and waste
 │   ├── hud.rs          Dedicated controls and live-metrics windows
 │   ├── input.rs        Keyboard input, selection, reset, and player actions
 │   ├── camera.rs       Smooth tracking of the selected creature
@@ -265,9 +267,67 @@ The selected creature is shown with a brighter, more opaque material, while its
 family color remains visible. The camera follows that creature in both axes and
 smoothly changes target after pressing `Tab`.
 
+## Nutrition and Energy Recovery
+
+Small amber nutrients are physical level objects: they fall, settle on
+rectangular and convex geometry, and can be pushed by a blob. Pressing `C`
+produces one exploratory proboscis. While `C` remains held it grows, stays
+extended, and continuously sweeps toward the nearest nutrient; releasing the
+key retracts it smoothly. A nutrient that enters its reach while it is probing
+can therefore be caught dynamically. When the selected living blob is large
+enough and the rounded tip physically reaches a nutrient, a 1.25-second
+engulfing phase begins. The tip first widens its grip around the nutrient; the
+nutrient then remains attached to that rounded end while the whole proboscis
+slowly retracts with eased motion. As soon as the nutrient crosses the membrane,
+the proboscis disappears and releases it. The nutrient then falls freely inside
+the creature, settling with a heavily damped internal bounce while digestion
+continues. Temporary render points form this single curved, tapered appendage
+without destabilizing the physical particle topology. They disappear
+automatically when the interaction ends. The nutrient remains visible inside
+the body for a six-second digestion cycle. Energy is restored gradually rather
+than awarded on contact, up to 46 percentage points for a complete nutrient.
+
+Each protrusion receives a stable organic variation. Its two curvature
+controls, thickness, taper, and small width waves differ without being
+randomized every frame, so repeated probing looks irregular without flicker.
+Its render topology also grows with visible area: a minimal five-vertex shape
+is used at birth, followed by medium and full curve sampling only after enough
+space exists for stable triangles.
+The first Bézier control is constrained to the outward normal of the two-edge
+attachment chord. Random bending begins farther along the appendage, preventing
+the nascent mesh from initially sliding almost tangent to the membrane.
+The attachment is selected once when probing starts and stored in material
+membrane coordinates: a particle-edge index plus a fixed interpolation value.
+It follows deformation of that same edge but never slides after the moving tip.
+Only the appendage curve and tip explore. Additional temporary shoulder and
+curve samples smooth the junction without increasing the soft-body solver cost.
+The attachment spans two consecutive physical edges: their shared particle is
+the fixed material centre of the root, with one anchor on each edge. No extra
+membrane refinement is required. The appendage mesh connects the two anchors
+directly and then narrows progressively, avoiding a central pinch.
+
+The digestive load initially reduces movement, jump power, pseudo-spine
+deployment, and acid output to 48% of normal capacity. Performance returns
+progressively as absorption advances. A digesting blob cannot split or rejoin.
+When absorption completes, the remaining material starts from the exact place
+where it settled inside the blob and immediately receives an upward launch
+impulse. It travels through the interior with strong viscous drag; after the
+whole pellet clears the membrane it switches to the normal external drag and
+gravity. Its angle and launch strength vary on
+each digestion while retaining an upward bias, and it also inherits a limited
+part of the blob's current velocity. The resulting waste pellet has 42% of the
+nutrient's original radius; it then falls under gravity, collides with
+rectangular and convex level surfaces, can be nudged by blobs, and remains
+visible in the environment. If the host dies during digestion,
+the reduced residue is expelled immediately.
+
+Resetting or switching a test laboratory restores the nutrients around the new
+spawn point. Digestion progress and current capability are reported in the
+metrics window.
+
 ## Validation
 
-The current automated suite contains 65 tests covering soft-body constraints,
+The current automated suite contains 73 tests covering soft-body constraints,
 jump charging and size scaling, rolling, collision recovery, topology repair,
 recursive splitting, hierarchical merging, camera targeting, dynamic mesh
 generation, acid bursts, vitality states, death causes, and complete weapon

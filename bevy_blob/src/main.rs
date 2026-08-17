@@ -4,6 +4,7 @@ mod camera;
 mod environment;
 mod hud;
 mod input;
+mod nutrition;
 mod rendering;
 mod shield;
 mod vitality;
@@ -30,6 +31,9 @@ use hud::{arrange_auxiliary_windows, setup_legend, toggle_legend, update_metrics
 #[cfg(test)]
 use input::next_selection;
 use input::{cycle_selection, exit_on_escape, handle_blob_actions};
+use nutrition::{
+    NutritionWorld, draw_nutrition, setup_nutrition, simulate_nutrition, start_phagocytosis,
+};
 #[cfg(test)]
 use rendering::blob_family_color;
 use rendering::{draw_world, sync_blob_meshes, sync_route_markers};
@@ -97,7 +101,10 @@ fn main() {
         }))
         .add_plugins(PhysicsPlugins::default().with_length_unit(100.0))
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
-        .add_systems(Startup, (setup, setup_environment, setup_legend).chain())
+        .add_systems(
+            Startup,
+            (setup, setup_environment, setup_nutrition, setup_legend).chain(),
+        )
         .add_systems(
             FixedUpdate,
             (
@@ -105,6 +112,7 @@ fn main() {
                 simulate_blob,
                 resolve_avian_environment,
                 simulate_vitality,
+                simulate_nutrition,
                 simulate_acid,
             )
                 .chain(),
@@ -117,6 +125,7 @@ fn main() {
                 toggle_legend,
                 switch_test_scenario,
                 handle_blob_actions,
+                start_phagocytosis,
                 fire_acid,
                 cycle_selection,
                 follow_camera,
@@ -127,6 +136,7 @@ fn main() {
                 sync_route_markers,
                 draw_world,
                 draw_acid,
+                draw_nutrition,
                 draw_shields,
             )
                 .chain(),
@@ -164,6 +174,7 @@ fn simulate_blob(
     keyboard: Res<ButtonInput<KeyCode>>,
     level: Res<Level>,
     shields: Res<ShieldWorld>,
+    nutrition: Res<NutritionWorld>,
     mut vitality: ResMut<VitalityWorld>,
     mut blobs: ResMut<BlobWorld>,
 ) {
@@ -180,7 +191,12 @@ fn simulate_blob(
         if !alive {
             active_blob.body.cancel_jump_charge();
         }
-        let vigor = vitality.vigor(active_blob.id);
+        let vigor = vitality.vigor(active_blob.id) * nutrition.capability_factor(active_blob.id);
+        if let Some((position, radius, strength)) = nutrition.physical_load(active_blob.id) {
+            active_blob
+                .body
+                .apply_internal_bulge(position, radius, strength);
+        }
         let shield_extension = shields.extension(active_blob.id);
         let movement = if alive {
             rejoin_directions

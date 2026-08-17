@@ -34,6 +34,7 @@ pub(super) fn handle_blob_actions(
     mut shields: ResMut<ShieldWorld>,
     mut vitality: ResMut<VitalityWorld>,
     mut route_progress: ResMut<RouteProgress>,
+    mut nutrition: ResMut<NutritionWorld>,
 ) {
     if keyboard.just_pressed(KeyCode::KeyR) {
         reset_world_at(&mut blobs, level.spawn_position);
@@ -41,6 +42,7 @@ pub(super) fn handle_blob_actions(
         shields.reset();
         vitality.reset();
         route_progress.next = 1;
+        nutrition.reset_near(level.spawn_position);
         return;
     }
 
@@ -48,6 +50,10 @@ pub(super) fn handle_blob_actions(
         .active
         .get(blobs.selected)
         .is_some_and(|blob| vitality.is_alive(blob.id));
+    let selected_digesting = blobs
+        .active
+        .get(blobs.selected)
+        .is_some_and(|blob| nutrition.is_digesting(blob.id));
 
     let living_sibling_pair = blobs
         .active
@@ -60,7 +66,11 @@ pub(super) fn handle_blob_actions(
                 .filter(|blob| blob.parent_id == Some(parent))
                 .all(|blob| vitality.is_alive(blob.id))
         });
-    if keyboard.just_pressed(KeyCode::KeyE) && selected_alive && living_sibling_pair {
+    if keyboard.just_pressed(KeyCode::KeyE)
+        && selected_alive
+        && !selected_digesting
+        && living_sibling_pair
+    {
         start_selected_rejoin(&mut blobs);
         return;
     }
@@ -69,6 +79,7 @@ pub(super) fn handle_blob_actions(
         && blobs.active.len() < MAX_ACTIVE_BLOBS
         && blobs.rejoin_parent.is_none()
         && selected_alive
+        && !selected_digesting
         && blobs
             .active
             .get(blobs.selected)

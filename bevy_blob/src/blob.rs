@@ -301,6 +301,29 @@ impl Blob {
         self.cancel_jump_charge();
     }
 
+    pub fn apply_internal_bulge(&mut self, load_position: Vec2, load_radius: f32, strength: f32) {
+        let center = self.center();
+        let direction = (load_position - center).normalize_or(Vec2::X);
+        let target_extra = load_radius * 0.72 * strength.clamp(0.0, 1.0);
+        let corrections = self
+            .particles
+            .iter()
+            .map(|particle| {
+                let offset = particle.position - center;
+                let radial = offset.normalize_or(direction);
+                let facing = ((radial.dot(direction) - 0.15) / 0.85).clamp(0.0, 1.0);
+                let desired_radius = self.rest_radius + target_extra * facing.powi(2);
+                radial * (desired_radius - offset.length()) * 0.12 * facing
+            })
+            .collect::<Vec<_>>();
+        let average = corrections.iter().copied().sum::<Vec2>() / corrections.len() as f32;
+        for (particle, correction) in self.particles.iter_mut().zip(corrections) {
+            let correction = correction - average;
+            particle.position += correction;
+            particle.previous += correction;
+        }
+    }
+
     #[cfg(test)]
     pub fn step(&mut self, dt: f32, horizontal: f32, charging: bool, platforms: &[Platform]) {
         self.step_with_vigor(dt, horizontal, charging, platforms, &[], 1.0, true, true);

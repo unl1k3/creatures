@@ -108,6 +108,7 @@ pub(super) fn sync_blob_meshes(
     mut commands: Commands,
     blobs: Res<BlobWorld>,
     vitality_world: Res<VitalityWorld>,
+    nutrition: Res<NutritionWorld>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut rendered: Query<(
@@ -132,7 +133,11 @@ pub(super) fn sync_blob_meshes(
         rendered_ids.insert(marker.blob_id);
 
         if let Some(mut mesh) = meshes.get_mut(&mesh_handle.0) {
-            update_blob_mesh(&mut mesh, &active_blob.body);
+            update_blob_mesh_with_load(
+                &mut mesh,
+                &active_blob.body,
+                nutrition.internal_load(active_blob.id),
+            );
         }
         let selected = blobs
             .active
@@ -164,7 +169,10 @@ pub(super) fn sync_blob_meshes(
             .active
             .get(blobs.selected)
             .is_some_and(|blob| blob.id == active_blob.id);
-        let mesh = meshes.add(create_blob_mesh(&active_blob.body));
+        let mesh = meshes.add(create_blob_mesh_with_load(
+            &active_blob.body,
+            nutrition.internal_load(active_blob.id),
+        ));
         let vitality = vitality_world.get(active_blob.id);
         let material = materials.add(ColorMaterial::from(blob_vital_color(
             active_blob.parent_id,
@@ -186,12 +194,20 @@ pub(super) fn sync_blob_meshes(
     }
 }
 
+#[cfg(test)]
 pub(super) fn create_blob_mesh(blob: &Blob) -> Mesh {
+    create_blob_mesh_with_load(blob, None)
+}
+
+fn create_blob_mesh_with_load(
+    blob: &Blob,
+    load: Option<(Vec2, f32, f32, f32, usize, f32)>,
+) -> Mesh {
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
     );
-    update_blob_mesh(&mut mesh, blob);
+    update_blob_mesh_with_load(&mut mesh, blob, load);
     mesh
 }
 
@@ -205,26 +221,302 @@ pub(super) fn charge_indicator_radius(blob: &Blob) -> f32 {
     outermost + (5.0 * blob.size_scale()).max(2.5)
 }
 
-fn update_blob_mesh(mesh: &mut Mesh, blob: &Blob) {
+fn update_blob_mesh_with_load(
+    mesh: &mut Mesh,
+    blob: &Blob,
+    load: Option<(Vec2, f32, f32, f32, usize, f32)>,
+) {
     let center = blob.center();
-    let mut positions = Vec::with_capacity(blob.particles.len() + 1);
-    let mut uvs = Vec::with_capacity(blob.particles.len() + 1);
+    let membrane = rendered_membrane_points(blob, load);
+    let mut positions = Vec::with_capacity(membrane.len() + 1);
+    let mut uvs = Vec::with_capacity(membrane.len() + 1);
     positions.push([center.x, center.y, 0.0]);
     uvs.push([0.5, 0.5]);
-    for particle in &blob.particles {
-        positions.push([particle.position.x, particle.position.y, 0.0]);
-        let local = (particle.position - center) / (blob.rest_radius * 2.0);
+    for point in &membrane {
+        positions.push([point.position.x, point.position.y, 0.0]);
+        let local = (point.position - center) / (blob.rest_radius * 2.0);
         uvs.push([0.5 + local.x, 0.5 + local.y]);
     }
 
-    let count = blob.particles.len() as u32;
-    let mut indices = Vec::with_capacity(blob.particles.len() * 3);
-    for index in 0..count {
-        indices.extend_from_slice(&[0, index + 1, (index + 1) % count + 1]);
+    let mut indices = Vec::with_capacity(membrane.len() * 3);
+    let original = membrane
+        .iter()
+        .enumerate()
+        .filter(|(_, point)| !point.appendage)
+        .map(|(index, _)| index as u32 + 1)
+        .collect::<Vec<_>>();
+    for index in 0..original.len() {
+        indices.extend_from_slice(&[0, original[index], original[(index + 1) % original.len()]]);
+    }
+    if let Some(first_appendage) = membrane.iter().position(|point| point.appendage) {
+        let last_appendage = membrane
+            .iter()
+            .rposition(|point| point.appendage)
+            .unwrap_or(first_appendage);
+        let start = first_appendage.saturating_sub(1);
+        let end = (last_appendage + 1) % membrane.len();
+        let mut appendage = vec![start as u32 + 1];
+        appendage.extend((first_appendage..=last_appendage).map(|index| index as u32 + 1));
+        appendage.push(end as u32 + 1);
+        triangulate_appendage(&appendage, &membrane, &mut indices);
     }
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
     mesh.insert_indices(Indices::U32(indices));
+}
+
+fn triangulate_appendage(
+    polygon: &[u32],
+    membrane: &[RenderedMembranePoint],
+    indices: &mut Vec<u32>,
+) {
+    let point = |index: u32| membrane[index as usize - 1].position;
+    let area = polygon
+        .iter()
+        .zip(polygon.iter().cycle().skip(1))
+        .map(|(a, b)| point(*a).perp_dot(point(*b)))
+        .sum::<f32>();
+    let orientation = area.signum();
+    let mut remaining = polygon.to_vec();
+    while remaining.len() > 2 {
+        let mut ear = None;
+        for index in 0..remaining.len() {
+            let previous = remaining[(index + remaining.len() - 1) % remaining.len()];
+            let current = remaining[index];
+            let next = remaining[(index + 1) % remaining.len()];
+            let a = point(previous);
+            let b = point(current);
+            let c = point(next);
+            if (b - a).perp_dot(c - b) * orientation <= 0.000_001 {
+                continue;
+            }
+            let contains_point = remaining.iter().any(|candidate| {
+                *candidate != previous
+                    && *candidate != current
+                    && *candidate != next
+                    && point_in_triangle(point(*candidate), a, b, c)
+            });
+            if !contains_point {
+                ear = Some((index, [previous, current, next]));
+                break;
+            }
+        }
+        let Some((index, triangle)) = ear else {
+            // At the first frames the appendage can be almost flat. Complete
+            // the remaining simple sliver instead of leaving a visible hole.
+            for fan_index in 1..remaining.len().saturating_sub(1) {
+                indices.extend_from_slice(&[
+                    remaining[0],
+                    remaining[fan_index],
+                    remaining[fan_index + 1],
+                ]);
+            }
+            return;
+        };
+        indices.extend_from_slice(&triangle);
+        remaining.remove(index);
+    }
+}
+
+fn point_in_triangle(point: Vec2, a: Vec2, b: Vec2, c: Vec2) -> bool {
+    let first = (b - a).perp_dot(point - a);
+    let second = (c - b).perp_dot(point - b);
+    let third = (a - c).perp_dot(point - c);
+    (first >= -0.000_01 && second >= -0.000_01 && third >= -0.000_01)
+        || (first <= 0.000_01 && second <= 0.000_01 && third <= 0.000_01)
+}
+
+#[cfg(test)]
+mod membrane_detail_tests {
+    use super::*;
+
+    #[test]
+    fn internal_load_temporarily_adds_local_membrane_points() {
+        let blob = Blob::new(Vec2::ZERO, 40.0);
+        let normal_count = rendered_membrane_points(&blob, None).len();
+        let detailed =
+            rendered_membrane_points(&blob, Some((Vec2::new(20.0, 0.0), 12.0, 1.0, 0.37, 0, 0.5)));
+        assert!(detailed.len() > normal_count);
+        assert!(detailed.iter().any(|point| point.temporary));
+        assert_eq!(detailed.iter().filter(|point| point.attachment).count(), 2);
+        assert!(detailed.iter().any(|point| point.appendage));
+        assert_eq!(rendered_membrane_points(&blob, None).len(), normal_count);
+    }
+
+    #[test]
+    fn nascent_protrusion_is_fully_triangulated() {
+        let blob = Blob::new(Vec2::ZERO, 40.0);
+        for strength in [0.011, 0.025, 0.05, 0.10] {
+            let load = Some((Vec2::new(72.0, 8.0), 5.0, strength, 0.61, 0, 0.5));
+            let membrane = rendered_membrane_points(&blob, load);
+            let mesh = create_blob_mesh_with_load(&blob, load);
+            assert_eq!(
+                mesh.indices().expect("mesh indices").len(),
+                membrane.len() * 3,
+                "incomplete triangulation at strength {strength}"
+            );
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RenderedMembranePoint {
+    position: Vec2,
+    temporary: bool,
+    appendage: bool,
+    attachment: bool,
+}
+
+fn rendered_membrane_points(
+    blob: &Blob,
+    load: Option<(Vec2, f32, f32, f32, usize, f32)>,
+) -> Vec<RenderedMembranePoint> {
+    let Some((load_position, load_radius, strength, variation, anchor_edge, anchor_t)) =
+        load.filter(|(_, _, value, _, _, _)| *value > 0.01)
+    else {
+        return blob
+            .particles
+            .iter()
+            .map(|particle| RenderedMembranePoint {
+                position: particle.position,
+                temporary: false,
+                appendage: false,
+                attachment: false,
+            })
+            .collect();
+    };
+    let count = blob.particles.len();
+    let nearest_edge = anchor_edge % count;
+    let center = blob.center();
+    let load_direction = (load_position - center).normalize_or(Vec2::X);
+    let mut points = Vec::with_capacity(count + 31);
+    for index in 0..count {
+        let second_anchor_edge = (nearest_edge + 1) % count;
+        if index == second_anchor_edge {
+            continue;
+        }
+        let start = blob.particles[index].position;
+        let end_index = if index == nearest_edge {
+            (index + 2) % count
+        } else {
+            (index + 1) % count
+        };
+        let end = blob.particles[end_index].position;
+        points.push(RenderedMembranePoint {
+            position: start,
+            temporary: false,
+            appendage: false,
+            attachment: false,
+        });
+        if index != nearest_edge {
+            continue;
+        }
+        let base = blob.particles[(nearest_edge + 1) % count].position;
+        let tip = base.lerp(load_position, strength.clamp(0.0, 1.0));
+        let length = base.distance(tip);
+        let normal_axis = load_direction.perp();
+        let secondary = (variation * 7.137).fract();
+        let asymmetry = (anchor_t.clamp(0.0, 1.0) - 0.5) * 0.08;
+        let start_attachment = start.lerp(base, 0.18 + asymmetry);
+        let end_attachment = base.lerp(end, 0.82 + asymmetry);
+        let attachment_tangent = (end_attachment - start_attachment).normalize_or(Vec2::X);
+        let mut root_normal = attachment_tangent.perp();
+        if root_normal.dot(base - center) < 0.0 {
+            root_normal = -root_normal;
+        }
+        let control_a = base
+            + root_normal * length * (0.30 + variation * 0.08)
+            + attachment_tangent * length * (variation - 0.5) * 0.05;
+        let control_b = base.lerp(tip, 0.72) + normal_axis * length * (secondary - 0.5) * 0.18;
+        let width = (load_radius * (0.55 + strength * 0.45) * (0.88 + variation * 0.24))
+            .min(start.distance(end) * 0.48)
+            .max(0.5);
+        let base_normal = root_normal.perp();
+        // Follow the membrane's existing winding: the first side of the tube
+        // must leave from `start`, otherwise the two base triangles cross.
+        let winding_side = if (start - base).dot(base_normal) >= 0.0 {
+            1.0
+        } else {
+            -1.0
+        };
+        let attachment_half_width = start_attachment.distance(end_attachment) * 0.5;
+        points.push(RenderedMembranePoint {
+            position: start_attachment,
+            temporary: true,
+            appendage: false,
+            attachment: true,
+        });
+        const MINIMAL_PROFILE: &[f32] = &[0.24];
+        const MEDIUM_PROFILE: &[f32] = &[0.20, 0.46, 0.70, 0.88, 0.975];
+        const FULL_PROFILE: &[f32] = &[
+            0.06, 0.14, 0.23, 0.32, 0.42, 0.52, 0.62, 0.71, 0.79, 0.86, 0.92, 0.97, 0.995,
+        ];
+        let profile = if strength < 0.16 {
+            MINIMAL_PROFILE
+        } else if strength < 0.38 {
+            MEDIUM_PROFILE
+        } else {
+            FULL_PROFILE
+        };
+        let mut outline = Vec::with_capacity(profile.len() * 2 + 1);
+        outline.extend(profile.iter().copied().map(|along| (along, 1.0)));
+        outline.push((1.0, 0.0));
+        outline.extend(profile.iter().rev().copied().map(|along| (along, -1.0)));
+        for (along, side) in outline {
+            let raw_side = side;
+            let side = raw_side * winding_side;
+            let inverse: f32 = 1.0 - along;
+            let centerline = base * inverse.powi(3)
+                + control_a * 3.0 * inverse.powi(2) * along
+                + control_b * 3.0 * inverse * along.powi(2)
+                + tip * along.powi(3);
+            let tangent = ((control_a - base) * 3.0 * inverse.powi(2)
+                + (control_b - control_a) * 6.0 * inverse * along
+                + (tip - control_b) * 3.0 * along.powi(2))
+            .normalize_or(load_direction);
+            let normal = tangent.perp();
+            let organic_wave = 1.0
+                + (along * std::f32::consts::PI * (2.0 + variation * 1.4)
+                    + variation * std::f32::consts::TAU)
+                    .sin()
+                    * (along * std::f32::consts::PI).sin()
+                    * 0.075;
+            let root_flare = 1.0 + (1.0 - along).powi(2) * (0.38 + variation * 0.12);
+            let taper = (1.0_f32 - along * (0.76 + secondary * 0.10)).max(0.14);
+            let rounded_tip = if along > 0.9 {
+                ((1.0 - along) / 0.1).sqrt()
+            } else {
+                1.0
+            };
+            let profile_width = (width * root_flare * taper * organic_wave)
+                .min(attachment_half_width * (1.0 - along * 0.58).max(0.18));
+            let curved_position = centerline + normal * side * profile_width * rounded_tip;
+            let attachment = if raw_side >= 0.0 {
+                start_attachment
+            } else {
+                end_attachment
+            };
+            let root_blend = smoothstep01(along / 0.20);
+            points.push(RenderedMembranePoint {
+                position: attachment.lerp(curved_position, root_blend),
+                temporary: true,
+                appendage: true,
+                attachment: false,
+            });
+        }
+        points.push(RenderedMembranePoint {
+            position: end_attachment,
+            temporary: true,
+            appendage: false,
+            attachment: true,
+        });
+    }
+    points
+}
+
+fn smoothstep01(value: f32) -> f32 {
+    let value = value.clamp(0.0, 1.0);
+    value * value * (3.0 - 2.0 * value)
 }
 
 pub(super) fn draw_world(
@@ -233,6 +525,7 @@ pub(super) fn draw_world(
     vitality_world: Res<VitalityWorld>,
     level: Res<Level>,
     route_progress: Res<RouteProgress>,
+    nutrition: Res<NutritionWorld>,
 ) {
     for platform in &level.platforms {
         gizmos.rect_2d(
@@ -257,8 +550,21 @@ pub(super) fn draw_world(
         } else {
             Color::srgba(0.48, 0.52, 0.54, 0.96)
         };
-        let outline = blob.particles.iter().map(|particle| particle.position);
-        gizmos.lineloop_2d(outline, color);
+        let membrane = rendered_membrane_points(blob, nutrition.internal_load(active_blob.id));
+        gizmos.lineloop_2d(membrane.iter().map(|point| point.position), color);
+        for point in membrane.iter().filter(|point| point.temporary) {
+            let radius = if point.attachment { 2.0 } else { 1.35 };
+            let point_color = if point.attachment {
+                Color::srgba(1.0, 0.90, 0.42, 0.82)
+            } else {
+                Color::srgba(1.0, 0.82, 0.30, 0.58)
+            };
+            gizmos.circle_2d(
+                point.position,
+                (radius * blob.size_scale()).max(0.72),
+                point_color,
+            );
+        }
         let center = blob.center();
         let size_scale = blob.size_scale();
         for particle in &blob.particles {

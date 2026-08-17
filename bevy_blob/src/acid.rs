@@ -50,6 +50,7 @@ pub(super) fn fire_acid(
     mut acid: ResMut<AcidWorld>,
     shields: Res<ShieldWorld>,
     mut vitality: ResMut<VitalityWorld>,
+    nutrition: Res<NutritionWorld>,
 ) {
     if !keyboard.just_pressed(KeyCode::Space) {
         return;
@@ -70,7 +71,11 @@ pub(super) fn fire_acid(
         return;
     }
 
-    emit_acid(active_blob, &mut acid, vitality.vigor(active_blob.id));
+    emit_acid(
+        active_blob,
+        &mut acid,
+        vitality.vigor(active_blob.id) * nutrition.capability_factor(active_blob.id),
+    );
 }
 
 fn emit_acid(blob: &mut ActiveBlob, acid: &mut AcidWorld, vigor: f32) {

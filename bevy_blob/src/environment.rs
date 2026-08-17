@@ -333,6 +333,7 @@ pub(super) fn switch_test_scenario(
     mut level: ResMut<Level>,
     mut blobs: ResMut<BlobWorld>,
     mut vitality: ResMut<VitalityWorld>,
+    mut nutrition: ResMut<NutritionWorld>,
 ) {
     let requested = (1..=6).find(|index| {
         keyboard.just_pressed(match index {
@@ -357,6 +358,7 @@ pub(super) fn switch_test_scenario(
     route_progress.next = 1;
     reset_world_at(&mut blobs, spawn);
     vitality.reset();
+    nutrition.reset_near(spawn);
 }
 
 pub(super) fn advance_route_progress(

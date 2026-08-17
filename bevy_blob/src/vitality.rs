@@ -84,6 +84,13 @@ impl VitalityWorld {
         true
     }
 
+    pub(super) fn restore_energy(&mut self, id: u64, amount: f32) {
+        let vitality = self.states.entry(id).or_default();
+        if vitality.is_alive() {
+            vitality.energy = (vitality.energy + amount.max(0.0)).min(1.0);
+        }
+    }
+
     pub(super) fn split(&mut self, parent: u64, children: [u64; 2]) {
         let inherited = self.states.remove(&parent).unwrap_or_default();
         self.states.insert(children[0], inherited);
