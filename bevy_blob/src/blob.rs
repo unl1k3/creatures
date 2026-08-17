@@ -798,6 +798,7 @@ impl Blob {
         // Keep contact thickness constant while tonicity changes. A growing
         // collision envelope would move a resting corpse on its own.
         let skin = 5.0 * self.size_scale();
+        let blob_center = self.center();
         let mut support_sum = Vec2::ZERO;
         let mut support_count = 0;
         for particle in &mut self.particles {
@@ -817,9 +818,9 @@ impl Blob {
                 // in one frame. Use the entry face from its swept path so all
                 // membrane points are returned to the side they came from,
                 // instead of splitting the contour across both faces.
-                let side = swept_entry
-                    .map(|(side, _)| side)
-                    .unwrap_or_else(|| collision_entry_side(particle, min, max));
+                let side = swept_entry.map(|(side, _)| side).unwrap_or_else(|| {
+                    collision_side_from_reference(particle, blob_center, min, max)
+                });
                 let normal = [Vec2::NEG_X, Vec2::X, Vec2::NEG_Y, Vec2::Y][side];
                 let impact_speed = -(particle.position - particle.previous).dot(normal);
                 self.last_impact_speed = self.last_impact_speed.max(impact_speed.max(0.0));
@@ -944,6 +945,31 @@ fn collision_entry_side(particle: &Particle, min: Vec2, max: Vec2) -> usize {
         .map(|(side, _)| side)
         .unwrap_or(3)
     })
+}
+
+fn collision_side_from_reference(
+    particle: &Particle,
+    reference: Vec2,
+    min: Vec2,
+    max: Vec2,
+) -> usize {
+    let width = (max.x - min.x).max(0.001);
+    let height = (max.y - min.y).max(0.001);
+    let outside = [
+        ((min.x - reference.x) / width, 0),
+        ((reference.x - max.x) / width, 1),
+        ((min.y - reference.y) / height, 2),
+        ((reference.y - max.y) / height, 3),
+    ];
+    let (distance, side) = outside
+        .into_iter()
+        .max_by(|first, second| first.0.total_cmp(&second.0))
+        .unwrap_or((0.0, 0));
+    if distance > 0.0 {
+        side
+    } else {
+        collision_entry_side(particle, min, max)
+    }
 }
 
 fn swept_aabb_entry(start: Vec2, end: Vec2, min: Vec2, max: Vec2) -> Option<(usize, f32)> {

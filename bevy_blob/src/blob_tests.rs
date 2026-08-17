@@ -253,6 +253,50 @@ mod tests {
     }
 
     #[test]
+    fn attached_platform_seam_uses_the_outer_approach_face() {
+        let particle = Particle {
+            position: Vec2::new(4.0, 0.0),
+            previous: Vec2::new(4.0, -1.0),
+        };
+        let minimum = Vec2::new(-105.0, -15.0);
+        let maximum = Vec2::new(5.0, 15.0);
+        assert_eq!(collision_entry_side(&particle, minimum, maximum), 1);
+        assert_eq!(
+            collision_side_from_reference(
+                &particle,
+                Vec2::new(0.0, -40.0),
+                minimum,
+                maximum,
+            ),
+            2,
+            "the internal vertical seam must not override the lower surface"
+        );
+    }
+
+    #[test]
+    fn particle_is_projected_out_of_two_attached_platforms_at_the_seam() {
+        let mut blob = Blob::new(Vec2::new(0.0, -40.0), 20.0);
+        blob.particles[0].position = Vec2::ZERO;
+        blob.particles[0].previous = Vec2::new(0.0, -1.0);
+        let platforms = [
+            Platform {
+                center: Vec2::new(-50.0, 0.0),
+                half_size: Vec2::new(50.0, 10.0),
+            },
+            Platform {
+                center: Vec2::new(50.0, 0.0),
+                half_size: Vec2::new(50.0, 10.0),
+            },
+        ];
+        blob.solve_collisions(&platforms);
+        assert!(
+            blob.particles[0].position.y < -10.0,
+            "particle entered the attached-platform seam: {:?}",
+            blob.particles[0].position
+        );
+    }
+
+    #[test]
     fn tiny_blob_does_not_wrap_around_a_ceiling() {
         let radius = 15.0;
         let floor = Platform {

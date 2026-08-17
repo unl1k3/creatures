@@ -327,7 +327,7 @@ metrics window.
 
 ## Validation
 
-The current automated suite contains 78 tests covering soft-body constraints,
+The current automated suite contains 80 tests covering soft-body constraints,
 jump charging and size scaling, rolling, collision recovery, topology repair,
 recursive splitting, hierarchical merging, camera targeting, dynamic mesh
 generation, acid bursts, vitality states, death causes, and complete weapon
