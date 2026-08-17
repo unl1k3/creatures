@@ -47,6 +47,10 @@ pub struct Blob {
     pub coyote: f32,
     pub charge: f32,
     pub last_impact_speed: f32,
+    launch_grace: f32,
+    support_normal: Vec2,
+    support_normal_sum: Vec2,
+    support_contact_count: usize,
     was_charging: bool,
     jump_armed: bool,
     idle_phase: f32,
@@ -86,6 +90,10 @@ impl Blob {
             coyote: 0.0,
             charge: 0.0,
             last_impact_speed: 0.0,
+            launch_grace: 0.0,
+            support_normal: Vec2::Y,
+            support_normal_sum: Vec2::ZERO,
+            support_contact_count: 0,
             was_charging: false,
             jump_armed: false,
             idle_phase: 0.0,
@@ -179,6 +187,17 @@ impl Blob {
 
     pub fn mass(&self) -> f32 {
         self.rest_area
+    }
+
+    pub fn ignores_impact_trauma(&self) -> bool {
+        self.launch_grace > 0.0
+    }
+
+    pub fn record_support_normal(&mut self, normal: Vec2) {
+        if normal.y > 0.55 {
+            self.support_normal_sum += normal.normalize_or(Vec2::Y);
+            self.support_contact_count += 1;
+        }
     }
 
     pub fn translate(&mut self, offset: Vec2) {
@@ -281,7 +300,7 @@ impl Blob {
 
     #[cfg(test)]
     pub fn step(&mut self, dt: f32, horizontal: f32, charging: bool, platforms: &[Platform]) {
-        self.step_with_vigor(dt, horizontal, charging, platforms, 1.0, true, true);
+        self.step_with_vigor(dt, horizontal, charging, platforms, &[], 1.0, true, true);
     }
 
     pub fn step_with_vigor(
@@ -290,11 +309,20 @@ impl Blob {
         horizontal: f32,
         charging: bool,
         platforms: &[Platform],
+        fixtures: &[Vec<Vec2>],
         vigor: f32,
         animate_idle: bool,
         retain_tonicity: bool,
     ) {
         self.last_impact_speed = 0.0;
+        self.launch_grace = (self.launch_grace - dt).max(0.0);
+        if self.support_contact_count > 0 {
+            self.support_normal = self.support_normal_sum.normalize_or(Vec2::Y);
+        }
+        let jump_normal = self.support_normal.normalize_or(Vec2::Y);
+        let jump_tangent = jump_normal.perp();
+        self.support_normal_sum = Vec2::ZERO;
+        self.support_contact_count = 0;
         let target_tonicity = if retain_tonicity { 1.0 } else { 0.0 };
         let tonicity_response = if retain_tonicity { 2.0 } else { 1.35 };
         self.tonicity +=
@@ -342,10 +370,10 @@ impl Blob {
             })
             .sum::<f32>()
             / self.particles.len() as f32;
-        let compression_anchor_y = self
+        let compression_anchor = self
             .particles
             .iter()
-            .map(|particle| particle.position.y)
+            .map(|particle| particle.position.dot(jump_normal))
             .fold(f32::INFINITY, f32::min);
         let acceleration = if self.grounded {
             GROUND_ACCELERATION
@@ -409,15 +437,17 @@ impl Blob {
                 let compression = 3.8 * dt * (0.35 + self.charge * 0.65);
                 // Compress around the lowest contact instead of around the
                 // centre, otherwise the feet lift and the jump becomes invalid.
-                let height_above_contact = particle.position.y - compression_anchor_y;
-                particle.position.y -= height_above_contact * compression;
-                particle.position.x += (particle.position.x - center.x) * compression * 0.55;
+                let height_above_contact = particle.position.dot(jump_normal) - compression_anchor;
+                particle.position -= jump_normal * height_above_contact * compression;
+                let tangent_offset = (particle.position - center).dot(jump_tangent);
+                particle.position += jump_tangent * tangent_offset * compression * 0.55;
             }
             if jump_released {
                 // Stronger impulse on the lower membrane makes the launch
                 // propagate through the body instead of translating it rigidly.
-                let lower_weight =
-                    ((center.y - particle.position.y) / self.rest_edge).clamp(0.0, 2.5) / 2.5;
+                let lower_weight = ((center - particle.position).dot(jump_normal) / self.rest_edge)
+                    .clamp(0.0, 2.5)
+                    / 2.5;
                 let jump_speed = jump_speed_for_charge(self.charge, self.rest_radius) * vigor;
                 let impulse = jump_speed * dt;
                 // Small fragments jump faster, so their non-uniform impulse
@@ -425,7 +455,7 @@ impl Blob {
                 // own centre. The common impulse, and therefore jump height,
                 // remains unchanged.
                 let deformation = 0.28 / jump_size_factor;
-                particle.previous.y -= impulse * (0.82 + lower_weight * deformation);
+                particle.previous -= jump_normal * impulse * (0.82 + lower_weight * deformation);
             }
         }
         if jump_released {
@@ -433,13 +463,14 @@ impl Blob {
             // launch can be repeatedly projected back onto the floor.
             let takeoff_clearance = 3.0 * self.size_scale();
             for particle in &mut self.particles {
-                particle.position.y += takeoff_clearance;
+                particle.position += jump_normal * takeoff_clearance;
             }
             self.remove_angular_velocity();
             self.charge = 0.0;
             self.coyote = 0.0;
             self.jump_armed = false;
             self.grounded = false;
+            self.launch_grace = 0.12;
         } else if self.was_charging && !charging {
             self.charge = 0.0;
             self.jump_armed = false;
@@ -454,11 +485,13 @@ impl Blob {
             self.limit_collapse();
             self.limit_stretch();
             self.solve_collisions(platforms);
+            self.solve_fixture_collisions(fixtures);
             if self.repair_self_intersection() {
                 // The recovered contour may overlap the surface that caused
                 // the fold. Project it once more, then guarantee that the
                 // frame ends with a valid membrane topology.
                 self.solve_collisions(platforms);
+                self.solve_fixture_collisions(fixtures);
                 self.repair_self_intersection();
             }
         }
@@ -728,6 +761,8 @@ impl Blob {
         // Keep contact thickness constant while tonicity changes. A growing
         // collision envelope would move a resting corpse on its own.
         let skin = 5.0 * self.size_scale();
+        let mut support_sum = Vec2::ZERO;
+        let mut support_count = 0;
         for particle in &mut self.particles {
             for platform in platforms {
                 let min = platform.center - platform.half_size - Vec2::splat(skin);
@@ -765,10 +800,49 @@ impl Blob {
                         particle.position.y = max.y;
                         damp_normal_velocity(particle, Vec2::Y, 0.0);
                         self.grounded = true;
+                        support_sum += Vec2::Y;
+                        support_count += 1;
                     }
                 }
             }
         }
+        self.support_normal_sum += support_sum;
+        self.support_contact_count += support_count;
+    }
+
+    fn solve_fixture_collisions(&mut self, fixtures: &[Vec<Vec2>]) {
+        let skin = 0.8 * self.size_scale();
+        let record_impact = self.launch_grace <= 0.0;
+        let mut support_sum = Vec2::ZERO;
+        let mut support_count = 0;
+        for particle in &mut self.particles {
+            for vertices in fixtures {
+                let Some((depth, outward)) = convex_penetration(particle.position, vertices) else {
+                    continue;
+                };
+                let velocity = particle.position - particle.previous;
+                if record_impact {
+                    self.last_impact_speed = self
+                        .last_impact_speed
+                        .max((-velocity.dot(outward)).max(0.0));
+                }
+                particle.position += outward * (depth + skin);
+                let normal_speed = velocity.dot(outward);
+                let corrected_velocity = if normal_speed < 0.0 {
+                    velocity - outward * normal_speed
+                } else {
+                    velocity
+                };
+                particle.previous = particle.position - corrected_velocity * 0.82;
+                self.grounded |= outward.y > 0.55;
+                if outward.y > 0.55 {
+                    support_sum += outward;
+                    support_count += 1;
+                }
+            }
+        }
+        self.support_normal_sum += support_sum;
+        self.support_contact_count += support_count;
     }
 }
 
@@ -858,6 +932,44 @@ fn jump_size_factor(radius: f32) -> f32 {
     (DEFAULT_GAMEPLAY_RADIUS / radius.max(1.0))
         .powf(0.8)
         .clamp(0.72, 1.75)
+}
+
+fn convex_penetration(point: Vec2, vertices: &[Vec2]) -> Option<(f32, Vec2)> {
+    if vertices.len() < 3 {
+        return None;
+    }
+    let signed_area = vertices
+        .iter()
+        .zip(vertices.iter().cycle().skip(1))
+        .take(vertices.len())
+        .map(|(first, second)| first.perp_dot(*second))
+        .sum::<f32>();
+    let orientation = signed_area.signum();
+    if orientation == 0.0 {
+        return None;
+    }
+    let mut nearest = f32::INFINITY;
+    let mut outward = Vec2::Y;
+    for (first, second) in vertices
+        .iter()
+        .zip(vertices.iter().cycle().skip(1))
+        .take(vertices.len())
+    {
+        let edge = *second - *first;
+        let length = edge.length();
+        if length <= f32::EPSILON {
+            continue;
+        }
+        let inward_distance = edge.perp_dot(point - *first) * orientation / length;
+        if inward_distance < 0.0 {
+            return None;
+        }
+        if inward_distance < nearest {
+            nearest = inward_distance;
+            outward = -edge.perp() * orientation / length;
+        }
+    }
+    nearest.is_finite().then_some((nearest, outward))
 }
 
 fn jump_speed_for_charge(charge: f32, radius: f32) -> f32 {

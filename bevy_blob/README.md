@@ -219,6 +219,7 @@ bevy_blob/
 ├── Cargo.toml          Rust package metadata and dependencies
 ├── Cargo.lock          Reproducible dependency versions
 ├── README.md           Project documentation
+├── PHYSICS_TEST_SCENARIOS.md  Difficult-contact layouts and acceptance criteria
 ├── src/                Game source code and automated tests
 │   ├── main.rs         Application setup, world state, simulation, split/merge flow
 │   ├── blob.rs         Soft-body model, constraints, movement, and collisions
@@ -234,6 +235,14 @@ bevy_blob/
 │   └── game_tests.rs   Split, merge, camera, collision, and rendering tests
 └── target/             Generated Cargo build output; not tracked by Git
 ```
+
+Use [PHYSICS_TEST_SCENARIOS.md](PHYSICS_TEST_SCENARIOS.md) as the shared manual
+test plan for irregular supports, blob stacks, and movable corpses.
+
+Press `F1` through `F5` to load the standard level, narrow-pedestal, staircase,
+ramp, and semicircular-support test layouts. Each switch resets the active blob.
+All test geometry uses actual static Avian colliders; the semicircle uses a
+tessellated convex profile shared by collision detection and rendering.
 
 ## Current Architecture
 

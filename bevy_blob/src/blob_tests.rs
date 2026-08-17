@@ -18,7 +18,7 @@ mod tests {
         let mut blob = Blob::new(Vec2::ZERO, 50.0);
         let dt = 1.0 / 120.0;
         for _ in 0..240 {
-            blob.step_with_vigor(dt, 0.0, false, &[], 0.0, false, false);
+            blob.step_with_vigor(dt, 0.0, false, &[], &[], 0.0, false, false);
         }
         assert!(blob.tonicity < 0.17);
         assert!(!has_self_intersections(&blob.particles));
@@ -34,7 +34,7 @@ mod tests {
         let mut blob = Blob::new(Vec2::ZERO, radius);
         let dt = 1.0 / 120.0;
         for _ in 0..600 {
-            blob.step_with_vigor(dt, 0.0, false, &[platform], 0.0, false, false);
+            blob.step_with_vigor(dt, 0.0, false, &[platform], &[], 0.0, false, false);
         }
 
         let contact_y = platform.center.y
@@ -48,6 +48,61 @@ mod tests {
         let area = polygon_area(&blob.particles).abs();
         assert!(lowest >= contact_y - 0.05);
         assert!(area >= blob.rest_area * 0.90);
+        assert!(!has_self_intersections(&blob.particles));
+    }
+
+    #[test]
+    fn convex_fixture_projects_particles_out_without_folding_membrane() {
+        let fixture = vec![
+            Vec2::new(-120.0, -80.0),
+            Vec2::new(120.0, -80.0),
+            Vec2::new(120.0, 40.0),
+        ];
+        let mut blob = Blob::new(Vec2::new(70.0, 35.0), 35.0);
+        for _ in 0..120 {
+            blob.step_with_vigor(
+                1.0 / 120.0,
+                0.0,
+                false,
+                &[],
+                std::slice::from_ref(&fixture),
+                0.0,
+                false,
+                true,
+            );
+        }
+        assert!(!blob
+            .particles
+            .iter()
+            .any(|particle| convex_penetration(particle.position, &fixture).is_some()));
+        assert!(!has_self_intersections(&blob.particles));
+    }
+
+    #[test]
+    fn releasing_jump_from_fixture_moves_outward_without_false_impact() {
+        let fixture = vec![
+            Vec2::new(-200.0, -100.0),
+            Vec2::new(200.0, -100.0),
+            Vec2::new(200.0, 100.0),
+        ];
+        let fixtures = std::slice::from_ref(&fixture);
+        let dt = 1.0 / 120.0;
+        let mut blob = Blob::new(Vec2::new(0.0, 38.0), 30.0);
+        for _ in 0..90 {
+            blob.step_with_vigor(dt, 0.0, false, &[], fixtures, 1.0, true, true);
+        }
+        for _ in 0..75 {
+            blob.step_with_vigor(dt, 0.0, true, &[], fixtures, 1.0, true, true);
+        }
+        let velocity_before_release = blob.velocity();
+        let support_normal = blob.support_normal;
+        blob.step_with_vigor(dt, 0.0, false, &[], fixtures, 1.0, true, true);
+
+        let launch_impulse = blob.velocity() - velocity_before_release;
+        assert!(launch_impulse.dot(support_normal) > 0.0);
+        assert!(launch_impulse.normalize_or_zero().dot(support_normal) > 0.90);
+        assert!(blob.ignores_impact_trauma());
+        assert!(blob.last_impact_speed < 1.0);
         assert!(!has_self_intersections(&blob.particles));
     }
 

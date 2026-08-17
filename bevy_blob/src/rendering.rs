@@ -194,6 +194,9 @@ pub(super) fn draw_world(
             Color::srgb(0.18, 0.27, 0.38),
         );
     }
+    for fixture in &level.fixtures {
+        gizmos.lineloop_2d(fixture.iter().copied(), Color::srgb(0.24, 0.38, 0.52));
+    }
 
     for active_blob in &blobs.active {
         let blob = &active_blob.body;

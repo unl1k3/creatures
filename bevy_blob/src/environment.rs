@@ -16,7 +16,7 @@ pub(super) enum GameLayer {
 
 #[derive(Component, Debug)]
 pub(super) struct EnvironmentCollider {
-    platform_index: usize,
+    platform_index: Option<usize>,
 }
 
 #[derive(Component, Debug)]
@@ -25,7 +25,12 @@ pub(super) struct AvianMigratedSurface;
 #[derive(Resource)]
 pub(super) struct Level {
     pub(super) platforms: Vec<Platform>,
+    pub(super) fixtures: Vec<Vec<Vec2>>,
+    pub(super) spawn_position: Vec2,
 }
+
+#[derive(Resource, Default)]
+pub(super) struct TestScenario(pub(super) u8);
 
 #[derive(Resource, Default)]
 pub(super) struct AvianContactDiagnostics {
@@ -65,15 +70,89 @@ impl Level {
                 platform(210.0, 510.0, 280.0, 28.0),
                 platform(-170.0, 735.0, 300.0, 28.0),
             ],
+            fixtures: Vec::new(),
+            spawn_position: BLOB_START,
+        }
+    }
+
+    fn test_scenario(index: u8) -> (Self, Vec2) {
+        match index {
+            2 => (
+                Self {
+                    platforms: vec![
+                        platform(0.0, -370.0, 760.0, 38.0),
+                        platform(0.0, -245.0, 70.0, 210.0),
+                    ],
+                    fixtures: Vec::new(),
+                    spawn_position: Vec2::new(0.0, -80.0),
+                },
+                Vec2::new(0.0, -80.0),
+            ),
+            3 => (
+                Self {
+                    platforms: vec![
+                        platform(0.0, -370.0, 760.0, 38.0),
+                        platform(-210.0, -310.0, 130.0, 80.0),
+                        platform(-70.0, -265.0, 130.0, 170.0),
+                        platform(70.0, -220.0, 130.0, 260.0),
+                        platform(210.0, -175.0, 130.0, 350.0),
+                    ],
+                    fixtures: Vec::new(),
+                    spawn_position: Vec2::new(-285.0, -275.0),
+                },
+                Vec2::new(-285.0, -275.0),
+            ),
+            4 => (
+                Self {
+                    platforms: vec![platform(0.0, -370.0, 760.0, 38.0)],
+                    fixtures: vec![vec![
+                        Vec2::new(-300.0, -350.0),
+                        Vec2::new(300.0, -350.0),
+                        Vec2::new(300.0, 20.0),
+                    ]],
+                    spawn_position: Vec2::new(-245.0, -270.0),
+                },
+                Vec2::new(-245.0, -270.0),
+            ),
+            5 => {
+                let radius = 220.0;
+                let base = -350.0;
+                let mut mound = vec![Vec2::new(-radius, base - 24.0)];
+                for step in 0..=16 {
+                    let x = -radius + radius * 2.0 * step as f32 / 16.0;
+                    let y = base + (radius * radius - x * x).max(0.0).sqrt();
+                    mound.push(Vec2::new(x, y));
+                }
+                mound.push(Vec2::new(radius, base - 24.0));
+                (
+                    Self {
+                        platforms: vec![platform(0.0, -390.0, 760.0, 38.0)],
+                        fixtures: vec![mound],
+                        spawn_position: Vec2::new(0.0, -65.0),
+                    },
+                    Vec2::new(0.0, -65.0),
+                )
+            }
+            _ => (Self::prototype(), BLOB_START),
         }
     }
 }
 
 pub(super) fn setup_environment(mut commands: Commands) {
     let level = Level::prototype();
+    spawn_level_colliders(&mut commands, &level);
+    commands.insert_resource(level);
+    commands.insert_resource(TestScenario::default());
+    commands.insert_resource(AvianContactDiagnostics::default());
+    commands.insert_resource(AvianContactManifolds::default());
+}
+
+fn spawn_level_colliders(commands: &mut Commands, level: &Level) {
     for (platform_index, platform) in level.platforms.iter().copied().enumerate() {
         let mut entity = commands.spawn((
-            EnvironmentCollider { platform_index },
+            EnvironmentCollider {
+                platform_index: Some(platform_index),
+            },
             RigidBody::Static,
             Collider::rectangle(platform.half_size.x * 2.0, platform.half_size.y * 2.0),
             CollisionLayers::new(
@@ -90,9 +169,58 @@ pub(super) fn setup_environment(mut commands: Commands) {
             entity.insert(AvianMigratedSurface);
         }
     }
-    commands.insert_resource(level);
-    commands.insert_resource(AvianContactDiagnostics::default());
-    commands.insert_resource(AvianContactManifolds::default());
+    for vertices in &level.fixtures {
+        if let Some(collider) = Collider::convex_hull(vertices.clone()) {
+            commands.spawn((
+                EnvironmentCollider {
+                    platform_index: None,
+                },
+                AvianMigratedSurface,
+                RigidBody::Static,
+                collider,
+                CollisionLayers::new(
+                    [GameLayer::Environment],
+                    [
+                        GameLayer::LivingBlob,
+                        GameLayer::Corpse,
+                        GameLayer::Projectile,
+                    ],
+                ),
+            ));
+        }
+    }
+}
+
+pub(super) fn switch_test_scenario(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut commands: Commands,
+    colliders: Query<Entity, With<EnvironmentCollider>>,
+    mut scenario: ResMut<TestScenario>,
+    mut level: ResMut<Level>,
+    mut blobs: ResMut<BlobWorld>,
+    mut vitality: ResMut<VitalityWorld>,
+) {
+    let requested = (1..=5).find(|index| {
+        keyboard.just_pressed(match index {
+            1 => KeyCode::F1,
+            2 => KeyCode::F2,
+            3 => KeyCode::F3,
+            4 => KeyCode::F4,
+            _ => KeyCode::F5,
+        })
+    });
+    let Some(requested) = requested else {
+        return;
+    };
+    for entity in &colliders {
+        commands.entity(entity).despawn();
+    }
+    let (new_level, spawn) = Level::test_scenario(requested);
+    spawn_level_colliders(&mut commands, &new_level);
+    *level = new_level;
+    scenario.0 = requested;
+    reset_world_at(&mut blobs, spawn);
+    vitality.reset();
 }
 
 pub(super) fn resolve_avian_environment(
@@ -108,12 +236,30 @@ pub(super) fn resolve_avian_environment(
     for active_blob in &mut blobs.active {
         let blob_center = active_blob.body.center();
         let skin = 5.0 * active_blob.body.size_scale();
+        let ignore_impact_trauma = active_blob.body.ignores_impact_trauma();
         let mut grounded = false;
-        let mut maximum_impact = 0.0_f32;
+        let mut support_normal_sum = Vec2::ZERO;
+        let mut support_count = 0;
+        let mut impacts = Vec::new();
         for particle in &mut active_blob.body.particles {
             let movement = particle.position - particle.previous;
             let movement_length = movement.length();
-            if let Ok(direction) = Dir2::new(movement)
+            let current_projection = spatial_query.project_point_predicate(
+                particle.position,
+                false,
+                &filter,
+                &|entity| migrated_surfaces.contains(entity),
+            );
+            let exited_surface = spatial_query
+                .project_point_predicate(particle.previous, false, &filter, &|entity| {
+                    migrated_surfaces.contains(entity)
+                })
+                .is_some_and(|projection| projection.is_inside)
+                && current_projection
+                    .as_ref()
+                    .is_none_or(|projection| !projection.is_inside);
+            if !exited_surface
+                && let Ok(direction) = Dir2::new(movement)
                 && let Some(hit) = spatial_query.cast_ray_predicate(
                     particle.previous,
                     direction,
@@ -126,26 +272,32 @@ pub(super) fn resolve_avian_environment(
                 let surface_point = particle.previous + *direction * hit.distance;
                 let contact = resolve_swept_particle(particle, surface_point, hit.normal, skin);
                 grounded |= contact.normal.y > 0.55;
-                maximum_impact =
-                    maximum_impact.max(contact.impact_displacement / dt.max(0.000_001));
+                if contact.normal.y > 0.55 {
+                    support_normal_sum += contact.normal;
+                    support_count += 1;
+                }
+                if !ignore_impact_trauma {
+                    impacts.push(contact.impact_displacement / dt.max(0.000_001));
+                }
                 continue;
             }
-            let Some(projection) = spatial_query.project_point_predicate(
-                particle.position,
-                false,
-                &filter,
-                &|entity| migrated_surfaces.contains(entity),
-            ) else {
+            let Some(projection) = current_projection else {
                 continue;
             };
             let (surface_point, forced_normal) = if projection.is_inside {
                 let Ok(marker) = environment_colliders.get(projection.entity) else {
                     continue;
                 };
-                let platform = level.platforms[marker.platform_index];
-                let (point, normal) =
-                    stable_inside_surface(particle.position, blob_center, platform);
-                (point, Some(normal))
+                if let Some(platform_index) = marker.platform_index {
+                    let platform = level.platforms[platform_index];
+                    let (point, normal) =
+                        stable_inside_surface(particle.position, blob_center, platform);
+                    (point, Some(normal))
+                } else {
+                    let normal = (projection.point - particle.position)
+                        .normalize_or((particle.position - blob_center).normalize_or(Vec2::Y));
+                    (projection.point, Some(normal))
+                }
             } else {
                 (projection.point, None)
             };
@@ -159,10 +311,34 @@ pub(super) fn resolve_avian_environment(
                 continue;
             };
             grounded |= contact.normal.y > 0.55;
-            maximum_impact = maximum_impact.max(contact.impact_displacement / dt.max(0.000_001));
+            if contact.normal.y > 0.55 {
+                support_normal_sum += contact.normal;
+                support_count += 1;
+            }
+            if !ignore_impact_trauma {
+                impacts.push(contact.impact_displacement / dt.max(0.000_001));
+            }
         }
         active_blob.body.grounded |= grounded;
-        active_blob.body.last_impact_speed = active_blob.body.last_impact_speed.max(maximum_impact);
+        if support_count > 0 {
+            active_blob
+                .body
+                .record_support_normal(support_normal_sum / support_count as f32);
+        }
+        active_blob.body.last_impact_speed = active_blob
+            .body
+            .last_impact_speed
+            .max(contact_patch_impact(&mut impacts));
+    }
+}
+
+fn contact_patch_impact(impacts: &mut [f32]) -> f32 {
+    impacts.sort_by(|first, second| second.total_cmp(first));
+    match impacts {
+        [] => 0.0,
+        [single] => *single * 0.68,
+        [first, second] => (*first * 0.72 + *second * 0.28) * 0.84,
+        [first, second, third, ..] => *first * 0.62 + *second * 0.25 + *third * 0.13,
     }
 }
 
@@ -388,6 +564,12 @@ fn platform(x: f32, y: f32, width: f32, height: f32) -> Platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn isolated_corner_contact_is_not_treated_as_full_body_impact() {
+        assert_eq!(contact_patch_impact(&mut [1_000.0]), 680.0);
+        assert!(contact_patch_impact(&mut [1_000.0, 900.0, 800.0]) > 900.0);
+    }
 
     #[test]
     fn every_platform_gets_one_static_avian_collider_at_the_same_position() {

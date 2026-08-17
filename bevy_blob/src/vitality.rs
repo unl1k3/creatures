@@ -152,7 +152,8 @@ pub(super) fn simulate_vitality(
             vitality.health = (vitality.health - STARVATION_DAMAGE * dt).max(0.0);
         }
 
-        vitality.last_impact = active_blob.body.last_impact_speed;
+        let shield_absorption = shields.extension(active_blob.id) * 0.38;
+        vitality.last_impact = active_blob.body.last_impact_speed * (1.0 - shield_absorption);
         vitality.trauma = (vitality.trauma - dt * 0.16).max(0.0);
         if vitality.last_impact > PAINFUL_IMPACT_SPEED {
             let severity = ((vitality.last_impact - PAINFUL_IMPACT_SPEED)

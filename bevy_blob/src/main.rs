@@ -24,7 +24,7 @@ use camera::follow_camera;
 use camera::selected_camera_target;
 use environment::{
     AvianContactDiagnostics, Level, resolve_avian_environment, sample_avian_contacts,
-    setup_environment,
+    setup_environment, switch_test_scenario,
 };
 use hud::{arrange_auxiliary_windows, setup_legend, toggle_legend, update_metrics};
 #[cfg(test)]
@@ -115,6 +115,7 @@ fn main() {
                 exit_on_escape,
                 arrange_auxiliary_windows,
                 toggle_legend,
+                switch_test_scenario,
                 handle_blob_actions,
                 fire_acid,
                 cycle_selection,
@@ -199,7 +200,8 @@ fn simulate_blob(
                 && alive
                 && shield_extension < 0.05
                 && keyboard.pressed(KeyCode::ArrowDown),
-            &level.platforms[4..],
+            level.platforms.get(4..).unwrap_or(&[]),
+            &level.fixtures,
             vigor,
             alive,
             true,
@@ -211,11 +213,11 @@ fn simulate_blob(
     resolve_blob_collisions_with_vitality(&mut blobs.active, &vitality);
 }
 
-fn reset_world(blobs: &mut BlobWorld) {
+fn reset_world_at(blobs: &mut BlobWorld, position: Vec2) {
     blobs.active = vec![ActiveBlob {
         id: 0,
         parent_id: None,
-        body: Blob::new(BLOB_START, INITIAL_RADIUS),
+        body: Blob::new(position, INITIAL_RADIUS),
     }];
     blobs.selected = 0;
     blobs.rejoin_parent = None;
@@ -495,8 +497,10 @@ fn resolve_blob_collisions_impl(
             // arm a jump.
             if normal.y > 0.55 && second_alive {
                 second.grounded = true;
+                second.record_support_normal(normal);
             } else if normal.y < -0.55 && first_alive {
                 first.grounded = true;
+                first.record_support_normal(-normal);
             }
 
             let relative_normal_speed = (second.velocity() - first.velocity()).dot(normal);

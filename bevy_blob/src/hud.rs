@@ -12,7 +12,7 @@ const METRICS_LAYER: usize = 2;
 // WindowResolution describes the client area and excludes native borders and
 // title bars. Keep enough logical space for those decorations on every OS.
 const NATIVE_WINDOW_GAP: f32 = 64.0;
-const CONTROLS: &str = "CONTROLS\n\nA / D or arrows   Roll and move\nHold Down         Charge jump\nRelease Down      Jump\nQ                 Pseudo-spine shield\nSpace             Radial acid burst\nX                 Split selected blob\nTab               Select next blob\nE                 Rejoin siblings\nR                 Reset game\nH                 Show / hide this window\nEsc               Exit";
+const CONTROLS: &str = "CONTROLS\n\nA / D or arrows   Roll and move\nHold Down         Charge jump\nRelease Down      Jump\nQ                 Pseudo-spine shield\nSpace             Radial acid burst\nX                 Split selected blob\nTab               Select next blob\nE                 Rejoin siblings\nR                 Reset game\nF1                Standard level\nF2                Narrow pedestal\nF3                Stair test\nF4                Ramp test\nF5                Semicircle test\nH                 Show / hide this window\nEsc               Exit";
 
 #[derive(Resource)]
 pub(super) struct LegendState {
@@ -36,7 +36,7 @@ pub(super) fn setup_legend(mut commands: Commands) {
             ControlsWindow,
             Window {
                 title: "Blob — Controls".into(),
-                resolution: WindowResolution::new(390, 430),
+                resolution: WindowResolution::new(390, 550),
                 position: WindowPosition::At(IVec2::new(1_000, 30)),
                 resizable: false,
                 enabled_buttons: EnabledButtons {

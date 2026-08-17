@@ -27,6 +27,7 @@ pub(super) fn cycle_selection(
 pub(super) fn handle_blob_actions(
     keyboard: Res<ButtonInput<KeyCode>>,
     fixed_time: Res<Time<Fixed>>,
+    level: Res<Level>,
     mut blobs: ResMut<BlobWorld>,
     mut split_rng: ResMut<SplitRng>,
     mut acid: ResMut<AcidWorld>,
@@ -34,7 +35,7 @@ pub(super) fn handle_blob_actions(
     mut vitality: ResMut<VitalityWorld>,
 ) {
     if keyboard.just_pressed(KeyCode::KeyR) {
-        reset_world(&mut blobs);
+        reset_world_at(&mut blobs, level.spawn_position);
         acid.reset();
         shields.reset();
         vitality.reset();
