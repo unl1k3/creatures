@@ -239,6 +239,20 @@ mod tests {
     }
 
     #[test]
+    fn swept_collision_catches_a_particle_beyond_the_opposite_face() {
+        let min = Vec2::new(-50.0, -10.0);
+        let max = Vec2::new(50.0, 10.0);
+        assert_eq!(
+            swept_aabb_entry(Vec2::new(0.0, -35.0), Vec2::new(0.0, 35.0), min, max),
+            Some((2, 25.0 / 70.0))
+        );
+        assert_eq!(
+            swept_aabb_entry(Vec2::new(0.0, 35.0), Vec2::new(0.0, -35.0), min, max),
+            Some((3, 25.0 / 70.0))
+        );
+    }
+
+    #[test]
     fn tiny_blob_does_not_wrap_around_a_ceiling() {
         let radius = 15.0;
         let floor = Platform {

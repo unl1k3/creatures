@@ -188,7 +188,8 @@ fn simulate_blob(
     for (index, active_blob) in blobs.active.iter_mut().enumerate() {
         let is_selected = index == selected;
         let alive = vitality.is_alive(active_blob.id);
-        if !alive {
+        let protrusion_active = nutrition.has_external_protrusion(active_blob.id);
+        if !alive || protrusion_active {
             active_blob.body.cancel_jump_charge();
         }
         let vigor = vitality.vigor(active_blob.id) * nutrition.capability_factor(active_blob.id);
@@ -203,7 +204,13 @@ fn simulate_blob(
                 .as_ref()
                 .map(|directions| directions[index])
                 .unwrap_or(if is_selected {
-                    horizontal as f32 * (1.0 - shield_extension * 0.58)
+                    horizontal as f32
+                        * (1.0 - shield_extension * 0.58)
+                        * if nutrition.has_external_protrusion(active_blob.id) {
+                            0.0
+                        } else {
+                            1.0
+                        }
                 } else {
                     0.0
                 })
@@ -216,9 +223,10 @@ fn simulate_blob(
             rejoin_directions.is_none()
                 && is_selected
                 && alive
+                && !protrusion_active
                 && shield_extension < 0.05
                 && keyboard.pressed(KeyCode::ArrowDown),
-            level.platforms.get(4..).unwrap_or(&[]),
+            &level.platforms,
             &level.fixtures,
             vigor,
             alive,

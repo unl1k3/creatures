@@ -322,4 +322,43 @@ mod tests {
         world.active[first_index].body.translate(first_offset);
         world.active[second_index].body.translate(second_offset);
     }
+
+    #[test]
+    fn four_way_sized_fragment_cannot_enter_first_overhead_platform() {
+        let floor = Platform {
+            center: Vec2::new(0.0, -370.0),
+            half_size: Vec2::new(330.0, 19.0),
+        };
+        let overhead = Platform {
+            center: Vec2::new(-250.0, -150.0),
+            half_size: Vec2::new(130.0, 14.0),
+        };
+        let platforms = [floor, overhead];
+        let radius = INITIAL_RADIUS * 0.48;
+        let spawn = Vec2::new(-250.0, floor.center.y + floor.half_size.y + radius);
+        let mut blob = Blob::new_with_count(spawn, radius, 18);
+        let dt = 1.0 / 120.0;
+
+        for _ in 0..45 {
+            blob.step_with_vigor(dt, 0.0, false, &platforms, &[], 1.0, true, true);
+        }
+        for _ in 0..90 {
+            blob.step_with_vigor(dt, 0.0, true, &platforms, &[], 1.0, true, true);
+        }
+        blob.step_with_vigor(dt, 0.0, false, &platforms, &[], 1.0, true, true);
+
+        let mut reached_ceiling = false;
+        for _ in 0..180 {
+            blob.step_with_vigor(dt, 0.0, false, &platforms, &[], 1.0, true, true);
+            reached_ceiling |= blob.center().y + radius >= overhead.center.y - overhead.half_size.y;
+            assert!(blob.particles.iter().all(|particle| {
+                let inside_x = (particle.position.x - overhead.center.x).abs()
+                    < overhead.half_size.x;
+                let inside_y = (particle.position.y - overhead.center.y).abs()
+                    < overhead.half_size.y;
+                !(inside_x && inside_y)
+            }));
+        }
+        assert!(reached_ceiling, "test fragment never reached the overhead platform");
+    }
 }

@@ -804,11 +804,12 @@ impl Blob {
             for platform in platforms {
                 let min = platform.center - platform.half_size - Vec2::splat(skin);
                 let max = platform.center + platform.half_size + Vec2::splat(skin);
-                if particle.position.x < min.x
-                    || particle.position.x > max.x
-                    || particle.position.y < min.y
-                    || particle.position.y > max.y
-                {
+                let inside = particle.position.x >= min.x
+                    && particle.position.x <= max.x
+                    && particle.position.y >= min.y
+                    && particle.position.y <= max.y;
+                let swept_entry = swept_aabb_entry(particle.previous, particle.position, min, max);
+                if !inside && swept_entry.is_none() {
                     continue;
                 }
 
@@ -816,10 +817,15 @@ impl Blob {
                 // in one frame. Use the entry face from its swept path so all
                 // membrane points are returned to the side they came from,
                 // instead of splitting the contour across both faces.
-                let side = collision_entry_side(particle, min, max);
+                let side = swept_entry
+                    .map(|(side, _)| side)
+                    .unwrap_or_else(|| collision_entry_side(particle, min, max));
                 let normal = [Vec2::NEG_X, Vec2::X, Vec2::NEG_Y, Vec2::Y][side];
                 let impact_speed = -(particle.position - particle.previous).dot(normal);
                 self.last_impact_speed = self.last_impact_speed.max(impact_speed.max(0.0));
+                if !inside && let Some((_, time)) = swept_entry {
+                    particle.position = particle.previous.lerp(particle.position, time);
+                }
                 match side {
                     0 => {
                         particle.position.x = min.x;
@@ -938,6 +944,49 @@ fn collision_entry_side(particle: &Particle, min: Vec2, max: Vec2) -> usize {
         .map(|(side, _)| side)
         .unwrap_or(3)
     })
+}
+
+fn swept_aabb_entry(start: Vec2, end: Vec2, min: Vec2, max: Vec2) -> Option<(usize, f32)> {
+    if start.x >= min.x && start.x <= max.x && start.y >= min.y && start.y <= max.y {
+        return None;
+    }
+    let movement = end - start;
+    let mut entry_time = 0.0_f32;
+    let mut exit_time = 1.0_f32;
+    let mut entry_side = 0;
+    for axis in 0..2 {
+        let origin = if axis == 0 { start.x } else { start.y };
+        let delta = if axis == 0 { movement.x } else { movement.y };
+        let lower = if axis == 0 { min.x } else { min.y };
+        let upper = if axis == 0 { max.x } else { max.y };
+        if delta.abs() < 0.000_001 {
+            if origin < lower || origin > upper {
+                return None;
+            }
+            continue;
+        }
+        let mut near = (lower - origin) / delta;
+        let mut far = (upper - origin) / delta;
+        let near_side = if axis == 0 {
+            if delta > 0.0 { 0 } else { 1 }
+        } else if delta > 0.0 {
+            2
+        } else {
+            3
+        };
+        if near > far {
+            std::mem::swap(&mut near, &mut far);
+        }
+        if near > entry_time {
+            entry_time = near;
+            entry_side = near_side;
+        }
+        exit_time = exit_time.min(far);
+        if entry_time > exit_time {
+            return None;
+        }
+    }
+    (entry_time <= 1.0 && exit_time >= 0.0).then_some((entry_side, entry_time.max(0.0)))
 }
 
 fn has_self_intersections(particles: &[Particle]) -> bool {

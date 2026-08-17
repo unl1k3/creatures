@@ -123,6 +123,21 @@ impl NutritionWorld {
         self.digestion_progress(blob_id).is_some()
     }
 
+    pub(super) fn has_external_protrusion(&self, blob_id: u64) -> bool {
+        self.probe
+            .is_some_and(|probe| probe.blob_id == blob_id && probe.extension > 0.01)
+            || self.nutrients.iter().any(|nutrient| {
+                matches!(
+                    nutrient.state,
+                    NutrientState::Engulfing {
+                        blob_id: id,
+                        elapsed,
+                        ..
+                    } if id == blob_id && elapsed > 0.005
+                )
+            })
+    }
+
     pub(super) fn internal_load(&self, blob_id: u64) -> Option<(Vec2, f32, f32, f32, usize, f32)> {
         self.nutrients
             .iter()
@@ -199,7 +214,7 @@ pub(super) fn start_phagocytosis(
     vitality: Res<VitalityWorld>,
     mut nutrition: ResMut<NutritionWorld>,
 ) {
-    if !keyboard.just_pressed(KeyCode::KeyC) {
+    if !keyboard.just_pressed(KeyCode::KeyC) || movement_command(&keyboard) {
         return;
     }
     let Some(blob) = blobs.active.get(blobs.selected) else {
@@ -348,25 +363,40 @@ pub(super) fn simulate_nutrition(
     mut nutrition: ResMut<NutritionWorld>,
 ) {
     let dt = time.delta_secs();
+    let rolling_command = movement_command(&keyboard);
     if let Some(mut probe) = nutrition.probe {
         if let Some(blob) = living_host(&blobs, &vitality, probe.blob_id) {
             probe.age += dt;
-            if keyboard.pressed(KeyCode::KeyC) {
+            if keyboard.pressed(KeyCode::KeyC) && !rolling_command {
                 probe.extension = (probe.extension + dt / 0.48).min(1.0);
             } else {
                 probe.extension = (probe.extension - dt / 0.34).max(0.0);
             }
             let sweep = (probe.age * 5.4).sin() * 0.38;
             let direction = Vec2::from_angle(sweep).rotate(probe.direction);
-            probe.tip = blob.body.center()
+            let desired_tip = blob.body.center()
                 + direction * (blob.body.rest_radius + PHAGOCYTOSIS_REACH * probe.extension);
-            nutrition.probe =
-                (probe.extension > 0.001 || keyboard.pressed(KeyCode::KeyC)).then_some(probe);
+            probe.tip = constrain_protrusion_load(
+                &blob.body,
+                blob.id,
+                &blobs,
+                desired_tip,
+                4.2,
+                smoothstep(probe.extension),
+                probe.variation,
+                probe.anchor_edge,
+                probe.anchor_t,
+                &level,
+            );
+            nutrition.probe = (probe.extension > 0.001
+                || (keyboard.pressed(KeyCode::KeyC) && !rolling_command))
+                .then_some(probe);
         } else {
             nutrition.probe = None;
         }
     }
     if keyboard.pressed(KeyCode::KeyC)
+        && !rolling_command
         && let Some(probe) = nutrition.probe
         && probe.extension > 0.88
         && let Some(blob) = living_host(&blobs, &vitality, probe.blob_id)
@@ -414,6 +444,7 @@ pub(super) fn simulate_nutrition(
         }
     }
 
+    let mut interrupted_probe = None;
     for nutrient in &mut nutrition.nutrients {
         match nutrient.state {
             NutrientState::Available { mut velocity } => {
@@ -437,7 +468,7 @@ pub(super) fn simulate_nutrition(
                 mut elapsed,
                 origin,
                 reach,
-                probe_tip: _,
+                probe_tip,
                 mut contact_elapsed,
                 variation,
                 anchor_edge,
@@ -447,6 +478,22 @@ pub(super) fn simulate_nutrition(
                     make_waste(nutrient, Vec2::new(35.0, 80.0));
                     continue;
                 };
+                if rolling_command && contact_elapsed.is_none() {
+                    interrupted_probe = Some(ExploratoryProbe {
+                        blob_id,
+                        age: 0.0,
+                        extension: (elapsed / 0.48).clamp(0.0, 1.0),
+                        direction: (probe_tip - blob.body.center()).normalize_or(Vec2::X),
+                        tip: probe_tip,
+                        variation,
+                        anchor_edge,
+                        anchor_t,
+                    });
+                    nutrient.state = NutrientState::Available {
+                        velocity: Vec2::ZERO,
+                    };
+                    continue;
+                }
                 elapsed += dt;
                 let extension = smoothstep((elapsed / 0.48).clamp(0.0, 1.0));
                 let base_direction = (origin - blob.body.center()).normalize_or(Vec2::X);
@@ -455,6 +502,21 @@ pub(super) fn simulate_nutrition(
                 let mut probe_tip = blob.body.center()
                     + probing_direction
                         * (blob.body.rest_radius + reach * extension + nutrient.radius * 0.62);
+                let grip = contact_elapsed
+                    .map(|value| (value / 0.22).clamp(0.0, 1.0))
+                    .unwrap_or(0.0);
+                probe_tip = constrain_protrusion_load(
+                    &blob.body,
+                    blob.id,
+                    &blobs,
+                    probe_tip,
+                    (nutrient.radius * (0.34 + grip * 0.22)).max(3.2),
+                    extension,
+                    variation,
+                    anchor_edge,
+                    anchor_t,
+                    &level,
+                );
                 if contact_elapsed.is_none()
                     && probe_tip.distance(origin) <= nutrient.radius * 0.82 + 3.2
                 {
@@ -601,11 +663,160 @@ pub(super) fn simulate_nutrition(
             }
         }
     }
+    if let Some(probe) = interrupted_probe {
+        nutrition.probe = Some(probe);
+    }
+}
+
+fn movement_command(keyboard: &ButtonInput<KeyCode>) -> bool {
+    keyboard.pressed(KeyCode::ArrowLeft)
+        || keyboard.pressed(KeyCode::ArrowRight)
+        || keyboard.pressed(KeyCode::KeyA)
+        || keyboard.pressed(KeyCode::KeyD)
 }
 
 fn smoothstep(value: f32) -> f32 {
     let value = value.clamp(0.0, 1.0);
     value * value * (3.0 - 2.0 * value)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn constrain_protrusion_load(
+    blob: &Blob,
+    host_id: u64,
+    blobs: &BlobWorld,
+    desired: Vec2,
+    load_radius: f32,
+    strength: f32,
+    variation: f32,
+    anchor_edge: usize,
+    anchor_t: f32,
+    level: &Level,
+) -> Vec2 {
+    if strength <= 0.01
+        || !protrusion_intersects_environment(
+            blob,
+            host_id,
+            blobs,
+            desired,
+            load_radius,
+            strength,
+            variation,
+            anchor_edge,
+            anchor_t,
+            level,
+        )
+    {
+        return desired;
+    }
+    let base = blob.particles[(anchor_edge + 1) % blob.particles.len()].position;
+    let mut clear = 0.0;
+    let mut blocked = 1.0;
+    for _ in 0..10 {
+        let candidate = (clear + blocked) * 0.5;
+        let position = base.lerp(desired, candidate);
+        if protrusion_intersects_environment(
+            blob,
+            host_id,
+            blobs,
+            position,
+            load_radius,
+            strength,
+            variation,
+            anchor_edge,
+            anchor_t,
+            level,
+        ) {
+            blocked = candidate;
+        } else {
+            clear = candidate;
+        }
+    }
+    base.lerp(desired, clear)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn protrusion_intersects_environment(
+    blob: &Blob,
+    host_id: u64,
+    blobs: &BlobWorld,
+    load_position: Vec2,
+    load_radius: f32,
+    strength: f32,
+    variation: f32,
+    anchor_edge: usize,
+    anchor_t: f32,
+    level: &Level,
+) -> bool {
+    const SAMPLES: usize = 22;
+    let count = blob.particles.len();
+    let edge = anchor_edge % count;
+    let start = blob.particles[edge].position;
+    let base = blob.particles[(edge + 1) % count].position;
+    let end = blob.particles[(edge + 2) % count].position;
+    let tip = base.lerp(load_position, strength.clamp(0.0, 1.0));
+    let length = base.distance(tip);
+    if length < 0.5 {
+        return false;
+    }
+    let load_direction = (load_position - blob.center()).normalize_or(Vec2::X);
+    let normal_axis = load_direction.perp();
+    let secondary = (variation * 7.137).fract();
+    let asymmetry = (anchor_t.clamp(0.0, 1.0) - 0.5) * 0.08;
+    let start_attachment = start.lerp(base, 0.18 + asymmetry);
+    let end_attachment = base.lerp(end, 0.82 + asymmetry);
+    let tangent = (end_attachment - start_attachment).normalize_or(Vec2::X);
+    let mut root_normal = tangent.perp();
+    if root_normal.dot(base - blob.center()) < 0.0 {
+        root_normal = -root_normal;
+    }
+    let control_a = base
+        + root_normal * length * (0.30 + variation * 0.08)
+        + tangent * length * (variation - 0.5) * 0.05;
+    let control_b = base.lerp(tip, 0.72) + normal_axis * length * (secondary - 0.5) * 0.18;
+    let maximum_width = start_attachment.distance(end_attachment) * 0.5;
+    let width = (load_radius * (0.55 + strength * 0.45) * (0.88 + variation * 0.24))
+        .min(start.distance(end) * 0.48)
+        .max(0.5);
+    (4..=SAMPLES).any(|sample| {
+        let along = sample as f32 / SAMPLES as f32;
+        let inverse: f32 = 1.0 - along;
+        let centerline = base * inverse.powi(3)
+            + control_a * 3.0 * inverse.powi(2) * along
+            + control_b * 3.0 * inverse * along.powi(2)
+            + tip * along.powi(3);
+        let collision_radius = (width * (1.0 - along * 0.58).max(0.18))
+            .min(maximum_width * (1.0 - along * 0.58).max(0.18))
+            .max(1.2);
+        level.platforms.iter().any(|platform| {
+            circle_aabb_penetration(
+                centerline,
+                collision_radius,
+                platform.center,
+                platform.half_size,
+            )
+            .is_some()
+        }) || level.fixtures.iter().any(|vertices| {
+            circle_convex_penetration(centerline, collision_radius, vertices).is_some()
+        }) || blobs.active.iter().any(|other| {
+            other.id != host_id
+                && circle_intersects_blob_membrane(centerline, collision_radius, &other.body)
+        })
+    })
+}
+
+fn circle_intersects_blob_membrane(center: Vec2, radius: f32, blob: &Blob) -> bool {
+    point_inside_blob_membrane(center, blob)
+        || blob
+            .particles
+            .iter()
+            .zip(blob.particles.iter().cycle().skip(1))
+            .any(|(first, second)| {
+                let edge = second.position - first.position;
+                let t = ((center - first.position).dot(edge) / edge.length_squared().max(0.001))
+                    .clamp(0.0, 1.0);
+                center.distance_squared(first.position + edge * t) < radius * radius
+            })
 }
 
 fn membrane_lower_boundary(blob: &Blob, world_x: f32) -> f32 {
@@ -902,5 +1113,60 @@ mod tests {
         let (depth, normal) = circle_convex_penetration(Vec2::ZERO, 5.0, &fixture).unwrap();
         let projected = normal * depth;
         assert!(circle_convex_penetration(projected, 5.0, &fixture).is_none());
+    }
+
+    #[test]
+    fn protrusion_stops_before_crossing_a_platform() {
+        let blob = Blob::new(Vec2::ZERO, 20.0);
+        let (edge, anchor_t) = membrane_anchor(&blob, Vec2::new(100.0, 0.0));
+        let level = Level {
+            platforms: vec![Platform {
+                center: Vec2::new(50.0, 0.0),
+                half_size: Vec2::new(5.0, 30.0),
+            }],
+            fixtures: Vec::new(),
+            spawn_position: Vec2::ZERO,
+            route: Vec::new(),
+        };
+        let blobs = BlobWorld {
+            active: Vec::new(),
+            selected: 0,
+            rejoin_parent: None,
+            rejoin_elapsed: 0.0,
+            parent_links: HashMap::new(),
+            next_id: 1,
+        };
+        let tip = constrain_protrusion_load(
+            &blob,
+            0,
+            &blobs,
+            Vec2::new(100.0, 0.0),
+            4.2,
+            1.0,
+            0.61,
+            edge,
+            anchor_t,
+            &level,
+        );
+        assert!(
+            tip.x < 45.0,
+            "constrained tip crossed the platform: {tip:?}"
+        );
+        assert!(tip.x > 20.0, "protrusion collapsed completely: {tip:?}");
+    }
+
+    #[test]
+    fn protrusion_section_detects_another_blob_membrane() {
+        let other = Blob::new(Vec2::new(40.0, 0.0), 18.0);
+        assert!(circle_intersects_blob_membrane(
+            Vec2::new(21.0, 0.0),
+            4.0,
+            &other
+        ));
+        assert!(!circle_intersects_blob_membrane(
+            Vec2::new(0.0, 45.0),
+            4.0,
+            &other
+        ));
     }
 }

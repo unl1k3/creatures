@@ -1,7 +1,8 @@
 use super::*;
 use crate::blob::Particle;
 use avian2d::prelude::{
-    Collider, CollisionLayers, PhysicsLayer, RigidBody, SpatialQuery, SpatialQueryFilter,
+    Collider, CollisionLayers, PhysicsLayer, RigidBody, ShapeCastConfig, SpatialQuery,
+    SpatialQueryFilter,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -381,7 +382,6 @@ pub(super) fn advance_route_progress(
 pub(super) fn resolve_avian_environment(
     time: Res<Time<Fixed>>,
     spatial_query: SpatialQuery,
-    migrated_surfaces: Query<(), With<AvianMigratedSurface>>,
     environment_colliders: Query<&EnvironmentCollider>,
     level: Res<Level>,
     mut blobs: ResMut<BlobWorld>,
@@ -391,6 +391,8 @@ pub(super) fn resolve_avian_environment(
     for active_blob in &mut blobs.active {
         let blob_center = active_blob.body.center();
         let skin = 5.0 * active_blob.body.size_scale();
+        let probe_radius = (skin * 0.55).max(0.8);
+        let probe = Collider::circle(probe_radius);
         let ignore_impact_trauma = active_blob.body.ignores_impact_trauma();
         let mut grounded = false;
         let mut support_normal_sum = Vec2::ZERO;
@@ -403,29 +405,25 @@ pub(super) fn resolve_avian_environment(
                 particle.position,
                 false,
                 &filter,
-                &|entity| migrated_surfaces.contains(entity),
+                &|entity| environment_colliders.contains(entity),
             );
-            let exited_surface = spatial_query
-                .project_point_predicate(particle.previous, false, &filter, &|entity| {
-                    migrated_surfaces.contains(entity)
-                })
-                .is_some_and(|projection| projection.is_inside)
-                && current_projection
-                    .as_ref()
-                    .is_none_or(|projection| !projection.is_inside);
-            if !exited_surface
-                && let Ok(direction) = Dir2::new(movement)
-                && let Some(hit) = spatial_query.cast_ray_predicate(
+            if let Ok(direction) = Dir2::new(movement)
+                && let Some(hit) = spatial_query.cast_shape_predicate(
+                    &probe,
                     particle.previous,
+                    0.0,
                     direction,
-                    movement_length,
-                    true,
+                    &ShapeCastConfig::from_max_distance(movement_length),
                     &filter,
-                    &|entity| migrated_surfaces.contains(entity),
+                    &|entity| environment_colliders.contains(entity),
                 )
             {
-                let surface_point = particle.previous + *direction * hit.distance;
-                let contact = resolve_swept_particle(particle, surface_point, hit.normal, skin);
+                let contact = resolve_swept_particle(
+                    particle,
+                    hit.point1,
+                    hit.normal1,
+                    probe_radius + skin * 0.45,
+                );
                 grounded |= contact.normal.y > 0.55;
                 if contact.normal.y > 0.55 {
                     support_normal_sum += contact.normal;
