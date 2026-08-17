@@ -7,6 +7,20 @@ pub(super) struct BlobMesh {
     blob_id: u64,
     parent_id: Option<u64>,
     selected: bool,
+    life_state: LifeState,
+    energy_band: u8,
+}
+
+fn blob_vital_color(parent_id: Option<u64>, selected: bool, vitality: Vitality) -> Color {
+    let base = blob_fill_color(parent_id, selected);
+    let fade = 0.52 + vitality.energy * 0.48;
+    let linear = base.to_srgba();
+    Color::srgba(
+        linear.red * fade,
+        linear.green * fade,
+        linear.blue * fade,
+        linear.alpha,
+    )
 }
 
 fn blob_family_rgb(parent_id: Option<u64>) -> (f32, f32, f32) {
@@ -47,6 +61,7 @@ pub(super) fn blob_fill_color(parent_id: Option<u64>, selected: bool) -> Color {
 pub(super) fn sync_blob_meshes(
     mut commands: Commands,
     blobs: Res<BlobWorld>,
+    vitality_world: Res<VitalityWorld>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut rendered: Query<(
@@ -77,11 +92,19 @@ pub(super) fn sync_blob_meshes(
             .active
             .get(blobs.selected)
             .is_some_and(|blob| blob.id == active_blob.id);
-        if marker.parent_id != active_blob.parent_id || marker.selected != selected {
+        let vitality = vitality_world.get(active_blob.id);
+        let energy_band = (vitality.energy * 20.0).round() as u8;
+        if marker.parent_id != active_blob.parent_id
+            || marker.selected != selected
+            || marker.life_state != vitality.state
+            || marker.energy_band != energy_band
+        {
             marker.parent_id = active_blob.parent_id;
             marker.selected = selected;
+            marker.life_state = vitality.state;
+            marker.energy_band = energy_band;
             if let Some(mut material) = materials.get_mut(&material_handle.0) {
-                material.color = blob_fill_color(active_blob.parent_id, selected);
+                material.color = blob_vital_color(active_blob.parent_id, selected, vitality);
             }
         }
     }
@@ -96,15 +119,19 @@ pub(super) fn sync_blob_meshes(
             .get(blobs.selected)
             .is_some_and(|blob| blob.id == active_blob.id);
         let mesh = meshes.add(create_blob_mesh(&active_blob.body));
-        let material = materials.add(ColorMaterial::from(blob_fill_color(
+        let vitality = vitality_world.get(active_blob.id);
+        let material = materials.add(ColorMaterial::from(blob_vital_color(
             active_blob.parent_id,
             selected,
+            vitality,
         )));
         commands.spawn((
             BlobMesh {
                 blob_id: active_blob.id,
                 parent_id: active_blob.parent_id,
                 selected,
+                life_state: vitality.state,
+                energy_band: (vitality.energy * 20.0).round() as u8,
             },
             Mesh2d(mesh),
             MeshMaterial2d(material),
@@ -154,7 +181,12 @@ fn update_blob_mesh(mesh: &mut Mesh, blob: &Blob) {
     mesh.insert_indices(Indices::U32(indices));
 }
 
-pub(super) fn draw_world(mut gizmos: Gizmos, blobs: Res<BlobWorld>, level: Res<Level>) {
+pub(super) fn draw_world(
+    mut gizmos: Gizmos,
+    blobs: Res<BlobWorld>,
+    vitality_world: Res<VitalityWorld>,
+    level: Res<Level>,
+) {
     for platform in &level.platforms {
         gizmos.rect_2d(
             platform.center,
@@ -165,7 +197,12 @@ pub(super) fn draw_world(mut gizmos: Gizmos, blobs: Res<BlobWorld>, level: Res<L
 
     for active_blob in &blobs.active {
         let blob = &active_blob.body;
-        let color = blob_family_color(active_blob.parent_id);
+        let vitality = vitality_world.get(active_blob.id);
+        let color = if vitality.is_alive() {
+            blob_family_color(active_blob.parent_id)
+        } else {
+            Color::srgba(0.48, 0.52, 0.54, 0.96)
+        };
         let outline = blob.particles.iter().map(|particle| particle.position);
         gizmos.lineloop_2d(outline, color);
         let center = blob.center();
@@ -177,9 +214,11 @@ pub(super) fn draw_world(mut gizmos: Gizmos, blobs: Res<BlobWorld>, level: Res<L
                 Color::srgba(0.12, 0.55, 0.48, 0.22),
             );
         }
-        gizmos.circle_2d(center, 9.0 * size_scale, Color::srgb(0.72, 0.42, 0.95));
+        if vitality.is_alive() {
+            gizmos.circle_2d(center, 9.0 * size_scale, Color::srgb(0.72, 0.42, 0.95));
+        }
 
-        if blob.charge > 0.0 {
+        if vitality.is_alive() && blob.charge > 0.0 {
             let radius = charge_indicator_radius(blob);
             let line_spacing = (1.8 * size_scale).max(0.9);
             gizmos.circle_2d(center, radius, Color::srgba(1.0, 0.72, 0.12, 0.20));

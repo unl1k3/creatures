@@ -39,15 +39,19 @@ pub struct Blob {
     pub particles: Vec<Particle>,
     pub rest_edge: f32,
     pub rest_second_neighbor: f32,
+    edge_rest_lengths: Vec<f32>,
+    curvature_rest_lengths: Vec<f32>,
     pub rest_area: f32,
     pub rest_radius: f32,
     pub grounded: bool,
     pub coyote: f32,
     pub charge: f32,
+    pub last_impact_speed: f32,
     was_charging: bool,
     jump_armed: bool,
     idle_phase: f32,
     idle_amount: f32,
+    tonicity: f32,
 }
 
 impl Blob {
@@ -74,15 +78,19 @@ impl Blob {
             particles,
             rest_edge,
             rest_second_neighbor,
+            edge_rest_lengths: vec![rest_edge; particle_count],
+            curvature_rest_lengths: vec![rest_second_neighbor; particle_count],
             rest_area,
             rest_radius: radius,
             grounded: false,
             coyote: 0.0,
             charge: 0.0,
+            last_impact_speed: 0.0,
             was_charging: false,
             jump_armed: false,
             idle_phase: 0.0,
             idle_amount: 0.0,
+            tonicity: 1.0,
         }
     }
 
@@ -186,6 +194,61 @@ impl Blob {
         }
     }
 
+    pub fn damp_velocity(&mut self, retention: f32) {
+        let retention = retention.clamp(0.0, 1.0);
+        for particle in &mut self.particles {
+            let velocity = particle.position - particle.previous;
+            particle.previous = particle.position - velocity * retention;
+        }
+    }
+
+    pub fn apply_contact_patch(
+        &mut self,
+        contact_point: Vec2,
+        contact_direction: Vec2,
+        depth: f32,
+        inelastic: bool,
+    ) {
+        let direction = contact_direction.normalize_or(Vec2::NEG_Y);
+        let center = self.center();
+        let tangent = direction.perp();
+        let patch_width = (self.rest_radius * 0.72).max(1.0);
+        let corrections = self
+            .particles
+            .iter()
+            .map(|particle| {
+                let offset = particle.position - center;
+                let facing = (offset.dot(direction) / self.rest_radius).clamp(0.0, 1.0);
+                let tangent_distance = (particle.position - contact_point).dot(tangent);
+                let locality = (-tangent_distance.powi(2) / (2.0 * patch_width.powi(2))).exp();
+                let weight = facing.powf(0.75) * locality;
+                if weight <= 0.001 {
+                    Vec2::ZERO
+                } else {
+                    -direction * depth * weight * 0.48
+                }
+            })
+            .collect::<Vec<_>>();
+        let average = corrections.iter().copied().sum::<Vec2>() / corrections.len() as f32;
+        for (particle, correction) in self.particles.iter_mut().zip(corrections) {
+            let correction = correction - average;
+            particle.position += correction;
+            if inelastic {
+                particle.previous += correction;
+            } else {
+                // Contact shaping should mostly change the silhouette, not
+                // inject a fresh Verlet impulse every fixed tick.
+                particle.previous += correction * 0.84;
+            }
+        }
+    }
+
+    pub fn cancel_jump_charge(&mut self) {
+        self.charge = 0.0;
+        self.was_charging = false;
+        self.jump_armed = false;
+    }
+
     pub fn center(&self) -> Vec2 {
         self.particles
             .iter()
@@ -198,10 +261,47 @@ impl Blob {
         self.rest_radius / REFERENCE_RADIUS
     }
 
+    pub fn scale_rest_shape(&mut self, factor: f32) {
+        self.rest_edge *= factor;
+        self.rest_second_neighbor *= factor;
+        for length in &mut self.edge_rest_lengths {
+            *length *= factor;
+        }
+        for length in &mut self.curvature_rest_lengths {
+            *length *= factor;
+        }
+        self.rest_area *= factor * factor;
+        self.rest_radius *= factor;
+    }
+
+    pub fn cease_idle_animation(&mut self) {
+        self.idle_amount = 0.0;
+        self.cancel_jump_charge();
+    }
+
+    #[cfg(test)]
     pub fn step(&mut self, dt: f32, horizontal: f32, charging: bool, platforms: &[Platform]) {
+        self.step_with_vigor(dt, horizontal, charging, platforms, 1.0, true, true);
+    }
+
+    pub fn step_with_vigor(
+        &mut self,
+        dt: f32,
+        horizontal: f32,
+        charging: bool,
+        platforms: &[Platform],
+        vigor: f32,
+        animate_idle: bool,
+        retain_tonicity: bool,
+    ) {
+        self.last_impact_speed = 0.0;
+        let target_tonicity = if retain_tonicity { 1.0 } else { 0.0 };
+        let tonicity_response = if retain_tonicity { 2.0 } else { 1.35 };
+        self.tonicity +=
+            (target_tonicity - self.tonicity) * (tonicity_response * dt).clamp(0.0, 1.0);
         // One unit is one localized breath followed by a resting pause.
         self.idle_phase += dt / 2.6;
-        let wants_idle = self.grounded && horizontal == 0.0 && !charging;
+        let wants_idle = animate_idle && self.grounded && horizontal == 0.0 && !charging;
         let idle_target = if wants_idle { 1.0 } else { 0.0 };
         let idle_response = if wants_idle { 1.8 } else { 7.0 };
         self.idle_amount += (idle_target - self.idle_amount) * (idle_response * dt).clamp(0.0, 1.0);
@@ -251,15 +351,20 @@ impl Blob {
             GROUND_ACCELERATION
         } else {
             AIR_ACCELERATION
-        };
+        } * vigor;
         let maximum_speed = if self.grounded {
             MAX_GROUND_SPEED
         } else {
             MAX_AIR_SPEED
-        };
+        } * vigor;
         let jump_size_factor = jump_size_factor(self.rest_radius);
         for particle in &mut self.particles {
             let mut velocity = particle.position - particle.previous;
+            if !animate_idle {
+                // Dissipate deformation without stopping the whole body's
+                // fall or slide: dead tissue does not wobble or spring back.
+                velocity = center_velocity + (velocity - center_velocity) * 0.40;
+            }
 
             // Steer the centre of mass. In air every particle receives the same
             // correction so input cannot inject torque into the membrane.
@@ -313,7 +418,7 @@ impl Blob {
                 // propagate through the body instead of translating it rigidly.
                 let lower_weight =
                     ((center.y - particle.position.y) / self.rest_edge).clamp(0.0, 2.5) / 2.5;
-                let jump_speed = jump_speed_for_charge(self.charge, self.rest_radius);
+                let jump_speed = jump_speed_for_charge(self.charge, self.rest_radius) * vigor;
                 let impulse = jump_speed * dt;
                 // Small fragments jump faster, so their non-uniform impulse
                 // must be reduced to avoid folding the membrane through its
@@ -358,6 +463,7 @@ impl Blob {
             }
         }
         self.solve_idle_shape();
+        self.last_impact_speed /= dt.max(0.000_001);
     }
 
     /// Removes rolling velocity without changing centre-of-mass translation.
@@ -402,13 +508,22 @@ impl Blob {
             let delta = self.particles[next].position - self.particles[index].position;
             let length = delta.length();
             if length > 0.0001 {
-                let correction = delta * ((length - self.rest_edge) / length * 0.48);
+                let edge_tension = 0.20 + 0.28 * self.tonicity;
+                let limpness = 1.0 - self.tonicity;
+                let uneven_rest = self.edge_rest_lengths[index]
+                    * (1.0 + corpse_material_variation(index, 0) * 0.12 * limpness);
+                let uneven_tension =
+                    edge_tension * (1.0 + corpse_material_variation(index, 1) * 0.16 * limpness);
+                let correction = delta * ((length - uneven_rest) / length * uneven_tension);
                 corrections[index] += correction;
                 corrections[next] -= correction;
             }
         }
         for (particle, correction) in self.particles.iter_mut().zip(corrections) {
             particle.position += correction;
+            if self.tonicity < 0.5 {
+                particle.previous += correction;
+            }
         }
     }
 
@@ -418,10 +533,17 @@ impl Blob {
             return;
         }
         let center = self.center();
-        let scale = (self.rest_area / area.abs()).sqrt();
-        let correction_scale = 1.0 + (scale - 1.0) * 0.12;
+        let current_area = area.abs();
+        let scale = (self.rest_area / current_area).sqrt();
+        let internal_pressure = 0.075 + 0.045 * self.tonicity;
+        let correction_scale = 1.0 + (scale - 1.0) * internal_pressure;
         for particle in &mut self.particles {
-            particle.position = center + (particle.position - center) * correction_scale;
+            let corrected = center + (particle.position - center) * correction_scale;
+            let correction = corrected - particle.position;
+            particle.position = corrected;
+            if self.tonicity < 0.5 {
+                particle.previous += correction;
+            }
         }
     }
 
@@ -496,20 +618,27 @@ impl Blob {
             let delta = self.particles[next].position - self.particles[index].position;
             let length = delta.length();
             if length > 0.0001 {
-                let correction = delta * ((length - self.rest_second_neighbor) / length * 0.16);
+                let curvature = 0.05 + 0.11 * self.tonicity;
+                let limpness = 1.0 - self.tonicity;
+                let uneven_rest = self.curvature_rest_lengths[index]
+                    * (1.0 + corpse_material_variation(index, 2) * 0.08 * limpness);
+                let correction = delta * ((length - uneven_rest) / length * curvature);
                 corrections[index] += correction;
                 corrections[next] -= correction;
             }
         }
         for (particle, correction) in self.particles.iter_mut().zip(corrections) {
             particle.position += correction;
+            if self.tonicity < 0.5 {
+                particle.previous += correction;
+            }
         }
     }
 
     /// Prevents a single collision from pulling the membrane into an
     /// uncontrollable needle. Area conservation alone cannot prevent this.
     fn limit_stretch(&mut self) {
-        let maximum_radius = self.rest_radius * MAX_STRETCH_RATIO;
+        let maximum_radius = self.rest_radius * (MAX_STRETCH_RATIO + (1.0 - self.tonicity) * 0.22);
         // Recompute the centroid because clamping an extreme point moves it
         // slightly. A few cheap passes make the bound independent of topology.
         for _ in 0..4 {
@@ -529,7 +658,10 @@ impl Blob {
     /// Without this bound, a very small blob can fold through itself during a
     /// powerful launch and briefly produce a figure-eight silhouette.
     fn limit_collapse(&mut self) {
-        let minimum_radius = self.rest_radius * MIN_COLLAPSE_RATIO;
+        // A corpse may flatten substantially, but retaining a small protected
+        // core prevents the membrane from folding through itself.
+        let minimum_ratio = 0.28 + (MIN_COLLAPSE_RATIO - 0.28) * self.tonicity;
+        let minimum_radius = self.rest_radius * minimum_ratio;
         for _ in 0..4 {
             let center = self.center();
             for particle in &mut self.particles {
@@ -593,7 +725,9 @@ impl Blob {
     }
 
     fn solve_collisions(&mut self, platforms: &[Platform]) {
-        let skin = 4.0 * self.size_scale();
+        // Keep contact thickness constant while tonicity changes. A growing
+        // collision envelope would move a resting corpse on its own.
+        let skin = 5.0 * self.size_scale();
         for particle in &mut self.particles {
             for platform in platforms {
                 let min = platform.center - platform.half_size - Vec2::splat(skin);
@@ -611,18 +745,21 @@ impl Blob {
                 // membrane points are returned to the side they came from,
                 // instead of splitting the contour across both faces.
                 let side = collision_entry_side(particle, min, max);
+                let normal = [Vec2::NEG_X, Vec2::X, Vec2::NEG_Y, Vec2::Y][side];
+                let impact_speed = -(particle.position - particle.previous).dot(normal);
+                self.last_impact_speed = self.last_impact_speed.max(impact_speed.max(0.0));
                 match side {
                     0 => {
                         particle.position.x = min.x;
-                        damp_normal_velocity(particle, Vec2::NEG_X, 0.12);
+                        damp_normal_velocity(particle, Vec2::NEG_X, 0.12 * self.tonicity);
                     }
                     1 => {
                         particle.position.x = max.x;
-                        damp_normal_velocity(particle, Vec2::X, 0.12);
+                        damp_normal_velocity(particle, Vec2::X, 0.12 * self.tonicity);
                     }
                     2 => {
                         particle.position.y = min.y;
-                        damp_normal_velocity(particle, Vec2::NEG_Y, 0.08);
+                        damp_normal_velocity(particle, Vec2::NEG_Y, 0.08 * self.tonicity);
                     }
                     _ => {
                         particle.position.y = max.y;
@@ -633,6 +770,18 @@ impl Blob {
             }
         }
     }
+}
+
+/// Stable signed variation tied to membrane material rather than simulation
+/// time. Dead tissue therefore settles asymmetrically without visual jitter.
+fn corpse_material_variation(index: usize, channel: u64) -> f32 {
+    let mut value = (index as u64)
+        .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        .wrapping_add(channel.wrapping_mul(0xbf58_476d_1ce4_e5b9));
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^= value >> 31;
+    (value as u32) as f32 / u32::MAX as f32 * 2.0 - 1.0
 }
 
 fn collision_entry_side(particle: &Particle, min: Vec2, max: Vec2) -> usize {

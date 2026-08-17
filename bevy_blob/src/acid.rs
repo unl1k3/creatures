@@ -48,6 +48,8 @@ pub(super) fn fire_acid(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut blobs: ResMut<BlobWorld>,
     mut acid: ResMut<AcidWorld>,
+    shields: Res<ShieldWorld>,
+    mut vitality: ResMut<VitalityWorld>,
 ) {
     if !keyboard.just_pressed(KeyCode::Space) {
         return;
@@ -57,16 +59,24 @@ pub(super) fn fire_acid(
         return;
     };
     if active_blob.body.rest_radius < MIN_ACID_RADIUS
+        || !vitality.is_alive(active_blob.id)
+        || shields.is_active(active_blob.id)
         || acid.cooldowns.get(&active_blob.id).copied().unwrap_or(0.0) > 0.0
     {
         return;
     }
 
-    emit_acid(active_blob, &mut acid);
+    if !vitality.spend(active_blob.id, 0.055) {
+        return;
+    }
+
+    emit_acid(active_blob, &mut acid, vitality.vigor(active_blob.id));
 }
 
-fn emit_acid(blob: &mut ActiveBlob, acid: &mut AcidWorld) {
-    let count = acid_drop_count(blob.body.rest_radius);
+fn emit_acid(blob: &mut ActiveBlob, acid: &mut AcidWorld, vigor: f32) {
+    let count = ((acid_drop_count(blob.body.rest_radius) as f32 * (0.55 + 0.45 * vigor)).round()
+        as usize)
+        .max(3);
     let center = blob.body.center();
     let phase = acid.random_unit() * std::f32::consts::TAU;
     let inherited_velocity = blob.body.velocity() * 120.0;
@@ -87,7 +97,7 @@ fn emit_acid(blob: &mut ActiveBlob, acid: &mut AcidWorld) {
             })
             .map(|particle| particle.position)
             .unwrap_or(center);
-        let speed = 360.0 + acid.random_unit() * 170.0;
+        let speed = (360.0 + acid.random_unit() * 170.0) * (0.62 + 0.38 * vigor);
         let velocity = direction * speed + inherited_velocity * 0.55;
         let radius = (2.8 + acid.random_unit() * 2.2) * blob.body.size_scale().max(0.55);
         let lifetime = ACID_LIFETIME * (0.82 + acid.random_unit() * 0.28);
@@ -185,7 +195,7 @@ mod tests {
             body: Blob::new(Vec2::ZERO, INITIAL_RADIUS),
         };
         let mut acid = AcidWorld::new(42);
-        emit_acid(&mut blob, &mut acid);
+        emit_acid(&mut blob, &mut acid, 1.0);
 
         assert_eq!(acid.drops.len(), acid_drop_count(INITIAL_RADIUS));
         let directions = acid
@@ -207,7 +217,7 @@ mod tests {
             body: Blob::new(Vec2::ZERO, INITIAL_RADIUS),
         };
         let mut acid = AcidWorld::new(42);
-        emit_acid(&mut blob, &mut acid);
+        emit_acid(&mut blob, &mut acid, 1.0);
 
         acid.reset();
         assert!(acid.drops.is_empty());

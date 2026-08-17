@@ -14,6 +14,44 @@ mod tests {
     }
 
     #[test]
+    fn corpse_progressively_loses_membrane_tonicity() {
+        let mut blob = Blob::new(Vec2::ZERO, 50.0);
+        let dt = 1.0 / 120.0;
+        for _ in 0..240 {
+            blob.step_with_vigor(dt, 0.0, false, &[], 0.0, false, false);
+        }
+        assert!(blob.tonicity < 0.17);
+        assert!(!has_self_intersections(&blob.particles));
+    }
+
+    #[test]
+    fn corpse_keeps_volume_and_stays_above_its_support() {
+        let radius = 50.0;
+        let platform = Platform {
+            center: Vec2::new(0.0, -70.0),
+            half_size: Vec2::new(200.0, 10.0),
+        };
+        let mut blob = Blob::new(Vec2::ZERO, radius);
+        let dt = 1.0 / 120.0;
+        for _ in 0..600 {
+            blob.step_with_vigor(dt, 0.0, false, &[platform], 0.0, false, false);
+        }
+
+        let contact_y = platform.center.y
+            + platform.half_size.y
+            + 5.0 * blob.size_scale();
+        let lowest = blob
+            .particles
+            .iter()
+            .map(|particle| particle.position.y)
+            .fold(f32::INFINITY, f32::min);
+        let area = polygon_area(&blob.particles).abs();
+        assert!(lowest >= contact_y - 0.05);
+        assert!(area >= blob.rest_area * 0.90);
+        assert!(!has_self_intersections(&blob.particles));
+    }
+
+    #[test]
     fn edge_constraint_recovers_a_stretched_edge() {
         let mut blob = Blob::new(Vec2::ZERO, 50.0);
         blob.particles[1].position += Vec2::X * 20.0;

@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::blob::polygon_area;
 
     fn active(id: u64, parent_id: Option<u64>, body: Blob) -> ActiveBlob {
         ActiveBlob {
@@ -28,11 +29,73 @@ mod tests {
             active(1, None, Blob::new(Vec2::ZERO, 30.0)),
         ];
         resolve_blob_collisions(&mut blobs);
-        let distance = blobs[0].body.center().distance(blobs[1].body.center());
         let scaled_gap = 1.5 * blobs[0].body.size_scale();
-        assert!(
-            distance >= blobs[0].body.rest_radius + blobs[1].body.rest_radius + scaled_gap - 0.01
-        );
+        assert!(blob_surface_gap(&blobs[0].body, &blobs[1].body) >= scaled_gap - 0.01);
+    }
+
+    #[test]
+    fn living_blob_does_not_make_a_corpse_rebound() {
+        let corpse = active(1, None, Blob::new(Vec2::ZERO, 30.0));
+        let mut living = active(2, None, Blob::new(Vec2::new(0.0, 54.0), 30.0));
+        living.body.add_velocity(Vec2::NEG_Y * 8.0);
+        let corpse_center = corpse.body.center();
+        let mut blobs = vec![corpse, living];
+
+        resolve_blob_collisions_impl(&mut blobs, |id| (id != 1, true));
+
+        assert!(blobs[0].body.center().distance(corpse_center) < 2.0);
+        assert!(blobs[0].body.velocity().length() < 0.001);
+        assert!(support_extent(&blobs[0].body, Vec2::Y) < 30.0);
+        assert!(blobs[1].body.center().y > 54.0);
+        assert!(blobs[1].body.grounded);
+        assert!(support_extent(&blobs[1].body, Vec2::NEG_Y) < 30.0);
+        blobs[1].body.step(1.0 / 120.0, 0.0, true, &[]);
+        assert!(blobs[1].body.charge > 0.0);
+    }
+
+    #[test]
+    fn stacked_living_blobs_keep_deformed_contact_surfaces() {
+        let lower = active(1, None, Blob::new(Vec2::ZERO, 30.0));
+        let upper = active(2, None, Blob::new(Vec2::new(0.0, 54.0), 30.0));
+        let mut blobs = vec![lower, upper];
+
+        resolve_blob_collisions(&mut blobs);
+
+        assert!(blobs[1].body.grounded);
+        assert!(support_extent(&blobs[0].body, Vec2::Y) < 30.0);
+        assert!(support_extent(&blobs[1].body, Vec2::NEG_Y) < 30.0);
+        assert!(blob_surface_gap(&blobs[0].body, &blobs[1].body) >= 0.0);
+    }
+
+    #[test]
+    fn repeated_corpse_support_does_not_collapse_or_jitter() {
+        let corpse = active(1, None, Blob::new(Vec2::ZERO, 30.0));
+        let upper = active(2, None, Blob::new(Vec2::new(0.0, 54.0), 30.0));
+        let corpse_area = corpse.body.rest_area;
+        let mut blobs = vec![corpse, upper];
+        for _ in 0..20 {
+            resolve_blob_collisions_impl(&mut blobs, |id| (id != 1, true));
+        }
+        let settled_upper = blobs[1].body.center();
+        for _ in 0..180 {
+            resolve_blob_collisions_impl(&mut blobs, |id| (id != 1, true));
+        }
+
+        assert!(polygon_area(&blobs[0].body.particles).abs() >= corpse_area * 0.96);
+        assert!(blobs[1].body.center().distance(settled_upper) < 0.05);
+        assert!(blobs[0].body.velocity().length() < 0.001);
+    }
+
+    #[test]
+    fn corpse_participates_in_blob_stacking_and_can_be_moved() {
+        let lower = active(1, None, Blob::new(Vec2::ZERO, 30.0));
+        let upper = active(2, None, Blob::new(Vec2::new(0.0, 40.0), 30.0));
+        let mut blobs = vec![lower, upper];
+        let shell_center = blobs[0].body.center();
+        let upper_center = blobs[1].body.center();
+        resolve_blob_collisions_impl(&mut blobs, |_| (true, true));
+        assert!(blobs[0].body.center().y < shell_center.y);
+        assert!(blobs[1].body.center().y > upper_center.y);
     }
 
     #[test]

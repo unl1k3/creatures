@@ -1,26 +1,44 @@
 mod acid;
 mod blob;
 mod camera;
+mod environment;
+mod hud;
 mod input;
 mod rendering;
+mod shield;
+mod vitality;
 
 use acid::{AcidWorld, draw_acid, fire_acid, simulate_acid};
+use avian2d::collision::collider::contact_query::contact_manifolds;
 use avian2d::prelude::PhysicsPlugins;
-use bevy::{app::AppExit, prelude::*, window::WindowResolution};
+use avian2d::prelude::{Collider, ContactManifold};
+use bevy::{
+    app::AppExit,
+    diagnostic::FrameTimeDiagnosticsPlugin,
+    prelude::*,
+    window::{ExitCondition, WindowPosition, WindowResolution},
+};
 use blob::{Blob, DEFAULT_CREATURE_SCALE, Platform, REFERENCE_RADIUS};
 use camera::follow_camera;
 #[cfg(test)]
 use camera::selected_camera_target;
+use environment::{
+    AvianContactDiagnostics, Level, resolve_avian_environment, sample_avian_contacts,
+    setup_environment,
+};
+use hud::{arrange_auxiliary_windows, setup_legend, toggle_legend, update_metrics};
 #[cfg(test)]
 use input::next_selection;
 use input::{cycle_selection, exit_on_escape, handle_blob_actions};
 #[cfg(test)]
 use rendering::blob_family_color;
 use rendering::{draw_world, sync_blob_meshes};
+use shield::{ShieldWorld, draw_shields, simulate_shields};
 use std::{
     collections::HashMap,
     time::{SystemTime, UNIX_EPOCH},
 };
+use vitality::{DeathCause, LifeState, Vitality, VitalityWorld, simulate_vitality};
 
 const BLOB_START: Vec2 = Vec2::new(0.0, -280.0);
 const INITIAL_RADIUS: f32 = REFERENCE_RADIUS * DEFAULT_CREATURE_SCALE;
@@ -41,11 +59,6 @@ struct BlobWorld {
     rejoin_elapsed: f32,
     parent_links: HashMap<u64, Option<u64>>,
     next_id: u64,
-}
-
-#[derive(Resource)]
-struct Level {
-    platforms: Vec<Platform>,
 }
 
 #[derive(Resource)]
@@ -76,24 +89,42 @@ fn main() {
             primary_window: Some(Window {
                 title: "Blob — X divide, E ricongiunge, R reset, TAB seleziona".into(),
                 resolution: WindowResolution::new(900, 900),
+                position: WindowPosition::At(IVec2::new(20, 30)),
                 ..default()
             }),
+            exit_condition: ExitCondition::OnPrimaryClosed,
             ..default()
         }))
-        .add_plugins(PhysicsPlugins::default())
-        .add_systems(Startup, setup)
-        .add_systems(FixedUpdate, (simulate_blob, simulate_acid).chain())
+        .add_plugins(PhysicsPlugins::default().with_length_unit(100.0))
+        .add_plugins(FrameTimeDiagnosticsPlugin::default())
+        .add_systems(Startup, (setup, setup_environment, setup_legend).chain())
+        .add_systems(
+            FixedUpdate,
+            (
+                simulate_shields,
+                simulate_blob,
+                resolve_avian_environment,
+                simulate_vitality,
+                simulate_acid,
+            )
+                .chain(),
+        )
         .add_systems(
             Update,
             (
                 exit_on_escape,
+                arrange_auxiliary_windows,
+                toggle_legend,
                 handle_blob_actions,
                 fire_acid,
                 cycle_selection,
                 follow_camera,
+                sample_avian_contacts,
+                update_metrics,
                 sync_blob_meshes,
                 draw_world,
                 draw_acid,
+                draw_shields,
             )
                 .chain(),
         )
@@ -121,29 +152,16 @@ fn setup(mut commands: Commands) {
         .max(1);
     commands.insert_resource(SplitRng(seed));
     commands.insert_resource(AcidWorld::new(seed.rotate_left(29)));
-    commands.insert_resource(Level {
-        platforms: vec![
-            platform(0.0, -370.0, 660.0, 38.0),
-            platform(-250.0, -150.0, 260.0, 28.0),
-            platform(210.0, 65.0, 300.0, 28.0),
-            platform(-180.0, 290.0, 260.0, 28.0),
-            platform(210.0, 510.0, 280.0, 28.0),
-            platform(-170.0, 735.0, 300.0, 28.0),
-        ],
-    });
-}
-
-fn platform(x: f32, y: f32, width: f32, height: f32) -> Platform {
-    Platform {
-        center: Vec2::new(x, y),
-        half_size: Vec2::new(width, height) * 0.5,
-    }
+    commands.insert_resource(ShieldWorld::default());
+    commands.insert_resource(VitalityWorld::default());
 }
 
 fn simulate_blob(
     time: Res<Time<Fixed>>,
     keyboard: Res<ButtonInput<KeyCode>>,
     level: Res<Level>,
+    shields: Res<ShieldWorld>,
+    mut vitality: ResMut<VitalityWorld>,
     mut blobs: ResMut<BlobWorld>,
 ) {
     advance_rejoin_timeout(&mut blobs, time.delta_secs());
@@ -155,19 +173,42 @@ fn simulate_blob(
     let selected = blobs.selected;
     for (index, active_blob) in blobs.active.iter_mut().enumerate() {
         let is_selected = index == selected;
-        let movement = rejoin_directions
-            .as_ref()
-            .map(|directions| directions[index])
-            .unwrap_or(if is_selected { horizontal as f32 } else { 0.0 });
-        active_blob.body.step(
+        let alive = vitality.is_alive(active_blob.id);
+        if !alive {
+            active_blob.body.cancel_jump_charge();
+        }
+        let vigor = vitality.vigor(active_blob.id);
+        let shield_extension = shields.extension(active_blob.id);
+        let movement = if alive {
+            rejoin_directions
+                .as_ref()
+                .map(|directions| directions[index])
+                .unwrap_or(if is_selected {
+                    horizontal as f32 * (1.0 - shield_extension * 0.58)
+                } else {
+                    0.0
+                })
+        } else {
+            0.0
+        };
+        active_blob.body.step_with_vigor(
             time.delta_secs(),
             movement,
-            rejoin_directions.is_none() && is_selected && keyboard.pressed(KeyCode::ArrowDown),
-            &level.platforms,
+            rejoin_directions.is_none()
+                && is_selected
+                && alive
+                && shield_extension < 0.05
+                && keyboard.pressed(KeyCode::ArrowDown),
+            &level.platforms[4..],
+            vigor,
+            alive,
+            true,
         );
     }
-    update_rejoining(&mut blobs, &level.platforms);
-    resolve_blob_collisions(&mut blobs.active);
+    if let Some((children, parent)) = update_rejoining(&mut blobs, &level.platforms) {
+        vitality.merge(children, parent);
+    }
+    resolve_blob_collisions_with_vitality(&mut blobs.active, &vitality);
 }
 
 fn reset_world(blobs: &mut BlobWorld) {
@@ -288,14 +329,14 @@ fn rejoin_roll_directions(blobs: &BlobWorld, platforms: &[Platform]) -> Option<V
     Some(directions)
 }
 
-fn update_rejoining(blobs: &mut BlobWorld, platforms: &[Platform]) {
+fn update_rejoining(blobs: &mut BlobWorld, platforms: &[Platform]) -> Option<([u64; 2], u64)> {
     let Some((first_index, second_index, parent_id)) = rejoin_pair_indices(blobs) else {
-        return;
+        return None;
     };
     let first_center = blobs.active[first_index].body.center();
     let second_center = blobs.active[second_index].body.center();
     if !path_is_clear(first_center, second_center, platforms) {
-        return;
+        return None;
     }
     let pair_scale = (blobs.active[first_index].body.size_scale()
         + blobs.active[second_index].body.size_scale())
@@ -305,6 +346,7 @@ fn update_rejoining(blobs: &mut BlobWorld, platforms: &[Platform]) {
         &blobs.active[second_index].body,
     );
     if surface_gap <= 2.0 * pair_scale {
+        let child_ids = [blobs.active[first_index].id, blobs.active[second_index].id];
         let merged = Blob::merge_pair(
             &blobs.active[first_index].body,
             &blobs.active[second_index].body,
@@ -324,7 +366,9 @@ fn update_rejoining(blobs: &mut BlobWorld, platforms: &[Platform]) {
         blobs.selected = insert_index;
         blobs.rejoin_parent = None;
         blobs.rejoin_elapsed = 0.0;
+        return Some((child_ids, parent_id));
     }
+    None
 }
 
 fn path_is_clear(start: Vec2, end: Vec2, platforms: &[Platform]) -> bool {
@@ -361,43 +405,185 @@ fn segment_intersects_aabb(start: Vec2, end: Vec2, platform: &Platform) -> bool 
     far >= 0.0 && near <= 1.0
 }
 
+#[cfg(test)]
 fn resolve_blob_collisions(blobs: &mut [ActiveBlob]) {
+    resolve_blob_collisions_impl(blobs, |_| (true, true));
+}
+
+fn resolve_blob_collisions_with_vitality(blobs: &mut [ActiveBlob], _vitality: &VitalityWorld) {
+    resolve_blob_collisions_impl(blobs, |_| (true, true));
+}
+
+fn resolve_blob_collisions_impl(
+    blobs: &mut [ActiveBlob],
+    interaction: impl Fn(u64) -> (bool, bool),
+) {
     for first_index in 0..blobs.len() {
         let (before_second, from_second) = blobs.split_at_mut(first_index + 1);
-        let first = &mut before_second[first_index].body;
+        let first_active = &mut before_second[first_index];
+        let (first_alive, first_collides) = interaction(first_active.id);
+        let first = &mut first_active.body;
         for second in from_second {
-            let second = &mut second.body;
-            let delta = second.center() - first.center();
-            let distance = delta.length();
-            let normal = if distance > 0.001 {
-                delta / distance
-            } else {
-                Vec2::X
-            };
-            let pair_scale = (first.size_scale() + second.size_scale()) * 0.5;
-            let first_extent = support_extent(first, normal);
-            let second_extent = support_extent(second, -normal);
-            let required_distance = first_extent + second_extent + 1.5 * pair_scale;
-            if distance >= required_distance {
+            let (second_alive, second_collides) = interaction(second.id);
+            if !first_collides || !second_collides {
                 continue;
             }
+            let second = &mut second.body;
+            let pair_scale = (first.size_scale() + second.size_scale()) * 0.5;
+            let clearance = 1.5 * pair_scale;
+            let Some((normal, contact_points, penetration)) =
+                avian_blob_contacts(first, second, clearance)
+            else {
+                continue;
+            };
 
-            // Weight separation inversely by physical mass: the smaller blob
-            // yields more, regardless of its rendering/solver resolution.
             let first_mass = first.mass();
             let second_mass = second.mass();
             let total_mass = first_mass + second_mass;
-            let penetration = required_distance - distance;
-            first.translate(-normal * penetration * second_mass / total_mass);
-            second.translate(normal * penetration * first_mass / total_mass);
+            let contact_load = (penetration + 3.0 * pair_scale)
+                .min(first.rest_radius.min(second.rest_radius) * 0.18);
+            let point_count = contact_points.len().max(1) as f32;
+            let actual_overlap = (penetration - clearance).max(0.0);
+            for point in contact_points {
+                let first_load = if first_alive {
+                    contact_load / point_count
+                } else {
+                    actual_overlap * 0.30 / point_count
+                };
+                let second_load = if second_alive {
+                    contact_load / point_count
+                } else {
+                    actual_overlap * 0.30 / point_count
+                };
+                if first_load > 0.001 {
+                    first.apply_contact_patch(point, normal, first_load, !first_alive);
+                }
+                if second_load > 0.001 {
+                    second.apply_contact_patch(point, -normal, second_load, !second_alive);
+                }
+            }
+
+            let post_penetration = avian_blob_contacts(first, second, clearance)
+                .map(|(_, _, penetration)| penetration)
+                .unwrap_or(0.0);
+            match (first_alive, second_alive) {
+                (true, false) => first.translate(-normal * post_penetration),
+                (false, true) => second.translate(normal * post_penetration),
+                _ => {
+                    first.translate(-normal * post_penetration * second_mass / total_mass);
+                    second.translate(normal * post_penetration * first_mass / total_mass);
+                }
+            }
+
+            // Convex contact normals can rotate slightly after a soft patch is
+            // deformed. Close the tiny residual along the new centre axis so
+            // the visible contours never remain interpenetrating.
+            let final_delta = second.center() - first.center();
+            let final_normal = final_delta.normalize_or(normal);
+            let residual = (clearance - blob_surface_gap(first, second)).max(0.0);
+            match (first_alive, second_alive) {
+                (true, false) => first.translate(-final_normal * residual),
+                (false, true) => second.translate(final_normal * residual),
+                _ => {
+                    first.translate(-final_normal * residual * second_mass / total_mass);
+                    second.translate(final_normal * residual * first_mass / total_mass);
+                }
+            }
+
+            // Blob-to-blob contact can support jump charging just like level
+            // geometry. Only the upper body is grounded; side contacts do not
+            // arm a jump.
+            if normal.y > 0.55 && second_alive {
+                second.grounded = true;
+            } else if normal.y < -0.55 && first_alive {
+                first.grounded = true;
+            }
 
             let relative_normal_speed = (second.velocity() - first.velocity()).dot(normal);
             if relative_normal_speed < 0.0 {
-                first.add_velocity(normal * relative_normal_speed * 0.5);
-                second.add_velocity(-normal * relative_normal_speed * 0.5);
+                match (first_alive, second_alive) {
+                    (true, true) => {
+                        first.add_velocity(normal * relative_normal_speed * 0.5);
+                        second.add_velocity(-normal * relative_normal_speed * 0.5);
+                    }
+                    (true, false) => {
+                        first.add_velocity(normal * relative_normal_speed);
+                        second.damp_velocity(0.03);
+                    }
+                    (false, true) => {
+                        second.add_velocity(-normal * relative_normal_speed);
+                        first.damp_velocity(0.03);
+                    }
+                    (false, false) => {
+                        first.damp_velocity(0.03);
+                        second.damp_velocity(0.03);
+                    }
+                }
             }
         }
     }
+}
+
+fn avian_blob_contacts(
+    first: &Blob,
+    second: &Blob,
+    prediction_distance: f32,
+) -> Option<(Vec2, Vec<Vec2>, f32)> {
+    let first_center = first.center();
+    let second_center = second.center();
+    let first_collider = Collider::convex_hull(
+        first
+            .particles
+            .iter()
+            .map(|particle| particle.position - first_center)
+            .collect(),
+    )?;
+    let second_collider = Collider::convex_hull(
+        second
+            .particles
+            .iter()
+            .map(|particle| particle.position - second_center)
+            .collect(),
+    )?;
+    let mut manifolds = Vec::<ContactManifold>::new();
+    contact_manifolds(
+        &first_collider,
+        first_center,
+        0.0,
+        &second_collider,
+        second_center,
+        0.0,
+        prediction_distance,
+        &mut manifolds,
+    );
+    let manifold = manifolds
+        .iter()
+        .filter(|manifold| !manifold.points.is_empty())
+        .max_by(|first, second| {
+            let first_depth = first
+                .points
+                .iter()
+                .map(|point| point.penetration)
+                .fold(f32::NEG_INFINITY, f32::max);
+            let second_depth = second
+                .points
+                .iter()
+                .map(|point| point.penetration)
+                .fold(f32::NEG_INFINITY, f32::max);
+            first_depth.total_cmp(&second_depth)
+        })?;
+    let points = manifold
+        .points
+        .iter()
+        .map(|point| point.point)
+        .collect::<Vec<_>>();
+    let correction = manifold
+        .points
+        .iter()
+        .map(|point| point.penetration + prediction_distance)
+        .fold(0.0, f32::max)
+        .max(0.0);
+    Some((manifold.normal, points, correction))
 }
 
 fn support_extent(blob: &Blob, direction: Vec2) -> f32 {
