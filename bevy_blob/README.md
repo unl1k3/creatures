@@ -355,7 +355,8 @@ Press `F7` to overlay level bounds, collider geometry, route checkpoints, and
 the spawn marker on the artwork. While it is active, use `I/J/K/L` to pan,
 `U/O` to zoom, and `P` to return to the selected blob. This diagnostic view
 also shows light radii, expulsion directions, and hazard volumes without
-altering physics.
+altering physics. Closing the overlay preserves its camera position and zoom;
+press `P` to return to the selected blob and resume automatic tracking.
 
 ## Roadmap
 

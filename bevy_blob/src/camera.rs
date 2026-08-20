@@ -8,7 +8,7 @@ pub(super) fn follow_camera(
     keyboard: Res<ButtonInput<KeyCode>>,
     blobs: Res<BlobWorld>,
     scenario: Res<TestScenario>,
-    debug_overlay: Res<LevelDebugOverlay>,
+    mut debug_overlay: ResMut<LevelDebugOverlay>,
     mut camera: Single<(&mut Transform, &mut Projection), With<GameCamera>>,
 ) {
     let Some(target) = selected_camera_target(&blobs) else {
@@ -18,6 +18,15 @@ pub(super) fn follow_camera(
         let (transform, projection) = &mut *camera;
         update_debug_camera(time.delta_secs(), &keyboard, target, transform, projection);
         return;
+    }
+    if debug_overlay.camera_detached {
+        if keyboard.just_pressed(KeyCode::KeyP) {
+            camera.0.translation.x = target.x;
+            camera.0.translation.y = target.y;
+            debug_overlay.camera_detached = false;
+        } else {
+            return;
+        }
     }
     let response = (5.0 * time.delta_secs()).min(1.0);
     let framing_target = if scenario.0 > 1 {

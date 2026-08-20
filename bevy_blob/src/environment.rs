@@ -53,6 +53,7 @@ pub(super) struct TestScenario(pub(super) u8);
 #[derive(Resource, Default)]
 pub(super) struct LevelDebugOverlay {
     pub(super) visible: bool,
+    pub(super) camera_detached: bool,
 }
 
 #[derive(Resource, Default)]
@@ -394,6 +395,9 @@ pub(super) fn toggle_level_debug(
 ) {
     if keyboard.just_pressed(KeyCode::F7) {
         overlay.visible = !overlay.visible;
+        if overlay.visible {
+            overlay.camera_detached = true;
+        }
     }
 }
 
@@ -1017,7 +1021,9 @@ mod tests {
 
         app.update();
 
-        assert!(app.world().resource::<LevelDebugOverlay>().visible);
+        let overlay = app.world().resource::<LevelDebugOverlay>();
+        assert!(overlay.visible);
+        assert!(overlay.camera_detached);
     }
 
     #[test]
