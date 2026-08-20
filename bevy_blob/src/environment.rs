@@ -1,6 +1,9 @@
 use super::*;
 use crate::blob::Particle;
-use crate::level_format::{ParsedLevel, VisualLayer, parse_level};
+use crate::level_format::{
+    ExpulsionPointDefinition, HazardDefinition, LightDefinition, NutrientDefinition, ParsedLevel,
+    VisualLayer, parse_level,
+};
 use avian2d::prelude::{
     Collider, CollisionLayers, PhysicsLayer, RigidBody, ShapeCastConfig, SpatialQuery,
     SpatialQueryFilter,
@@ -37,6 +40,11 @@ pub(super) struct Level {
     pub(super) spawn_position: Vec2,
     pub(super) route: Vec<Vec2>,
     visual_layers: Vec<VisualLayer>,
+    decorations: Vec<VisualLayer>,
+    pub(super) nutrients: Vec<NutrientDefinition>,
+    pub(super) lights: Vec<LightDefinition>,
+    pub(super) expulsion_points: Vec<ExpulsionPointDefinition>,
+    pub(super) hazards: Vec<HazardDefinition>,
 }
 
 #[derive(Resource, Default)]
@@ -96,6 +104,11 @@ impl Level {
             spawn_position: parsed.spawn,
             route: parsed.route,
             visual_layers: parsed.visual_layers,
+            nutrients: parsed.nutrients,
+            lights: parsed.lights,
+            expulsion_points: parsed.expulsion_points,
+            hazards: parsed.hazards,
+            decorations: parsed.decorations,
         }
     }
 
@@ -122,6 +135,11 @@ impl Level {
             spawn_position: Vec2::ZERO,
             route: Vec::new(),
             visual_layers: Vec::new(),
+            decorations: Vec::new(),
+            nutrients: Vec::new(),
+            lights: Vec::new(),
+            expulsion_points: Vec::new(),
+            hazards: Vec::new(),
         }
     }
 
@@ -151,6 +169,11 @@ impl Level {
                         Vec2::new(295.0, 110.0),
                     ],
                     visual_layers: Vec::new(),
+                    decorations: Vec::new(),
+                    nutrients: Vec::new(),
+                    lights: Vec::new(),
+                    expulsion_points: Vec::new(),
+                    hazards: Vec::new(),
                 },
                 Vec2::new(-320.0, -285.0),
             ),
@@ -188,6 +211,11 @@ impl Level {
                         Vec2::new(-260.0, 320.0),
                     ],
                     visual_layers: Vec::new(),
+                    decorations: Vec::new(),
+                    nutrients: Vec::new(),
+                    lights: Vec::new(),
+                    expulsion_points: Vec::new(),
+                    hazards: Vec::new(),
                 },
                 Vec2::new(-300.0, -285.0),
             ),
@@ -213,6 +241,11 @@ impl Level {
                         Vec2::new(355.0, -310.0),
                     ],
                     visual_layers: Vec::new(),
+                    decorations: Vec::new(),
+                    nutrients: Vec::new(),
+                    lights: Vec::new(),
+                    expulsion_points: Vec::new(),
+                    hazards: Vec::new(),
                 },
                 Vec2::new(-100.0, -245.0),
             ),
@@ -247,6 +280,11 @@ impl Level {
                         Vec2::new(305.0, 650.0),
                     ],
                     visual_layers: Vec::new(),
+                    decorations: Vec::new(),
+                    nutrients: Vec::new(),
+                    lights: Vec::new(),
+                    expulsion_points: Vec::new(),
+                    hazards: Vec::new(),
                 },
                 Vec2::new(-300.0, -285.0),
             ),
@@ -271,6 +309,11 @@ impl Level {
                         Vec2::new(-45.0, 170.0),
                     ],
                     visual_layers: Vec::new(),
+                    decorations: Vec::new(),
+                    nutrients: Vec::new(),
+                    lights: Vec::new(),
+                    expulsion_points: Vec::new(),
+                    hazards: Vec::new(),
                 },
                 Vec2::new(0.0, -125.0),
             ),
@@ -358,7 +401,7 @@ fn spawn_level_artwork(commands: &mut Commands, asset_server: Option<&AssetServe
     let Some(asset_server) = asset_server else {
         return;
     };
-    for layer in &level.visual_layers {
+    for layer in level.visual_layers.iter().chain(&level.decorations) {
         commands.spawn((
             LevelArtwork,
             Sprite {
@@ -455,7 +498,27 @@ pub(super) fn switch_test_scenario(
     route_progress.next = 1;
     reset_world_at(&mut blobs, spawn);
     vitality.reset();
-    nutrition.reset_near(spawn);
+    nutrition.reset_from_definitions(&level.nutrients);
+}
+
+pub(super) fn simulate_level_hazards(
+    time: Res<Time<Fixed>>,
+    level: Res<Level>,
+    blobs: Res<BlobWorld>,
+    mut vitality: ResMut<VitalityWorld>,
+) {
+    let dt = time.delta_secs();
+    for active_blob in &blobs.active {
+        for hazard in &level.hazards {
+            let half_size = hazard.size * 0.5;
+            if active_blob.body.particles.iter().any(|particle| {
+                let offset = (particle.position - hazard.position).abs();
+                offset.x <= half_size.x && offset.y <= half_size.y
+            }) {
+                vitality.damage(active_blob.id, hazard.damage_per_second * dt);
+            }
+        }
+    }
 }
 
 pub(super) fn advance_route_progress(
@@ -818,6 +881,16 @@ mod tests {
     fn isolated_corner_contact_is_not_treated_as_full_body_impact() {
         assert_eq!(contact_patch_impact(&mut [1_000.0]), 680.0);
         assert!(contact_patch_impact(&mut [1_000.0, 900.0, 800.0]) > 900.0);
+    }
+
+    #[test]
+    fn prototype_loads_authored_objects_from_json() {
+        let level = Level::prototype();
+        assert_eq!(level.nutrients.len(), 3);
+        assert_eq!(level.lights.len(), 2);
+        assert_eq!(level.expulsion_points.len(), 1);
+        assert_eq!(level.hazards.len(), 1);
+        assert_eq!(level.decorations.len(), 1);
     }
 
     #[test]

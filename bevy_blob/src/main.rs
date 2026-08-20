@@ -27,7 +27,7 @@ use camera::{GameCamera, follow_camera};
 use environment::{
     AvianContactDiagnostics, Level, LevelDebugOverlay, RouteProgress, TestScenario,
     advance_route_progress, resolve_avian_environment, sample_avian_contacts, setup_environment,
-    switch_test_scenario, toggle_level_debug,
+    simulate_level_hazards, switch_test_scenario, toggle_level_debug,
 };
 use hud::{arrange_auxiliary_windows, setup_legend, toggle_legend, update_metrics};
 #[cfg(test)]
@@ -113,6 +113,7 @@ fn main() {
                 simulate_shields,
                 simulate_blob,
                 resolve_avian_environment,
+                simulate_level_hazards,
                 simulate_vitality,
                 simulate_nutrition,
                 simulate_acid,

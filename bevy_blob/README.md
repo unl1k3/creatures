@@ -331,7 +331,7 @@ metrics window.
 
 ## Validation
 
-The current automated suite contains 90 tests covering soft-body constraints,
+The current automated suite contains 93 tests covering soft-body constraints,
 jump charging and size scaling, rolling, collision recovery, topology repair,
 recursive splitting, hierarchical merging, camera targeting, dynamic mesh
 generation, acid bursts, vitality states, death causes, and complete weapon
@@ -340,10 +340,11 @@ reset behavior.
 ## Level files
 
 The standard sewer level is defined in
-`assets/levels/sewer_01/level.json`. The versioned JSON contains the world size,
-world size and center, blob spawn, route checkpoints, rectangular or polygonal collision geometry,
-and optional visual image layers. Physics never derives collision shapes from
-artwork, so images can be replaced without changing gameplay.
+`assets/levels/sewer_01/level.json`. The versioned JSON contains world size and
+center, blob spawn, route checkpoints, rectangular or polygonal collision geometry,
+optional visual image layers, nutrients, lights, expulsion points, hazards, and
+decorations. Physics never derives collision shapes from artwork, so images can
+be replaced without changing gameplay.
 
 Visual layers use asset-relative image paths plus an explicit world position,
 size, and depth. Keep background images below the physics drawing depth and
@@ -353,7 +354,8 @@ instead of a single oversized texture.
 Press `F7` to overlay level bounds, collider geometry, route checkpoints, and
 the spawn marker on the artwork. While it is active, use `I/J/K/L` to pan,
 `U/O` to zoom, and `P` to return to the selected blob. This diagnostic view
-does not alter physics.
+also shows light radii, expulsion directions, and hazard volumes without
+altering physics.
 
 ## Roadmap
 

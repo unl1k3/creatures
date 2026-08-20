@@ -1,4 +1,5 @@
 use super::*;
+use crate::level_format::NutrientDefinition;
 
 const ENGULF_DURATION: f32 = 1.25;
 const DIGESTION_DURATION: f32 = 6.0;
@@ -68,23 +69,19 @@ pub(super) struct NutritionWorld {
 }
 
 impl NutritionWorld {
-    pub(super) fn reset_near(&mut self, spawn: Vec2) {
+    pub(super) fn reset_from_definitions(&mut self, definitions: &[NutrientDefinition]) {
         self.probe = None;
-        self.nutrients = [
-            (Vec2::new(145.0, 65.0), 13.0),
-            (Vec2::new(-175.0, 210.0), 11.0),
-            (Vec2::new(210.0, 320.0), 15.0),
-        ]
-        .into_iter()
-        .map(|(offset, radius)| Nutrient {
-            position: spawn + offset,
-            radius,
-            original_radius: radius,
-            state: NutrientState::Available {
-                velocity: Vec2::ZERO,
-            },
-        })
-        .collect();
+        self.nutrients = definitions
+            .iter()
+            .map(|definition| Nutrient {
+                position: definition.position,
+                radius: definition.radius,
+                original_radius: definition.radius,
+                state: NutrientState::Available {
+                    velocity: Vec2::ZERO,
+                },
+            })
+            .collect();
     }
 
     pub(super) fn digestion_progress(&self, blob_id: u64) -> Option<f32> {
@@ -348,9 +345,9 @@ fn point_inside_convex(point: Vec2, vertices: &[Vec2]) -> bool {
     sign != 0.0
 }
 
-pub(super) fn setup_nutrition(mut commands: Commands) {
+pub(super) fn setup_nutrition(mut commands: Commands, level: Res<Level>) {
     let mut nutrition = NutritionWorld::default();
-    nutrition.reset_near(BLOB_START);
+    nutrition.reset_from_definitions(&level.nutrients);
     commands.insert_resource(nutrition);
 }
 
@@ -1069,6 +1066,21 @@ pub(super) fn draw_nutrition(mut gizmos: Gizmos, nutrition: Res<NutritionWorld>)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::level_format::NutrientDefinition;
+
+    #[test]
+    fn nutrient_positions_and_sizes_come_from_level_definitions() {
+        let definitions = [NutrientDefinition {
+            position: Vec2::new(42.0, -17.0),
+            radius: 9.5,
+        }];
+        let mut world = NutritionWorld::default();
+        world.reset_from_definitions(&definitions);
+
+        assert_eq!(world.nutrients.len(), 1);
+        assert_eq!(world.nutrients[0].position, definitions[0].position);
+        assert_eq!(world.nutrients[0].radius, definitions[0].radius);
+    }
 
     #[test]
     fn digestive_penalty_recovers_as_absorption_progresses() {

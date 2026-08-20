@@ -91,6 +91,13 @@ impl VitalityWorld {
         }
     }
 
+    pub(super) fn damage(&mut self, id: u64, amount: f32) {
+        let vitality = self.states.entry(id).or_default();
+        if vitality.is_alive() {
+            vitality.health = (vitality.health - amount.max(0.0)).max(0.0);
+        }
+    }
+
     pub(super) fn split(&mut self, parent: u64, children: [u64; 2]) {
         let inherited = self.states.remove(&parent).unwrap_or_default();
         self.states.insert(children[0], inherited);
@@ -223,6 +230,13 @@ fn deflate_towards(blob: &mut Blob, vitality: &mut Vitality, target: f32, max_ch
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authored_hazard_damage_reduces_living_blob_health() {
+        let mut world = VitalityWorld::default();
+        world.damage(7, 0.25);
+        assert_eq!(world.get(7).health, 0.75);
+    }
 
     #[test]
     fn low_energy_reduces_vigor_without_stopping_movement_completely() {

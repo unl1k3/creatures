@@ -42,7 +42,7 @@ pub(super) fn handle_blob_actions(
         shields.reset();
         vitality.reset();
         route_progress.next = 1;
-        nutrition.reset_near(level.spawn_position);
+        nutrition.reset_from_definitions(&level.nutrients);
         return;
     }
 

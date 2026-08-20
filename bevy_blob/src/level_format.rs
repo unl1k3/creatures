@@ -15,6 +15,11 @@ pub(super) struct ParsedLevel {
     pub(super) fixtures: Vec<Vec<Vec2>>,
     pub(super) route: Vec<Vec2>,
     pub(super) visual_layers: Vec<VisualLayer>,
+    pub(super) nutrients: Vec<NutrientDefinition>,
+    pub(super) lights: Vec<LightDefinition>,
+    pub(super) expulsion_points: Vec<ExpulsionPointDefinition>,
+    pub(super) hazards: Vec<HazardDefinition>,
+    pub(super) decorations: Vec<VisualLayer>,
 }
 
 #[derive(Clone, Debug)]
@@ -23,6 +28,34 @@ pub(super) struct VisualLayer {
     pub(super) position: Vec2,
     pub(super) size: Vec2,
     pub(super) depth: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct NutrientDefinition {
+    pub(super) position: Vec2,
+    pub(super) radius: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct LightDefinition {
+    pub(super) position: Vec2,
+    pub(super) color: [f32; 3],
+    pub(super) radius: f32,
+    pub(super) intensity: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ExpulsionPointDefinition {
+    pub(super) position: Vec2,
+    pub(super) direction: Vec2,
+    pub(super) strength: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct HazardDefinition {
+    pub(super) position: Vec2,
+    pub(super) size: Vec2,
+    pub(super) damage_per_second: f32,
 }
 
 #[derive(Debug)]
@@ -51,6 +84,16 @@ struct LevelDocument {
     route: Vec<Point>,
     #[serde(default)]
     visual_layers: Vec<VisualLayerDocument>,
+    #[serde(default)]
+    nutrients: Vec<NutrientDocument>,
+    #[serde(default)]
+    lights: Vec<LightDocument>,
+    #[serde(default)]
+    expulsion_points: Vec<ExpulsionPointDocument>,
+    #[serde(default)]
+    hazards: Vec<HazardDocument>,
+    #[serde(default)]
+    decorations: Vec<VisualLayerDocument>,
 }
 
 #[derive(Clone, Copy, Default, Deserialize)]
@@ -87,6 +130,38 @@ struct VisualLayerDocument {
     position: Point,
     size: Point,
     depth: f32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NutrientDocument {
+    position: Point,
+    radius: f32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LightDocument {
+    position: Point,
+    color: [f32; 3],
+    radius: f32,
+    intensity: f32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExpulsionPointDocument {
+    position: Point,
+    direction: Point,
+    strength: f32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HazardDocument {
+    position: Point,
+    size: Point,
+    damage_per_second: f32,
 }
 
 pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError> {
@@ -157,6 +232,82 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
             })
         })
         .collect::<Result<Vec<_>, LevelFormatError>>()?;
+    let decorations = parse_visual_layers(document.decorations, "decoration")?;
+    let nutrients = document
+        .nutrients
+        .into_iter()
+        .enumerate()
+        .map(|(index, nutrient)| {
+            Ok(NutrientDefinition {
+                position: finite_point(&format!("nutrient {index} position"), nutrient.position)?,
+                radius: positive_number(&format!("nutrient {index} radius"), nutrient.radius)?,
+            })
+        })
+        .collect::<Result<Vec<_>, LevelFormatError>>()?;
+    let lights = document
+        .lights
+        .into_iter()
+        .enumerate()
+        .map(|(index, light)| {
+            if light
+                .color
+                .iter()
+                .any(|channel| !channel.is_finite() || !(0.0..=1.0).contains(channel))
+            {
+                return Err(LevelFormatError(format!(
+                    "light {index} color channels must be between 0 and 1"
+                )));
+            }
+            Ok(LightDefinition {
+                position: finite_point(&format!("light {index} position"), light.position)?,
+                color: light.color,
+                radius: positive_number(&format!("light {index} radius"), light.radius)?,
+                intensity: positive_number(&format!("light {index} intensity"), light.intensity)?,
+            })
+        })
+        .collect::<Result<Vec<_>, LevelFormatError>>()?;
+    let expulsion_points = document
+        .expulsion_points
+        .into_iter()
+        .enumerate()
+        .map(|(index, point)| {
+            let direction = finite_point(
+                &format!("expulsion point {index} direction"),
+                point.direction,
+            )?;
+            if direction.length_squared() < 0.0001 {
+                return Err(LevelFormatError(format!(
+                    "expulsion point {index} direction cannot be zero"
+                )));
+            }
+            Ok(ExpulsionPointDefinition {
+                position: finite_point(
+                    &format!("expulsion point {index} position"),
+                    point.position,
+                )?,
+                direction: direction.normalize(),
+                strength: positive_number(
+                    &format!("expulsion point {index} strength"),
+                    point.strength,
+                )?,
+            })
+        })
+        .collect::<Result<Vec<_>, LevelFormatError>>()?;
+    let hazards = document
+        .hazards
+        .into_iter()
+        .enumerate()
+        .map(|(index, hazard)| {
+            Ok(HazardDefinition {
+                position: finite_point(&format!("hazard {index} position"), hazard.position)?,
+                size: positive_size(&format!("hazard {index} size"), hazard.size)?,
+                damage_per_second: positive_number(
+                    &format!("hazard {index} damage_per_second"),
+                    hazard.damage_per_second,
+                )?,
+            })
+        })
+        .collect::<Result<Vec<_>, LevelFormatError>>()?;
 
     Ok(ParsedLevel {
         name: document.name,
@@ -167,7 +318,31 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
         fixtures,
         route,
         visual_layers,
+        nutrients,
+        lights,
+        expulsion_points,
+        hazards,
+        decorations,
     })
+}
+
+fn parse_visual_layers(
+    layers: Vec<VisualLayerDocument>,
+    label: &str,
+) -> Result<Vec<VisualLayer>, LevelFormatError> {
+    layers
+        .into_iter()
+        .enumerate()
+        .map(|(index, layer)| {
+            validate_text(&format!("{label} {index} image"), &layer.image)?;
+            Ok(VisualLayer {
+                image: layer.image,
+                position: finite_point(&format!("{label} {index} position"), layer.position)?,
+                size: positive_size(&format!("{label} {index} size"), layer.size)?,
+                depth: finite_number(&format!("{label} {index} depth"), layer.depth)?,
+            })
+        })
+        .collect()
 }
 
 fn validate_text(label: &str, value: &str) -> Result<(), LevelFormatError> {
@@ -183,6 +358,15 @@ fn finite_number(label: &str, value: f32) -> Result<f32, LevelFormatError> {
         .is_finite()
         .then_some(value)
         .ok_or_else(|| LevelFormatError(format!("{label} must be finite")))
+}
+
+fn positive_number(label: &str, value: f32) -> Result<f32, LevelFormatError> {
+    let value = finite_number(label, value)?;
+    if value <= 0.0 {
+        Err(LevelFormatError(format!("{label} must be positive")))
+    } else {
+        Ok(value)
+    }
 }
 
 fn finite_point(label: &str, point: Point) -> Result<Vec2, LevelFormatError> {

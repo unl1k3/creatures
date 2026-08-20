@@ -41,7 +41,24 @@
     { "image": "levels/sewer_01/platform.png", "position": { "x": -735, "y": 178.25 }, "size": { "x": 180, "y": 74 }, "depth": -1 },
     { "image": "levels/sewer_01/platform.png", "position": { "x": -20, "y": 83.25 }, "size": { "x": 180, "y": 74 }, "depth": -1 },
     { "image": "levels/sewer_01/platform.png", "position": { "x": 460, "y": 213.25 }, "size": { "x": 180, "y": 74 }, "depth": -1 },
-    { "image": "levels/sewer_01/platform.png", "position": { "x": 700, "y": 393.25 }, "size": { "x": 180, "y": 74 }, "depth": -1 },
+    { "image": "levels/sewer_01/platform.png", "position": { "x": 700, "y": 393.25 }, "size": { "x": 180, "y": 74 }, "depth": -1 }
+  ],
+  "nutrients": [
+    { "position": { "x": 145, "y": -215 }, "radius": 13 },
+    { "position": { "x": -175, "y": -70 }, "radius": 11 },
+    { "position": { "x": 210, "y": 40 }, "radius": 15 }
+  ],
+  "lights": [
+    { "position": { "x": -520, "y": 300 }, "color": [1.0, 0.55, 0.18], "radius": 240, "intensity": 1.1 },
+    { "position": { "x": 430, "y": 160 }, "color": [0.20, 0.75, 0.82], "radius": 310, "intensity": 0.8 }
+  ],
+  "expulsion_points": [
+    { "position": { "x": 810, "y": -210 }, "direction": { "x": -1, "y": 0.15 }, "strength": 420 }
+  ],
+  "hazards": [
+    { "position": { "x": 700, "y": 414 }, "size": { "x": 90, "y": 20 }, "damage_per_second": 0.22 }
+  ],
+  "decorations": [
     { "image": "levels/sewer_01/foreground.png", "position": { "x": 0, "y": 182 }, "size": { "x": 1800, "y": 1500 }, "depth": 5 }
   ]
 }

@@ -589,10 +589,56 @@ pub(super) fn draw_world(
                 Color::srgb(0.25, 1.0, 0.35),
             );
         }
+        for light in &level.lights {
+            let color = Color::srgba(
+                light.color[0],
+                light.color[1],
+                light.color[2],
+                (0.35 + light.intensity * 0.18).clamp(0.35, 0.9),
+            );
+            gizmos.circle_2d(light.position, light.radius, color);
+            gizmos.circle_2d(light.position, 5.0, color);
+        }
+        for point in &level.expulsion_points {
+            let length = (point.strength * 0.12).clamp(20.0, 80.0);
+            let end = point.position + point.direction * length;
+            gizmos.arrow_2d(point.position, end, Color::srgb(0.82, 0.35, 1.0));
+        }
+        for hazard in &level.hazards {
+            for expansion in [-2.0, 0.0, 2.0] {
+                gizmos.rect_2d(
+                    hazard.position,
+                    hazard.size + Vec2::splat(expansion),
+                    Color::srgba(1.0, 0.08, 0.18, 0.94),
+                );
+            }
+        }
     }
     for (index, checkpoint) in level.route.iter().enumerate().skip(route_progress.next) {
         let radius = (7.0 + index as f32 * 1.5).min(20.0);
         gizmos.circle_2d(*checkpoint, radius, Color::srgba(1.0, 0.72, 0.18, 0.72));
+    }
+    if !debug_overlay.visible {
+        for hazard in &level.hazards {
+            let left = hazard.position.x - hazard.size.x * 0.5;
+            // Hazard volumes grow upward from their supporting surface.
+            let surface_y = hazard.position.y - hazard.size.y * 0.5;
+            let surface = (0..=12).map(|step| {
+                let fraction = step as f32 / 12.0;
+                Vec2::new(
+                    left + hazard.size.x * fraction,
+                    surface_y + (fraction * std::f32::consts::TAU * 2.0).sin() * 2.4,
+                )
+            });
+            gizmos.linestrip_2d(surface, Color::srgba(0.64, 1.0, 0.06, 0.94));
+            for offset in [0.2, 0.5, 0.78] {
+                gizmos.circle_2d(
+                    Vec2::new(left + hazard.size.x * offset, surface_y - 5.0),
+                    2.5,
+                    Color::srgba(0.72, 1.0, 0.08, 0.72),
+                );
+            }
+        }
     }
 
     for active_blob in &blobs.active {
