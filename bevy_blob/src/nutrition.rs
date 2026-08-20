@@ -1119,15 +1119,13 @@ mod tests {
     fn protrusion_stops_before_crossing_a_platform() {
         let blob = Blob::new(Vec2::ZERO, 20.0);
         let (edge, anchor_t) = membrane_anchor(&blob, Vec2::new(100.0, 0.0));
-        let level = Level {
-            platforms: vec![Platform {
+        let level = Level::from_test_geometry(
+            vec![Platform {
                 center: Vec2::new(50.0, 0.0),
                 half_size: Vec2::new(5.0, 30.0),
             }],
-            fixtures: Vec::new(),
-            spawn_position: Vec2::ZERO,
-            route: Vec::new(),
-        };
+            Vec::new(),
+        );
         let blobs = BlobWorld {
             active: Vec::new(),
             selected: 0,

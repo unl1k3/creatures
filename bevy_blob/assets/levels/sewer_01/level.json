@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "name": "Sewer entrance",
+  "size": { "x": 1800, "y": 1500 },
+  "spawn": { "x": 0, "y": -280 },
+  "colliders": [
+    { "shape": "rectangle", "id": "floor", "position": { "x": 0, "y": -370 }, "size": { "x": 660, "y": 38 } },
+    { "shape": "rectangle", "id": "platform_1", "position": { "x": -250, "y": -150 }, "size": { "x": 260, "y": 28 } },
+    { "shape": "rectangle", "id": "platform_2", "position": { "x": 210, "y": 65 }, "size": { "x": 300, "y": 28 } },
+    { "shape": "rectangle", "id": "platform_3", "position": { "x": -180, "y": 290 }, "size": { "x": 260, "y": 28 } },
+    { "shape": "rectangle", "id": "platform_4", "position": { "x": 210, "y": 510 }, "size": { "x": 280, "y": 28 } },
+    { "shape": "rectangle", "id": "platform_5", "position": { "x": -170, "y": 735 }, "size": { "x": 300, "y": 28 } }
+  ],
+  "route": [],
+  "visual_layers": [
+    { "image": "levels/sewer_01/background.png", "position": { "x": 0, "y": 182 }, "size": { "x": 1800, "y": 1500 }, "depth": -50 },
+    { "image": "levels/sewer_01/platform.png", "position": { "x": 0, "y": -366.75 }, "size": { "x": 660, "y": 100 }, "depth": -1 },
+    { "image": "levels/sewer_01/platform.png", "position": { "x": -250, "y": -146.75 }, "size": { "x": 260, "y": 74 }, "depth": -1 },
+    { "image": "levels/sewer_01/platform.png", "position": { "x": 210, "y": 68.25 }, "size": { "x": 300, "y": 74 }, "depth": -1 },
+    { "image": "levels/sewer_01/platform.png", "position": { "x": -180, "y": 293.25 }, "size": { "x": 260, "y": 74 }, "depth": -1 },
+    { "image": "levels/sewer_01/platform.png", "position": { "x": 210, "y": 513.25 }, "size": { "x": 280, "y": 74 }, "depth": -1 },
+    { "image": "levels/sewer_01/platform.png", "position": { "x": -170, "y": 738.25 }, "size": { "x": 300, "y": 74 }, "depth": -1 },
+    { "image": "levels/sewer_01/foreground.png", "position": { "x": 0, "y": 182 }, "size": { "x": 1800, "y": 1500 }, "depth": 5 }
+  ]
+}

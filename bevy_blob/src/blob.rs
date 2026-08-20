@@ -19,6 +19,7 @@ const CHARGE_DURATION: f32 = 0.70;
 const JUMP_MIN_SPEED: f32 = 300.0;
 const JUMP_MAX_SPEED: f32 = 960.0;
 const GROUND_ROLL_RATE: f32 = 5.2;
+const IDLE_ROCK_RATE: f32 = 0.018;
 const MAX_PARTICLE_HORIZONTAL_SPEED: f32 = 760.0;
 const INTERNAL_DAMPING_AIR: f32 = 0.955;
 
@@ -404,6 +405,14 @@ impl Blob {
             })
             .sum::<f32>()
             / self.particles.len() as f32;
+        let idle_rock_rate = if wants_idle {
+            let side = idle_lobe_center(self.idle_phase.floor() as usize)
+                .cos()
+                .signum();
+            -side * idle_breath_pulse(self.idle_phase, self.idle_amount) * IDLE_ROCK_RATE
+        } else {
+            0.0
+        };
         let compression_anchor = self
             .particles
             .iter()
@@ -436,7 +445,8 @@ impl Blob {
 
             if self.grounded {
                 let offset = particle.position - center;
-                let target_angular_displacement = -horizontal * GROUND_ROLL_RATE * dt;
+                let target_angular_displacement =
+                    (-horizontal * GROUND_ROLL_RATE + idle_rock_rate) * dt;
                 let angular_correction =
                     (target_angular_displacement - angular_displacement) * 0.34;
                 velocity += offset.perp() * angular_correction;
@@ -636,7 +646,7 @@ impl Blob {
         let breath_phase = local_time / ACTIVE_PART * std::f32::consts::PI;
         let pulse = breath_phase.sin().powi(2) * self.idle_amount;
         let lobe_index = self.idle_phase.floor() as usize % 4;
-        let lobe_center = [0.38, 0.92, 2.22, 2.76][lobe_index];
+        let lobe_center = idle_lobe_center(lobe_index);
 
         let mut corrections = vec![Vec2::ZERO; count];
         let mut active_particles = 0;
@@ -647,7 +657,11 @@ impl Blob {
                 continue;
             }
 
-            let angle = index as f32 / count as f32 * std::f32::consts::TAU;
+            // Use the current world-space direction, not the material point's
+            // original index. A blob can rotate while settling after a split;
+            // index-based breathing would then inflate a side or the contact
+            // patch and inject a persistent rolling torque.
+            let angle = offset.y.atan2(offset.x).rem_euclid(std::f32::consts::TAU);
             let angular_distance = (angle - lobe_center)
                 .abs()
                 .min(std::f32::consts::TAU - (angle - lobe_center).abs());
@@ -888,6 +902,25 @@ impl Blob {
         self.support_normal_sum += support_sum;
         self.support_contact_count += support_count;
     }
+}
+
+fn idle_lobe_center(cycle: usize) -> f32 {
+    // Alternate membrane sides on every breath. The two angles used on each
+    // side differ, so the result remains organic instead of becoming a
+    // regular left-right pendulum.
+    [0.38, 2.22, 0.92, 2.76][cycle % 4]
+}
+
+fn idle_breath_pulse(phase: f32, amount: f32) -> f32 {
+    const ACTIVE_PART: f32 = 0.68;
+    let local_time = phase.fract();
+    if local_time >= ACTIVE_PART {
+        return 0.0;
+    }
+    (local_time / ACTIVE_PART * std::f32::consts::PI)
+        .sin()
+        .powi(2)
+        * amount
 }
 
 /// Stable signed variation tied to membrane material rather than simulation

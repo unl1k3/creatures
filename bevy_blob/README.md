@@ -221,6 +221,8 @@ bevy_blob/
 ├── Cargo.lock          Reproducible dependency versions
 ├── README.md           Project documentation
 ├── PHYSICS_TEST_SCENARIOS.md  Difficult-contact layouts and acceptance criteria
+├── assets/             Runtime level definitions and visual artwork
+│   └── levels/sewer_01/level.json  Standard sewer geometry and layer references
 ├── src/                Game source code and automated tests
 │   ├── main.rs         Application setup, world state, simulation, split/merge flow
 │   ├── blob.rs         Soft-body model, constraints, movement, and collisions
@@ -230,6 +232,7 @@ bevy_blob/
 │   ├── nutrition.rs    Nutrient ingestion, digestion, energy recovery, and waste
 │   ├── hud.rs          Dedicated controls and live-metrics windows
 │   ├── input.rs        Keyboard input, selection, reset, and player actions
+│   ├── level_format.rs Versioned JSON parsing and level validation
 │   ├── camera.rs       Smooth tracking of the selected creature
 │   ├── environment.rs  Level geometry, Avian layers, and static colliders
 │   ├── rendering.rs    Dynamic meshes, family colors, outlines, and indicators
@@ -327,11 +330,24 @@ metrics window.
 
 ## Validation
 
-The current automated suite contains 80 tests covering soft-body constraints,
+The current automated suite contains 87 tests covering soft-body constraints,
 jump charging and size scaling, rolling, collision recovery, topology repair,
 recursive splitting, hierarchical merging, camera targeting, dynamic mesh
 generation, acid bursts, vitality states, death causes, and complete weapon
 reset behavior.
+
+## Level files
+
+The standard sewer level is defined in
+`assets/levels/sewer_01/level.json`. The versioned JSON contains the world size,
+blob spawn, route checkpoints, rectangular or polygonal collision geometry,
+and optional visual image layers. Physics never derives collision shapes from
+artwork, so images can be replaced without changing gameplay.
+
+Visual layers use asset-relative image paths plus an explicit world position,
+size, and depth. Keep background images below the physics drawing depth and
+foreground images above it. Large levels can use several adjacent images
+instead of a single oversized texture.
 
 ## Roadmap
 

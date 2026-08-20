@@ -4,6 +4,7 @@ mod camera;
 mod environment;
 mod hud;
 mod input;
+mod level_format;
 mod nutrition;
 mod rendering;
 mod shield;
@@ -103,7 +104,7 @@ fn main() {
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_systems(
             Startup,
-            (setup, setup_environment, setup_nutrition, setup_legend).chain(),
+            (setup_environment, setup, setup_nutrition, setup_legend).chain(),
         )
         .add_systems(
             FixedUpdate,
@@ -144,13 +145,13 @@ fn main() {
         .run();
 }
 
-fn setup(mut commands: Commands) {
+fn setup(mut commands: Commands, level: Res<Level>) {
     commands.spawn((Camera2d, GameCamera));
     commands.insert_resource(BlobWorld {
         active: vec![ActiveBlob {
             id: 0,
             parent_id: None,
-            body: Blob::new(BLOB_START, INITIAL_RADIUS),
+            body: Blob::new(level.spawn_position, INITIAL_RADIUS),
         }],
         selected: 0,
         rejoin_parent: None,
@@ -233,7 +234,9 @@ fn simulate_blob(
             true,
         );
     }
-    if let Some((children, parent)) = update_rejoining(&mut blobs, &level.platforms) {
+    if let Some((children, parent)) =
+        update_rejoining(&mut blobs, &level.platforms, &level.fixtures)
+    {
         vitality.merge(children, parent);
     }
     resolve_blob_collisions_with_vitality(&mut blobs.active, &vitality);
@@ -357,7 +360,11 @@ fn rejoin_roll_directions(blobs: &BlobWorld, platforms: &[Platform]) -> Option<V
     Some(directions)
 }
 
-fn update_rejoining(blobs: &mut BlobWorld, platforms: &[Platform]) -> Option<([u64; 2], u64)> {
+fn update_rejoining(
+    blobs: &mut BlobWorld,
+    platforms: &[Platform],
+    fixtures: &[Vec<Vec2>],
+) -> Option<([u64; 2], u64)> {
     let Some((first_index, second_index, parent_id)) = rejoin_pair_indices(blobs) else {
         return None;
     };
@@ -375,10 +382,13 @@ fn update_rejoining(blobs: &mut BlobWorld, platforms: &[Platform]) -> Option<([u
     );
     if surface_gap <= 2.0 * pair_scale {
         let child_ids = [blobs.active[first_index].id, blobs.active[second_index].id];
-        let merged = Blob::merge_pair(
+        let mut merged = Blob::merge_pair(
             &blobs.active[first_index].body,
             &blobs.active[second_index].body,
         );
+        if !place_merged_blob_clear(&mut merged, platforms, fixtures) {
+            return None;
+        }
         let grandparent = blobs.parent_links.remove(&parent_id).flatten();
         let insert_index = first_index.min(second_index);
         blobs.active.remove(first_index.max(second_index));
@@ -397,6 +407,92 @@ fn update_rejoining(blobs: &mut BlobWorld, platforms: &[Platform]) -> Option<([u
         return Some((child_ids, parent_id));
     }
     None
+}
+
+fn place_merged_blob_clear(
+    merged: &mut Blob,
+    platforms: &[Platform],
+    fixtures: &[Vec<Vec2>],
+) -> bool {
+    let initial_center = merged.center();
+    let clearance_radius = merged.rest_radius + 3.0 * merged.size_scale();
+    for _ in 0..16 {
+        let center = merged.center();
+        let correction = platforms
+            .iter()
+            .find_map(|platform| merge_circle_aabb_penetration(center, clearance_radius, platform))
+            .or_else(|| {
+                fixtures.iter().find_map(|vertices| {
+                    merge_circle_convex_penetration(center, clearance_radius, vertices)
+                })
+            });
+        let Some((depth, normal)) = correction else {
+            return merged.center().distance(initial_center) <= merged.rest_radius * 1.1;
+        };
+        merged.translate(normal * (depth + 0.5));
+    }
+    false
+}
+
+fn merge_circle_aabb_penetration(
+    center: Vec2,
+    radius: f32,
+    platform: &Platform,
+) -> Option<(f32, Vec2)> {
+    let local = center - platform.center;
+    let closest = local.clamp(-platform.half_size, platform.half_size);
+    let delta = local - closest;
+    let distance = delta.length();
+    if distance > 0.001 {
+        return (distance < radius).then(|| (radius - distance, delta / distance));
+    }
+    let x_clearance = platform.half_size.x - local.x.abs();
+    let y_clearance = platform.half_size.y - local.y.abs();
+    if x_clearance < y_clearance {
+        let side = if local.x >= 0.0 { 1.0 } else { -1.0 };
+        Some((radius + x_clearance, Vec2::new(side, 0.0)))
+    } else {
+        let side = if local.y >= 0.0 { 1.0 } else { -1.0 };
+        Some((radius + y_clearance, Vec2::new(0.0, side)))
+    }
+}
+
+fn merge_circle_convex_penetration(
+    center: Vec2,
+    radius: f32,
+    vertices: &[Vec2],
+) -> Option<(f32, Vec2)> {
+    if vertices.len() < 3 {
+        return None;
+    }
+    let orientation = vertices
+        .iter()
+        .zip(vertices.iter().cycle().skip(1))
+        .map(|(first, second)| first.perp_dot(*second))
+        .sum::<f32>()
+        .signum();
+    if orientation == 0.0 {
+        return None;
+    }
+    let mut inside = true;
+    let mut nearest = (f32::INFINITY, Vec2::Y, Vec2::Y);
+    for (first, second) in vertices.iter().zip(vertices.iter().cycle().skip(1)) {
+        let edge = *second - *first;
+        inside &= edge.perp_dot(center - *first) * orientation >= 0.0;
+        let t = ((center - *first).dot(edge) / edge.length_squared().max(0.001)).clamp(0.0, 1.0);
+        let delta = center - (*first + edge * t);
+        if delta.length() < nearest.0 {
+            let outward = -edge.perp() * orientation / edge.length().max(0.001);
+            nearest = (delta.length(), outward, delta.normalize_or(outward));
+        }
+    }
+    if inside {
+        Some((radius + nearest.0, nearest.1))
+    } else if nearest.0 < radius {
+        Some((radius - nearest.0, nearest.2))
+    } else {
+        None
+    }
 }
 
 fn path_is_clear(start: Vec2, end: Vec2, platforms: &[Platform]) -> bool {

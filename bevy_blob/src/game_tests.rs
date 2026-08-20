@@ -34,6 +34,84 @@ mod tests {
     }
 
     #[test]
+    fn scenario_one_split_children_do_not_drift_left_while_breathing() {
+        let (level, spawn) = Level::test_scenario(1);
+        let dt = 1.0 / 120.0;
+        let mut parent = Blob::new(spawn, INITIAL_RADIUS);
+        for _ in 0..360 {
+            parent.step_with_vigor(
+                dt,
+                0.0,
+                false,
+                &level.platforms,
+                &level.fixtures,
+                1.0,
+                true,
+                true,
+            );
+        }
+
+        let mut world = BlobWorld {
+            active: vec![active(0, None, parent)],
+            selected: 0,
+            rejoin_parent: None,
+            rejoin_elapsed: 0.0,
+            parent_links: HashMap::new(),
+            next_id: 1,
+        };
+        let mut rng = SplitRng(0x5eed);
+        for _ in 0..3 {
+            split_selected(&mut world, &mut rng, dt);
+        }
+        let mut children = world.active;
+        for _ in 0..360 {
+            for child in &mut children {
+                child.body.step_with_vigor(
+                    dt,
+                    0.0,
+                    false,
+                    &level.platforms,
+                    &level.fixtures,
+                    1.0,
+                    true,
+                    true,
+                );
+            }
+            resolve_blob_collisions(&mut children);
+        }
+        let settled = children
+            .iter()
+            .map(|child| child.body.center())
+            .collect::<Vec<_>>();
+
+        for _ in 0..3_120 {
+            for child in &mut children {
+                child.body.step_with_vigor(
+                    dt,
+                    0.0,
+                    false,
+                    &level.platforms,
+                    &level.fixtures,
+                    1.0,
+                    true,
+                    true,
+                );
+            }
+            resolve_blob_collisions(&mut children);
+        }
+
+        let drift = children
+            .iter()
+            .zip(&settled)
+            .map(|(child, start)| child.body.center().x - start.x)
+            .collect::<Vec<_>>();
+        assert!(
+            drift.iter().all(|distance| distance.abs() < 1.0),
+            "scenario 1 breathing drifted after split: {drift:?}"
+        );
+    }
+
+    #[test]
     fn living_blob_does_not_make_a_corpse_rebound() {
         let corpse = active(1, None, Blob::new(Vec2::ZERO, 30.0));
         let mut living = active(2, None, Blob::new(Vec2::new(0.0, 54.0), 30.0));
@@ -222,10 +300,34 @@ mod tests {
         second.translate(midpoint - second.center() + Vec2::X * second.rest_radius);
         let mut world = sibling_world(first, second, true);
 
-        update_rejoining(&mut world, &[]);
+        update_rejoining(&mut world, &[], &[]);
         assert_eq!(world.active.len(), 1);
         assert!(world.rejoin_parent.is_none());
         assert_eq!(world.active[0].id, 0);
+    }
+
+    #[test]
+    fn touching_children_do_not_merge_inside_a_gap_too_small_for_the_parent() {
+        let parent = Blob::new(Vec2::ZERO, INITIAL_RADIUS);
+        let [mut first, mut second] = parent.split_pair(1.0 / 120.0);
+        first.translate(Vec2::new(-first.rest_radius, 0.0) - first.center());
+        second.translate(Vec2::new(second.rest_radius, 0.0) - second.center());
+        let mut world = sibling_world(first, second, true);
+        let platforms = [
+            Platform {
+                center: Vec2::new(0.0, -42.0),
+                half_size: Vec2::new(180.0, 10.0),
+            },
+            Platform {
+                center: Vec2::new(0.0, 42.0),
+                half_size: Vec2::new(180.0, 10.0),
+            },
+        ];
+
+        update_rejoining(&mut world, &platforms, &[]);
+
+        assert_eq!(world.active.len(), 2);
+        assert_eq!(world.rejoin_parent, Some(0));
     }
 
     #[test]
@@ -236,7 +338,7 @@ mod tests {
 
         let directions = rejoin_roll_directions(&world, &[]).unwrap();
         assert_eq!(directions, vec![1.0, -1.0]);
-        update_rejoining(&mut world, &[]);
+        update_rejoining(&mut world, &[], &[]);
         assert_eq!(world.active.len(), 2);
     }
 
@@ -249,7 +351,7 @@ mod tests {
         second.translate(midpoint - second.center() + Vec2::X * second.rest_radius);
         let mut world = sibling_world(first, second, false);
 
-        update_rejoining(&mut world, &[]);
+        update_rejoining(&mut world, &[], &[]);
         assert_eq!(world.active.len(), 2);
     }
 
@@ -294,7 +396,7 @@ mod tests {
         // Merge the deepest siblings first.
         assert!(start_selected_rejoin(&mut world));
         touch_rejoin_pair(&mut world);
-        update_rejoining(&mut world, &[]);
+        update_rejoining(&mut world, &[], &[]);
         assert_eq!(world.active.len(), 2);
         assert_eq!(world.active[0].id, inner_parent);
 
@@ -302,7 +404,7 @@ mod tests {
         world.selected = 0;
         assert!(start_selected_rejoin(&mut world));
         touch_rejoin_pair(&mut world);
-        update_rejoining(&mut world, &[]);
+        update_rejoining(&mut world, &[], &[]);
         assert_eq!(world.active.len(), 1);
         assert_eq!(world.active[0].id, 0);
         assert_eq!(world.active[0].parent_id, None);

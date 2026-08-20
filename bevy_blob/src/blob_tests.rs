@@ -525,6 +525,67 @@ mod tests {
     }
 
     #[test]
+    fn breathing_uses_current_upper_membrane_after_material_rotation() {
+        let mut blob = Blob::new(Vec2::ZERO, 50.0);
+        // Reassociate material indices with the opposite side, as happens
+        // naturally after the body rolls while settling.
+        let half_turn = blob.particles.len() / 2;
+        blob.particles.rotate_left(half_turn);
+        blob.idle_amount = 1.0;
+        blob.idle_phase = 0.25;
+        let lower_before = blob
+            .particles
+            .iter()
+            .map(|particle| particle.position)
+            .collect::<Vec<_>>();
+
+        blob.solve_idle_shape();
+
+        for (particle, before) in blob.particles.iter().zip(lower_before) {
+            if before.y < -0.001 {
+                assert!(particle.position.distance(before) < 0.0001);
+            }
+        }
+    }
+
+    #[test]
+    fn consecutive_idle_breaths_alternate_membrane_sides() {
+        let sides = (0..8)
+            .map(|cycle| idle_lobe_center(cycle).cos().signum())
+            .collect::<Vec<_>>();
+        assert!(sides.windows(2).all(|pair| pair[0] == -pair[1]));
+    }
+
+    #[test]
+    fn idle_breath_cycles_do_not_accumulate_ground_drift() {
+        let floor = Platform {
+            center: Vec2::new(0.0, -60.0),
+            half_size: Vec2::new(200.0, 10.0),
+        };
+        let mut blob = Blob::new(Vec2::ZERO, 50.0);
+        let dt = 1.0 / 120.0;
+        for _ in 0..240 {
+            blob.step(dt, 0.0, false, &[floor]);
+        }
+        blob.idle_phase = 0.0;
+        blob.idle_amount = 1.0;
+        let mut previous_x = blob.center().x;
+        let mut drifts = Vec::new();
+        for _ in 0..4 {
+            for _ in 0..312 {
+                blob.step(dt, 0.0, false, &[floor]);
+            }
+            let current_x = blob.center().x;
+            drifts.push(current_x - previous_x);
+            previous_x = current_x;
+        }
+        assert!(
+            drifts.iter().all(|drift| drift.abs() < 0.01),
+            "idle breathing accumulated visible ground drift: {drifts:?}"
+        );
+    }
+
+    #[test]
     fn takeoff_removes_spin_but_preserves_translation() {
         let mut blob = Blob::new(Vec2::ZERO, 50.0);
         let center = blob.center();

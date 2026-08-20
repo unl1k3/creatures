@@ -1,5 +1,6 @@
 use super::*;
 use crate::blob::Particle;
+use crate::level_format::{ParsedLevel, VisualLayer, parse_level};
 use avian2d::prelude::{
     Collider, CollisionLayers, PhysicsLayer, RigidBody, ShapeCastConfig, SpatialQuery,
     SpatialQueryFilter,
@@ -23,12 +24,18 @@ pub(super) struct EnvironmentCollider {
 #[derive(Component, Debug)]
 pub(super) struct AvianMigratedSurface;
 
+#[derive(Component)]
+pub(super) struct LevelArtwork;
+
 #[derive(Resource)]
 pub(super) struct Level {
+    _name: String,
+    _size: Vec2,
     pub(super) platforms: Vec<Platform>,
     pub(super) fixtures: Vec<Vec<Vec2>>,
     pub(super) spawn_position: Vec2,
     pub(super) route: Vec<Vec2>,
+    visual_layers: Vec<VisualLayer>,
 }
 
 #[derive(Resource, Default)]
@@ -68,25 +75,46 @@ pub(super) struct AvianContactManifolds {
 
 impl Level {
     fn prototype() -> Self {
+        let parsed = parse_level(include_str!("../assets/levels/sewer_01/level.json"))
+            .expect("embedded sewer_01 level must be valid");
+        Self::from_parsed(parsed)
+    }
+
+    fn from_parsed(parsed: ParsedLevel) -> Self {
         Self {
-            platforms: vec![
-                platform(0.0, -370.0, 660.0, 38.0),
-                platform(-250.0, -150.0, 260.0, 28.0),
-                platform(210.0, 65.0, 300.0, 28.0),
-                platform(-180.0, 290.0, 260.0, 28.0),
-                platform(210.0, 510.0, 280.0, 28.0),
-                platform(-170.0, 735.0, 300.0, 28.0),
-            ],
-            fixtures: Vec::new(),
-            spawn_position: BLOB_START,
-            route: Vec::new(),
+            _name: parsed.name,
+            _size: parsed.size,
+            platforms: parsed.platforms,
+            fixtures: parsed.fixtures,
+            spawn_position: parsed.spawn,
+            route: parsed.route,
+            visual_layers: parsed.visual_layers,
         }
     }
 
-    fn test_scenario(index: u8) -> (Self, Vec2) {
+    pub(super) fn has_artwork(&self) -> bool {
+        !self.visual_layers.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(super) fn from_test_geometry(platforms: Vec<Platform>, fixtures: Vec<Vec<Vec2>>) -> Self {
+        Self {
+            _name: "Test level".into(),
+            _size: Vec2::splat(1000.0),
+            platforms,
+            fixtures,
+            spawn_position: Vec2::ZERO,
+            route: Vec::new(),
+            visual_layers: Vec::new(),
+        }
+    }
+
+    pub(super) fn test_scenario(index: u8) -> (Self, Vec2) {
         match index {
             2 => (
                 Self {
+                    _name: "Supports lab".into(),
+                    _size: Vec2::new(760.0, 900.0),
                     platforms: vec![
                         platform(0.0, -370.0, 760.0, 38.0),
                         platform(-245.0, -265.0, 70.0, 170.0),
@@ -105,11 +133,14 @@ impl Level {
                         Vec2::new(170.0, -60.0),
                         Vec2::new(295.0, 110.0),
                     ],
+                    visual_layers: Vec::new(),
                 },
                 Vec2::new(-320.0, -285.0),
             ),
             3 => (
                 Self {
+                    _name: "Curves lab".into(),
+                    _size: Vec2::new(1000.0, 900.0),
                     platforms: vec![
                         platform(0.0, -390.0, 760.0, 38.0),
                         platform(350.0, 0.0, 105.0, 24.0),
@@ -138,11 +169,14 @@ impl Level {
                         Vec2::new(-80.0, 330.0),
                         Vec2::new(-260.0, 320.0),
                     ],
+                    visual_layers: Vec::new(),
                 },
                 Vec2::new(-300.0, -285.0),
             ),
             4 => (
                 Self {
+                    _name: "Low passage lab".into(),
+                    _size: Vec2::new(760.0, 900.0),
                     platforms: vec![
                         platform(0.0, -390.0, 760.0, 38.0),
                         platform(-210.0, -285.0, 28.0, 190.0),
@@ -159,11 +193,14 @@ impl Level {
                         Vec2::new(220.0, -310.0),
                         Vec2::new(355.0, -310.0),
                     ],
+                    visual_layers: Vec::new(),
                 },
                 Vec2::new(-100.0, -245.0),
             ),
             5 => (
                 Self {
+                    _name: "Impact lab".into(),
+                    _size: Vec2::new(900.0, 1100.0),
                     platforms: vec![
                         platform(0.0, -390.0, 760.0, 38.0),
                         platform(-185.0, -245.0, 125.0, 24.0),
@@ -189,11 +226,14 @@ impl Level {
                         Vec2::new(130.0, 655.0),
                         Vec2::new(305.0, 650.0),
                     ],
+                    visual_layers: Vec::new(),
                 },
                 Vec2::new(-300.0, -285.0),
             ),
             6 => (
                 Self {
+                    _name: "Split bridge lab".into(),
+                    _size: Vec2::new(760.0, 900.0),
                     platforms: vec![
                         platform(0.0, -390.0, 760.0, 38.0),
                         platform(270.0, -40.0, 105.0, 24.0),
@@ -209,6 +249,7 @@ impl Level {
                         Vec2::new(155.0, 170.0),
                         Vec2::new(-45.0, 170.0),
                     ],
+                    visual_layers: Vec::new(),
                 },
                 Vec2::new(0.0, -125.0),
             ),
@@ -271,14 +312,32 @@ fn v_valley_fixtures(center: Vec2, width: f32, depth: f32) -> Vec<Vec<Vec2>> {
     ]
 }
 
-pub(super) fn setup_environment(mut commands: Commands) {
+pub(super) fn setup_environment(mut commands: Commands, asset_server: Option<Res<AssetServer>>) {
     let level = Level::prototype();
     spawn_level_colliders(&mut commands, &level);
+    spawn_level_artwork(&mut commands, asset_server.as_deref(), &level);
     commands.insert_resource(level);
     commands.insert_resource(TestScenario::default());
     commands.insert_resource(RouteProgress { next: 1 });
     commands.insert_resource(AvianContactDiagnostics::default());
     commands.insert_resource(AvianContactManifolds::default());
+}
+
+fn spawn_level_artwork(commands: &mut Commands, asset_server: Option<&AssetServer>, level: &Level) {
+    let Some(asset_server) = asset_server else {
+        return;
+    };
+    for layer in &level.visual_layers {
+        commands.spawn((
+            LevelArtwork,
+            Sprite {
+                image: asset_server.load(layer.image.clone()),
+                custom_size: Some(layer.size),
+                ..default()
+            },
+            Transform::from_translation(layer.position.extend(layer.depth)),
+        ));
+    }
 }
 
 fn spawn_level_colliders(commands: &mut Commands, level: &Level) {
@@ -329,6 +388,8 @@ pub(super) fn switch_test_scenario(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
     colliders: Query<Entity, With<EnvironmentCollider>>,
+    artwork: Query<Entity, With<LevelArtwork>>,
+    asset_server: Option<Res<AssetServer>>,
     mut scenario: ResMut<TestScenario>,
     mut route_progress: ResMut<RouteProgress>,
     mut level: ResMut<Level>,
@@ -352,7 +413,11 @@ pub(super) fn switch_test_scenario(
     for entity in &colliders {
         commands.entity(entity).despawn();
     }
+    for entity in &artwork {
+        commands.entity(entity).despawn();
+    }
     let (new_level, spawn) = Level::test_scenario(requested);
+    spawn_level_artwork(&mut commands, asset_server.as_deref(), &new_level);
     spawn_level_colliders(&mut commands, &new_level);
     *level = new_level;
     scenario.0 = requested;

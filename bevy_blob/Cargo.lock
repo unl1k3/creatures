@@ -410,6 +410,8 @@ version = "0.1.0"
 dependencies = [
  "avian2d",
  "bevy",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

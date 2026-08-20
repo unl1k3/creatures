@@ -527,15 +527,19 @@ pub(super) fn draw_world(
     route_progress: Res<RouteProgress>,
     nutrition: Res<NutritionWorld>,
 ) {
-    for platform in &level.platforms {
-        gizmos.rect_2d(
-            platform.center,
-            platform.half_size * 2.0,
-            Color::srgb(0.18, 0.27, 0.38),
-        );
-    }
-    for fixture in &level.fixtures {
-        gizmos.lineloop_2d(fixture.iter().copied(), Color::srgb(0.24, 0.38, 0.52));
+    // Laboratories without artwork keep their collision visualization. A
+    // finished level renders its authored layers without debug rectangles.
+    if !level.has_artwork() {
+        for platform in &level.platforms {
+            gizmos.rect_2d(
+                platform.center,
+                platform.half_size * 2.0,
+                Color::srgb(0.18, 0.27, 0.38),
+            );
+        }
+        for fixture in &level.fixtures {
+            gizmos.lineloop_2d(fixture.iter().copied(), Color::srgb(0.24, 0.38, 0.52));
+        }
     }
     for (index, checkpoint) in level.route.iter().enumerate().skip(route_progress.next) {
         let radius = (7.0 + index as f32 * 1.5).min(20.0);
