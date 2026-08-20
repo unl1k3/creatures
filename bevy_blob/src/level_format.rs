@@ -9,6 +9,7 @@ pub(super) const LEVEL_FORMAT_VERSION: u32 = 1;
 pub(super) struct ParsedLevel {
     pub(super) name: String,
     pub(super) size: Vec2,
+    pub(super) center: Vec2,
     pub(super) spawn: Vec2,
     pub(super) platforms: Vec<Platform>,
     pub(super) fixtures: Vec<Vec<Vec2>>,
@@ -41,6 +42,8 @@ struct LevelDocument {
     version: u32,
     name: String,
     size: Point,
+    #[serde(default)]
+    center: Point,
     spawn: Point,
     #[serde(default)]
     colliders: Vec<ColliderDocument>,
@@ -50,7 +53,7 @@ struct LevelDocument {
     visual_layers: Vec<VisualLayerDocument>,
 }
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Point {
     x: f32,
@@ -97,6 +100,7 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
     }
     validate_text("level name", &document.name)?;
     let size = positive_size("level size", document.size)?;
+    let center = finite_point("level center", document.center)?;
     let spawn = finite_point("spawn", document.spawn)?;
     let mut platforms = Vec::new();
     let mut fixtures = Vec::new();
@@ -157,6 +161,7 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
     Ok(ParsedLevel {
         name: document.name,
         size,
+        center,
         spawn,
         platforms,
         fixtures,

@@ -25,8 +25,9 @@ use blob::{Blob, DEFAULT_CREATURE_SCALE, Platform, REFERENCE_RADIUS};
 use camera::selected_camera_target;
 use camera::{GameCamera, follow_camera};
 use environment::{
-    AvianContactDiagnostics, Level, RouteProgress, TestScenario, advance_route_progress,
-    resolve_avian_environment, sample_avian_contacts, setup_environment, switch_test_scenario,
+    AvianContactDiagnostics, Level, LevelDebugOverlay, RouteProgress, TestScenario,
+    advance_route_progress, resolve_avian_environment, sample_avian_contacts, setup_environment,
+    switch_test_scenario, toggle_level_debug,
 };
 use hud::{arrange_auxiliary_windows, setup_legend, toggle_legend, update_metrics};
 #[cfg(test)]
@@ -124,6 +125,7 @@ fn main() {
                 exit_on_escape,
                 arrange_auxiliary_windows,
                 toggle_legend,
+                toggle_level_debug,
                 switch_test_scenario,
                 handle_blob_actions,
                 start_phagocytosis,

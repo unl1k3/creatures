@@ -245,7 +245,8 @@ Use [PHYSICS_TEST_SCENARIOS.md](PHYSICS_TEST_SCENARIOS.md) as the shared manual
 test plan for irregular supports, blob stacks, and movable corpses.
 
 Press `F1` through `F6` to load the standard level or one of five grouped test
-laboratories. `F2` combines narrow supports, stairs, corners, and a bridge; `F3`
+laboratories. `F1` now crosses both lateral wings of the sewer before continuing
+through its vertical platforms. `F2` combines narrow supports, stairs, corners, and a bridge; `F3`
 combines a shallow ramp, semicircle, and segmented wave; `F4` combines a U-shaped
 pocket with a low horizontal passage; `F5` is a separate fall-and-impact course
 with narrow landings, alternating ledges, a drop shaft, and overhead contacts;
@@ -330,7 +331,7 @@ metrics window.
 
 ## Validation
 
-The current automated suite contains 87 tests covering soft-body constraints,
+The current automated suite contains 90 tests covering soft-body constraints,
 jump charging and size scaling, rolling, collision recovery, topology repair,
 recursive splitting, hierarchical merging, camera targeting, dynamic mesh
 generation, acid bursts, vitality states, death causes, and complete weapon
@@ -340,7 +341,7 @@ reset behavior.
 
 The standard sewer level is defined in
 `assets/levels/sewer_01/level.json`. The versioned JSON contains the world size,
-blob spawn, route checkpoints, rectangular or polygonal collision geometry,
+world size and center, blob spawn, route checkpoints, rectangular or polygonal collision geometry,
 and optional visual image layers. Physics never derives collision shapes from
 artwork, so images can be replaced without changing gameplay.
 
@@ -348,6 +349,11 @@ Visual layers use asset-relative image paths plus an explicit world position,
 size, and depth. Keep background images below the physics drawing depth and
 foreground images above it. Large levels can use several adjacent images
 instead of a single oversized texture.
+
+Press `F7` to overlay level bounds, collider geometry, route checkpoints, and
+the spawn marker on the artwork. While it is active, use `I/J/K/L` to pan,
+`U/O` to zoom, and `P` to return to the selected blob. This diagnostic view
+does not alter physics.
 
 ## Roadmap
 

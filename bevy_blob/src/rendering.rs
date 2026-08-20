@@ -524,12 +524,12 @@ pub(super) fn draw_world(
     blobs: Res<BlobWorld>,
     vitality_world: Res<VitalityWorld>,
     level: Res<Level>,
+    debug_overlay: Res<LevelDebugOverlay>,
     route_progress: Res<RouteProgress>,
     nutrition: Res<NutritionWorld>,
 ) {
-    // Laboratories without artwork keep their collision visualization. A
-    // finished level renders its authored layers without debug rectangles.
-    if !level.has_artwork() {
+    // Laboratories without artwork retain their unobtrusive collision view.
+    if !level.has_artwork() && !debug_overlay.visible {
         for platform in &level.platforms {
             gizmos.rect_2d(
                 platform.center,
@@ -539,6 +539,55 @@ pub(super) fn draw_world(
         }
         for fixture in &level.fixtures {
             gizmos.lineloop_2d(fixture.iter().copied(), Color::srgb(0.24, 0.38, 0.52));
+        }
+    }
+    if debug_overlay.visible {
+        // Draw three close contours to remain readable over detailed artwork.
+        for platform in &level.platforms {
+            for expansion in [-3.0, 0.0, 3.0] {
+                gizmos.rect_2d(
+                    platform.center,
+                    platform.half_size * 2.0 + Vec2::splat(expansion),
+                    Color::srgba(1.0, 0.28, 0.08, 0.96),
+                );
+            }
+        }
+        for fixture in &level.fixtures {
+            for (first, second) in fixture
+                .iter()
+                .copied()
+                .zip(fixture.iter().copied().cycle().skip(1))
+                .take(fixture.len())
+            {
+                let normal = (second - first).perp().normalize_or_zero();
+                for offset in [-2.0, 0.0, 2.0] {
+                    gizmos.line_2d(
+                        first + normal * offset,
+                        second + normal * offset,
+                        Color::srgba(1.0, 0.28, 0.08, 0.96),
+                    );
+                }
+            }
+        }
+        for expansion in [-3.0, 0.0, 3.0] {
+            gizmos.rect_2d(
+                level.center(),
+                level.size() + Vec2::splat(expansion),
+                Color::srgba(0.12, 0.85, 1.0, 0.92),
+            );
+        }
+        let marker_size = 14.0;
+        for offset in [-2.0, 0.0, 2.0] {
+            gizmos.line_2d(
+                level.spawn_position + Vec2::new(-marker_size, offset),
+                level.spawn_position + Vec2::new(marker_size, offset),
+                Color::srgb(0.25, 1.0, 0.35),
+            );
+            gizmos.line_2d(
+                level.spawn_position + Vec2::new(offset, -marker_size),
+                level.spawn_position + Vec2::new(offset, marker_size),
+                Color::srgb(0.25, 1.0, 0.35),
+            );
         }
     }
     for (index, checkpoint) in level.route.iter().enumerate().skip(route_progress.next) {

@@ -365,7 +365,7 @@ impl Blob {
         let idle_target = if wants_idle { 1.0 } else { 0.0 };
         let idle_response = if wants_idle { 1.8 } else { 7.0 };
         self.idle_amount += (idle_target - self.idle_amount) * (idle_response * dt).clamp(0.0, 1.0);
-        if horizontal != 0.0 || charging {
+        if !animate_idle || horizontal != 0.0 || charging {
             self.idle_amount = 0.0;
         }
 
@@ -542,7 +542,18 @@ impl Blob {
                 self.repair_self_intersection();
             }
         }
-        self.solve_idle_shape();
+        if animate_idle {
+            self.solve_idle_shape();
+        }
+        // Shape recovery and self-intersection repair can move a point after
+        // an iteration's collision pass. End every frame with environment
+        // projection so no membrane vertex remains embedded in level geometry.
+        self.solve_collisions(platforms);
+        self.solve_fixture_collisions(fixtures);
+        if self.repair_self_intersection() {
+            self.solve_collisions(platforms);
+            self.solve_fixture_collisions(fixtures);
+        }
         self.last_impact_speed /= dt.max(0.000_001);
     }
 

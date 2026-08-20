@@ -30,7 +30,8 @@ pub(super) struct LevelArtwork;
 #[derive(Resource)]
 pub(super) struct Level {
     _name: String,
-    _size: Vec2,
+    size: Vec2,
+    center: Vec2,
     pub(super) platforms: Vec<Platform>,
     pub(super) fixtures: Vec<Vec<Vec2>>,
     pub(super) spawn_position: Vec2,
@@ -40,6 +41,11 @@ pub(super) struct Level {
 
 #[derive(Resource, Default)]
 pub(super) struct TestScenario(pub(super) u8);
+
+#[derive(Resource, Default)]
+pub(super) struct LevelDebugOverlay {
+    pub(super) visible: bool,
+}
 
 #[derive(Resource, Default)]
 pub(super) struct RouteProgress {
@@ -83,7 +89,8 @@ impl Level {
     fn from_parsed(parsed: ParsedLevel) -> Self {
         Self {
             _name: parsed.name,
-            _size: parsed.size,
+            size: parsed.size,
+            center: parsed.center,
             platforms: parsed.platforms,
             fixtures: parsed.fixtures,
             spawn_position: parsed.spawn,
@@ -96,11 +103,20 @@ impl Level {
         !self.visual_layers.is_empty()
     }
 
+    pub(super) fn size(&self) -> Vec2 {
+        self.size
+    }
+
+    pub(super) fn center(&self) -> Vec2 {
+        self.center
+    }
+
     #[cfg(test)]
     pub(super) fn from_test_geometry(platforms: Vec<Platform>, fixtures: Vec<Vec<Vec2>>) -> Self {
         Self {
             _name: "Test level".into(),
-            _size: Vec2::splat(1000.0),
+            size: Vec2::splat(1000.0),
+            center: Vec2::ZERO,
             platforms,
             fixtures,
             spawn_position: Vec2::ZERO,
@@ -114,7 +130,8 @@ impl Level {
             2 => (
                 Self {
                     _name: "Supports lab".into(),
-                    _size: Vec2::new(760.0, 900.0),
+                    size: Vec2::new(760.0, 900.0),
+                    center: Vec2::ZERO,
                     platforms: vec![
                         platform(0.0, -370.0, 760.0, 38.0),
                         platform(-245.0, -265.0, 70.0, 170.0),
@@ -140,7 +157,8 @@ impl Level {
             3 => (
                 Self {
                     _name: "Curves lab".into(),
-                    _size: Vec2::new(1000.0, 900.0),
+                    size: Vec2::new(1000.0, 900.0),
+                    center: Vec2::ZERO,
                     platforms: vec![
                         platform(0.0, -390.0, 760.0, 38.0),
                         platform(350.0, 0.0, 105.0, 24.0),
@@ -176,7 +194,8 @@ impl Level {
             4 => (
                 Self {
                     _name: "Low passage lab".into(),
-                    _size: Vec2::new(760.0, 900.0),
+                    size: Vec2::new(760.0, 900.0),
+                    center: Vec2::ZERO,
                     platforms: vec![
                         platform(0.0, -390.0, 760.0, 38.0),
                         platform(-210.0, -285.0, 28.0, 190.0),
@@ -200,7 +219,8 @@ impl Level {
             5 => (
                 Self {
                     _name: "Impact lab".into(),
-                    _size: Vec2::new(900.0, 1100.0),
+                    size: Vec2::new(900.0, 1100.0),
+                    center: Vec2::ZERO,
                     platforms: vec![
                         platform(0.0, -390.0, 760.0, 38.0),
                         platform(-185.0, -245.0, 125.0, 24.0),
@@ -233,7 +253,8 @@ impl Level {
             6 => (
                 Self {
                     _name: "Split bridge lab".into(),
-                    _size: Vec2::new(760.0, 900.0),
+                    size: Vec2::new(760.0, 900.0),
+                    center: Vec2::ZERO,
                     platforms: vec![
                         platform(0.0, -390.0, 760.0, 38.0),
                         platform(270.0, -40.0, 105.0, 24.0),
@@ -318,9 +339,19 @@ pub(super) fn setup_environment(mut commands: Commands, asset_server: Option<Res
     spawn_level_artwork(&mut commands, asset_server.as_deref(), &level);
     commands.insert_resource(level);
     commands.insert_resource(TestScenario::default());
+    commands.insert_resource(LevelDebugOverlay::default());
     commands.insert_resource(RouteProgress { next: 1 });
     commands.insert_resource(AvianContactDiagnostics::default());
     commands.insert_resource(AvianContactManifolds::default());
+}
+
+pub(super) fn toggle_level_debug(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut overlay: ResMut<LevelDebugOverlay>,
+) {
+    if keyboard.just_pressed(KeyCode::F7) {
+        overlay.visible = !overlay.visible;
+    }
 }
 
 fn spawn_level_artwork(commands: &mut Commands, asset_server: Option<&AssetServer>, level: &Level) {
@@ -791,7 +822,7 @@ mod tests {
 
     #[test]
     fn every_test_route_uses_conservative_jump_gaps() {
-        for scenario in 2..=6 {
+        for scenario in 1..=6 {
             let (level, _) = Level::test_scenario(scenario);
             assert!(level.route.len() >= 2);
             for pair in level.route.windows(2) {
@@ -899,6 +930,21 @@ mod tests {
             .iter(app.world())
             .count();
         assert_eq!(pilot_count, 4);
+    }
+
+    #[test]
+    fn f7_toggles_level_debug_overlay() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<LevelDebugOverlay>()
+            .add_systems(Update, toggle_level_debug);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::F7);
+
+        app.update();
+
+        assert!(app.world().resource::<LevelDebugOverlay>().visible);
     }
 
     #[test]

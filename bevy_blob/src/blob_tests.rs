@@ -52,6 +52,49 @@ mod tests {
     }
 
     #[test]
+    fn deformed_corpse_cannot_leave_a_point_inside_a_platform() {
+        let platform = Platform {
+            center: Vec2::new(0.0, -50.0),
+            half_size: Vec2::new(90.0, 12.0),
+        };
+        let mut blob = Blob::new(Vec2::new(65.0, 0.0), 45.0);
+        blob.tonicity = 0.0;
+        blob.idle_amount = 1.0;
+        // Reproduce a sharp local deformation crossing the platform corner.
+        let lowest = blob
+            .particles
+            .iter()
+            .enumerate()
+            .min_by(|(_, first), (_, second)| first.position.y.total_cmp(&second.position.y))
+            .map(|(index, _)| index)
+            .unwrap();
+        blob.particles[lowest].position = Vec2::new(82.0, -50.0);
+        blob.particles[lowest].previous = blob.particles[lowest].position;
+
+        blob.step_with_vigor(
+            1.0 / 120.0,
+            0.0,
+            false,
+            &[platform],
+            &[],
+            0.0,
+            false,
+            false,
+        );
+
+        let minimum = platform.center - platform.half_size;
+        let maximum = platform.center + platform.half_size;
+        assert!(blob.idle_amount == 0.0);
+        assert!(!blob.particles.iter().any(|particle| {
+            particle.position.x > minimum.x
+                && particle.position.x < maximum.x
+                && particle.position.y > minimum.y
+                && particle.position.y < maximum.y
+        }));
+        assert!(!has_self_intersections(&blob.particles));
+    }
+
+    #[test]
     fn convex_fixture_projects_particles_out_without_folding_membrane() {
         let fixture = vec![
             Vec2::new(-120.0, -80.0),
