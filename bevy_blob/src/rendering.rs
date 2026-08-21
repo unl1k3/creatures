@@ -5,6 +5,23 @@ use bevy::sprite::Anchor;
 use bevy::{asset::RenderAssetUsages, mesh::Indices, render::render_resource::PrimitiveTopology};
 use std::collections::HashSet;
 
+mod body;
+mod membrane;
+mod palette;
+mod vacuoles;
+#[cfg(test)]
+pub(super) use body::create_blob_mesh;
+use body::{create_blob_mesh_with_load, update_blob_mesh_with_load};
+use membrane::update_blob_outline_mesh;
+#[cfg(test)]
+pub(super) use palette::blob_family_color;
+#[cfg(test)]
+pub(super) use palette::blob_fill_color;
+use palette::{blob_outline_color, blob_vertex_light, blob_vital_color};
+use vacuoles::update_blob_vacuole_mesh;
+#[cfg(test)]
+use vacuoles::vacuole_tint;
+
 #[derive(Component)]
 pub(super) struct BlobMesh {
     blob_id: u64,
@@ -75,71 +92,6 @@ pub(super) fn sync_route_markers(
             Anchor::CENTER,
             Transform::from_translation(level.route[index].extend(0.35)),
         ));
-    }
-}
-
-fn blob_vital_color(parent_id: Option<u64>, selected: bool, vitality: Vitality) -> Color {
-    let base = blob_fill_color(parent_id, selected);
-    let fade = 0.52 + vitality.energy * 0.48;
-    let linear = base.to_srgba();
-    Color::srgba(
-        linear.red * fade,
-        linear.green * fade,
-        linear.blue * fade,
-        linear.alpha,
-    )
-}
-
-fn blob_outline_color(parent_id: Option<u64>, selected: bool, vitality: Vitality) -> Color {
-    if !vitality.is_alive() {
-        return Color::srgba(0.24, 0.28, 0.30, 0.88);
-    }
-    let (red, green, blue) = blob_family_rgb(parent_id);
-    if selected {
-        Color::srgba(
-            (red * 1.18 + 0.16).min(1.0),
-            (green * 1.18 + 0.16).min(1.0),
-            (blue * 1.18 + 0.16).min(1.0),
-            0.98,
-        )
-    } else {
-        Color::srgba(red * 0.38, green * 0.38, blue * 0.38, 0.78)
-    }
-}
-
-fn blob_family_rgb(parent_id: Option<u64>) -> (f32, f32, f32) {
-    const FAMILY_COLORS: [(f32, f32, f32); 6] = [
-        (0.30, 0.82, 0.72),
-        (0.42, 0.68, 1.00),
-        (0.88, 0.48, 0.82),
-        (1.00, 0.58, 0.34),
-        (0.62, 0.82, 0.34),
-        (0.65, 0.52, 0.96),
-    ];
-    let family_index = parent_id
-        .map(|id| (id as usize).wrapping_mul(5).wrapping_add(1) % FAMILY_COLORS.len())
-        .unwrap_or(0);
-    let (red, green, blue) = FAMILY_COLORS[family_index];
-    (red, green, blue)
-}
-
-#[cfg(test)]
-pub(super) fn blob_family_color(parent_id: Option<u64>) -> Color {
-    let (red, green, blue) = blob_family_rgb(parent_id);
-    Color::srgba(red, green, blue, 0.9)
-}
-
-pub(super) fn blob_fill_color(parent_id: Option<u64>, selected: bool) -> Color {
-    let (red, green, blue) = blob_family_rgb(parent_id);
-    if selected {
-        Color::srgba(
-            (red * 1.12 + 0.10).min(1.0),
-            (green * 1.12 + 0.10).min(1.0),
-            (blue * 1.12 + 0.10).min(1.0),
-            0.96,
-        )
-    } else {
-        Color::srgba(red * 0.72, green * 0.72, blue * 0.72, 0.62)
     }
 }
 
@@ -373,24 +325,6 @@ pub(super) fn sync_blob_meshes(
     }
 }
 
-#[cfg(test)]
-pub(super) fn create_blob_mesh(blob: &Blob) -> Mesh {
-    create_blob_mesh_with_load(blob, None, &[])
-}
-
-fn create_blob_mesh_with_load(
-    blob: &Blob,
-    load: Option<(Vec2, f32, f32, f32, usize, f32)>,
-    lights: &[LightDefinition],
-) -> Mesh {
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
-    );
-    update_blob_mesh_with_load(&mut mesh, blob, load, lights);
-    mesh
-}
-
 pub(super) fn charge_indicator_radius(blob: &Blob) -> f32 {
     let center = blob.center();
     let outermost = blob
@@ -399,435 +333,6 @@ pub(super) fn charge_indicator_radius(blob: &Blob) -> f32 {
         .map(|particle| particle.position.distance(center))
         .fold(blob.rest_radius, f32::max);
     outermost + (5.0 * blob.size_scale()).max(2.5)
-}
-
-fn update_blob_mesh_with_load(
-    mesh: &mut Mesh,
-    blob: &Blob,
-    load: Option<(Vec2, f32, f32, f32, usize, f32)>,
-    lights: &[LightDefinition],
-) {
-    let center = blob.center();
-    let membrane = rendered_membrane_points(blob, load);
-    let mut positions = Vec::with_capacity(membrane.len() + 1);
-    let mut uvs = Vec::with_capacity(membrane.len() + 1);
-    let mut colors = Vec::with_capacity(membrane.len() + 1);
-    positions.push([center.x, center.y, 0.0]);
-    uvs.push([0.5, 0.5]);
-    colors.push(blob_vertex_light(center, Vec2::Y, lights, true));
-    for point in &membrane {
-        positions.push([point.position.x, point.position.y, 0.0]);
-        let local = (point.position - center) / (blob.rest_radius * 2.0);
-        uvs.push([0.5 + local.x, 0.5 + local.y]);
-        colors.push(blob_vertex_light(
-            point.position,
-            (point.position - center).normalize_or(Vec2::Y),
-            lights,
-            false,
-        ));
-    }
-
-    let mut indices = Vec::with_capacity(membrane.len() * 3);
-    let original = membrane
-        .iter()
-        .enumerate()
-        .filter(|(_, point)| !point.appendage)
-        .map(|(index, _)| index as u32 + 1)
-        .collect::<Vec<_>>();
-    for index in 0..original.len() {
-        indices.extend_from_slice(&[0, original[index], original[(index + 1) % original.len()]]);
-    }
-    if let Some(first_appendage) = membrane.iter().position(|point| point.appendage) {
-        let last_appendage = membrane
-            .iter()
-            .rposition(|point| point.appendage)
-            .unwrap_or(first_appendage);
-        let start = first_appendage.saturating_sub(1);
-        let end = (last_appendage + 1) % membrane.len();
-        let mut appendage = vec![start as u32 + 1];
-        appendage.extend((first_appendage..=last_appendage).map(|index| index as u32 + 1));
-        appendage.push(end as u32 + 1);
-        triangulate_appendage(&appendage, &membrane, &mut indices);
-    }
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-    mesh.insert_indices(Indices::U32(indices));
-}
-
-/// Computes inexpensive 2D diffuse lighting for one mesh vertex. The ambient
-/// term keeps the creature readable outside a lamp's radius, while nearby
-/// lights tint only the membrane portions facing them.
-fn blob_vertex_light(
-    position: Vec2,
-    outward_normal: Vec2,
-    lights: &[LightDefinition],
-    center_vertex: bool,
-) -> [f32; 4] {
-    let mut rgb = Vec3::new(0.38, 0.44, 0.48);
-    for light in lights.iter().filter(|light| light.enabled) {
-        let toward_light = light.position - position;
-        let distance = toward_light.length();
-        if distance >= light.radius {
-            continue;
-        }
-        let radial = 1.0 - distance / light.radius;
-        let facing = if center_vertex {
-            0.42
-        } else {
-            0.12 + 0.88
-                * outward_normal
-                    .dot(toward_light.normalize_or_zero())
-                    .max(0.0)
-        };
-        let contribution = radial * facing * light.intensity;
-        rgb += Vec3::from_array(light.color) * contribution;
-    }
-    [rgb.x.min(1.0), rgb.y.min(1.0), rgb.z.min(1.0), 1.0]
-}
-
-fn update_blob_vacuole_mesh(
-    mesh: &mut Mesh,
-    active_blob: &ActiveBlob,
-    elapsed: f32,
-    alive: bool,
-    lights: &[LightDefinition],
-) {
-    let blob = &active_blob.body;
-    if !alive {
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, Vec::<[f32; 3]>::new());
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, Vec::<[f32; 4]>::new());
-        mesh.insert_indices(Indices::U32(Vec::new()));
-        return;
-    }
-
-    const SEGMENTS: usize = 10;
-    let count = ((blob.rest_radius / 10.0).round() as usize).clamp(3, 7);
-    let center = blob.center();
-    let average_motion = blob
-        .particles
-        .iter()
-        .map(|particle| particle.position - particle.previous)
-        .sum::<Vec2>()
-        / blob.particles.len() as f32;
-    let inertial_offset = (-average_motion * 3.2).clamp_length_max(blob.rest_radius * 0.16);
-    let polygon = blob
-        .particles
-        .iter()
-        .map(|particle| particle.position)
-        .collect::<Vec<_>>();
-    let mut positions = Vec::with_capacity(count * (SEGMENTS + 1));
-    let mut colors = Vec::with_capacity(count * (SEGMENTS + 1));
-    let mut indices = Vec::with_capacity(count * SEGMENTS * 3);
-
-    for index in 0..count {
-        let angle_seed = random_unit(active_blob.id, index, 0) * std::f32::consts::TAU;
-        let radial_seed = 0.16 + random_unit(active_blob.id, index, 1) * 0.38;
-        let phase = angle_seed + elapsed * (0.34 + random_unit(active_blob.id, index, 2) * 0.30);
-        let base = Vec2::from_angle(angle_seed) * blob.rest_radius * radial_seed;
-        let drift = Vec2::new(
-            phase.sin() * blob.rest_radius * 0.055,
-            (phase * 0.73).cos() * blob.rest_radius * 0.075,
-        );
-        let radius =
-            (blob.rest_radius * (0.075 + random_unit(active_blob.id, index, 3) * 0.055)).max(1.5);
-        let vacuole_center = fit_circle_inside_polygon(
-            center,
-            center + base + drift + inertial_offset,
-            radius * 1.35,
-            &polygon,
-        );
-        let first_vertex = positions.len() as u32;
-        positions.push([vacuole_center.x, vacuole_center.y, 0.0]);
-        let light = blob_vertex_light(vacuole_center, Vec2::Y, lights, true);
-        let tint = vacuole_tint(active_blob.parent_id, index);
-        let visible_light = [
-            0.40 + light[0] * 0.60,
-            0.44 + light[1] * 0.56,
-            0.48 + light[2] * 0.52,
-        ];
-        colors.push([
-            visible_light[0] * tint.x * 0.72,
-            visible_light[1] * tint.y * 0.76,
-            visible_light[2] * tint.z * 0.80,
-            0.72,
-        ]);
-
-        let stretch = 0.82 + random_unit(active_blob.id, index, 4) * 0.34;
-        let tilt = angle_seed * 1.7;
-        for segment in 0..SEGMENTS {
-            let angle = segment as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
-            let organic = 1.0 + 0.08 * (angle * 3.0 + phase).sin();
-            let local = Vec2::from_angle(tilt).rotate(Vec2::new(
-                angle.cos() * radius * stretch,
-                angle.sin() * radius / stretch,
-            )) * organic;
-            positions.push([vacuole_center.x + local.x, vacuole_center.y + local.y, 0.0]);
-            colors.push([
-                visible_light[0] * tint.x,
-                visible_light[1] * tint.y,
-                visible_light[2] * tint.z,
-                1.0,
-            ]);
-        }
-        for segment in 0..SEGMENTS {
-            indices.extend_from_slice(&[
-                first_vertex,
-                first_vertex + 1 + segment as u32,
-                first_vertex + 1 + ((segment + 1) % SEGMENTS) as u32,
-            ]);
-        }
-    }
-
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-    mesh.insert_indices(Indices::U32(indices));
-}
-
-fn vacuole_tint(parent_id: Option<u64>, index: usize) -> Vec3 {
-    let (red, green, blue) = blob_family_rgb(parent_id);
-    let base = Vec3::new(red, green, blue);
-    let white = Vec3::ONE;
-    match index % 3 {
-        // Soft complementary color: strongest contrast against the membrane.
-        0 => (white - base).lerp(white, 0.34),
-        // Rotated channels: distinct, while retaining the family palette.
-        1 => Vec3::new(base.z, base.x, base.y).lerp(white, 0.30),
-        // Pale family color: behaves like a liquid highlight.
-        _ => base.lerp(white, 0.58),
-    }
-}
-
-fn random_unit(blob_id: u64, index: usize, channel: u64) -> f32 {
-    let mut value = blob_id
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        .wrapping_add((index as u64 + 1).wrapping_mul(0xBF58_476D_1CE4_E5B9))
-        .wrapping_add(channel.wrapping_mul(0x94D0_49BB_1331_11EB));
-    value ^= value >> 30;
-    value = value.wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    value ^= value >> 27;
-    value = value.wrapping_mul(0x94D0_49BB_1331_11EB);
-    value ^= value >> 31;
-    (value as u32) as f32 / u32::MAX as f32
-}
-
-fn fit_circle_inside_polygon(center: Vec2, desired: Vec2, radius: f32, polygon: &[Vec2]) -> Vec2 {
-    let mut candidate = desired;
-    for _ in 0..12 {
-        let inside = point_in_polygon(candidate, polygon);
-        let clearance = polygon
-            .iter()
-            .copied()
-            .zip(polygon.iter().copied().cycle().skip(1))
-            .take(polygon.len())
-            .map(|(start, end)| point_segment_distance(candidate, start, end))
-            .fold(f32::INFINITY, f32::min);
-        if inside && clearance >= radius {
-            break;
-        }
-        candidate = center.lerp(candidate, 0.78);
-    }
-    candidate
-}
-
-fn point_in_polygon(point: Vec2, polygon: &[Vec2]) -> bool {
-    polygon
-        .iter()
-        .copied()
-        .zip(polygon.iter().copied().cycle().skip(1))
-        .take(polygon.len())
-        .fold(false, |inside, (first, second)| {
-            let crosses = (first.y > point.y) != (second.y > point.y)
-                && point.x
-                    < (second.x - first.x) * (point.y - first.y) / (second.y - first.y) + first.x;
-            inside ^ crosses
-        })
-}
-
-fn point_segment_distance(point: Vec2, start: Vec2, end: Vec2) -> f32 {
-    let edge = end - start;
-    let fraction = (point - start).dot(edge) / edge.length_squared().max(f32::EPSILON);
-    point.distance(start + edge * fraction.clamp(0.0, 1.0))
-}
-
-fn update_blob_outline_mesh(
-    mesh: &mut Mesh,
-    blob: &Blob,
-    load: Option<(Vec2, f32, f32, f32, usize, f32)>,
-    selected: bool,
-    parent_id: Option<u64>,
-    vitality: Vitality,
-    lights: &[LightDefinition],
-    blob_id: u64,
-    shield_extension: f32,
-    shield_energy: f32,
-    platforms: &[Platform],
-) {
-    let membrane = rendered_membrane_points(blob, load);
-    let count = membrane.len();
-    let thickness =
-        (if selected { 7.0 } else { 5.2 } * blob.size_scale() * (1.0 + shield_extension * 0.52))
-            .max(2.4);
-    let transition_depth = thickness * 0.42;
-    let mut positions = Vec::with_capacity(count * 3);
-    let mut colors = Vec::with_capacity(count * 3);
-    let mut inward_normals = Vec::with_capacity(count);
-    let base = blob_outline_color(parent_id, selected, vitality).to_srgba();
-    let base_rgb = Vec3::new(base.red, base.green, base.blue)
-        .lerp(Vec3::new(0.34, 0.88, 1.0), shield_extension * 0.62);
-    for point in &membrane {
-        positions.push([point.position.x, point.position.y, 0.0]);
-    }
-    for index in 0..count {
-        let previous = membrane[(index + count - 1) % count].position;
-        let current = membrane[index].position;
-        let next = membrane[(index + 1) % count].position;
-        let first_inward = (current - previous).perp().normalize_or_zero();
-        let second_inward = (next - current).perp().normalize_or_zero();
-        let inward = (first_inward + second_inward)
-            .normalize_or((blob.center() - current).normalize_or(Vec2::Y));
-        inward_normals.push(inward);
-        let transition = current + inward * transition_depth;
-        positions.push([transition.x, transition.y, 0.0]);
-    }
-    for (index, point) in membrane.iter().enumerate() {
-        let inner = point.position + inward_normals[index] * thickness;
-        positions.push([inner.x, inner.y, 0.0]);
-    }
-    for (index, point) in membrane.iter().enumerate() {
-        let illumination = blob_vertex_light(point.position, -inward_normals[index], lights, false);
-        let energy = 0.72 + vitality.energy * 0.28;
-        colors.push([
-            (base_rgb.x * (0.62 + illumination[0] * 0.70) * energy).min(1.0),
-            (base_rgb.y * (0.62 + illumination[1] * 0.70) * energy).min(1.0),
-            (base_rgb.z * (0.62 + illumination[2] * 0.70) * energy).min(1.0),
-            if selected { 0.98 } else { 0.90 },
-        ]);
-    }
-    for _ in 0..count {
-        colors.push([
-            base_rgb.x * 0.76,
-            base_rgb.y * 0.76,
-            base_rgb.z * 0.76,
-            0.88,
-        ]);
-    }
-    for _ in 0..count {
-        colors.push([
-            base_rgb.x * 0.34,
-            base_rgb.y * 0.34,
-            base_rgb.z * 0.34,
-            0.68,
-        ]);
-    }
-    let mut indices = Vec::with_capacity(count * 12);
-    for index in 0..count {
-        let next = (index + 1) % count;
-        indices.extend_from_slice(&[
-            index as u32,
-            next as u32,
-            (count + next) as u32,
-            index as u32,
-            (count + next) as u32,
-            (count + index) as u32,
-            (count + index) as u32,
-            (count + next) as u32,
-            (count * 2 + next) as u32,
-            (count + index) as u32,
-            (count * 2 + next) as u32,
-            (count * 2 + index) as u32,
-        ]);
-    }
-    let contour = membrane
-        .iter()
-        .map(|point| point.position)
-        .collect::<Vec<_>>();
-    for (base_arc, tip) in shield_spine_fans(blob_id, blob, shield_extension, platforms, &contour) {
-        let shield_brightness = 0.58 + shield_energy * 0.42;
-        for edge in base_arc.windows(2) {
-            let first = positions.len() as u32;
-            positions.extend_from_slice(&[
-                [edge[0].x, edge[0].y, 0.0],
-                [tip.x, tip.y, 0.0],
-                [edge[1].x, edge[1].y, 0.0],
-            ]);
-            colors.extend_from_slice(&[
-                [0.22, 0.72, 0.82, 0.82],
-                [
-                    0.52 * shield_brightness,
-                    0.96 * shield_brightness,
-                    1.0 * shield_brightness,
-                    0.96,
-                ],
-                [0.22, 0.72, 0.82, 0.82],
-            ]);
-            indices.extend_from_slice(&[first, first + 1, first + 2]);
-        }
-    }
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-    mesh.insert_indices(Indices::U32(indices));
-}
-
-fn triangulate_appendage(
-    polygon: &[u32],
-    membrane: &[RenderedMembranePoint],
-    indices: &mut Vec<u32>,
-) {
-    let point = |index: u32| membrane[index as usize - 1].position;
-    let area = polygon
-        .iter()
-        .zip(polygon.iter().cycle().skip(1))
-        .map(|(a, b)| point(*a).perp_dot(point(*b)))
-        .sum::<f32>();
-    let orientation = area.signum();
-    let mut remaining = polygon.to_vec();
-    while remaining.len() > 2 {
-        let mut ear = None;
-        for index in 0..remaining.len() {
-            let previous = remaining[(index + remaining.len() - 1) % remaining.len()];
-            let current = remaining[index];
-            let next = remaining[(index + 1) % remaining.len()];
-            let a = point(previous);
-            let b = point(current);
-            let c = point(next);
-            if (b - a).perp_dot(c - b) * orientation <= 0.000_001 {
-                continue;
-            }
-            let contains_point = remaining.iter().any(|candidate| {
-                *candidate != previous
-                    && *candidate != current
-                    && *candidate != next
-                    && point_in_triangle(point(*candidate), a, b, c)
-            });
-            if !contains_point {
-                ear = Some((index, [previous, current, next]));
-                break;
-            }
-        }
-        let Some((index, triangle)) = ear else {
-            // At the first frames the appendage can be almost flat. Complete
-            // the remaining simple sliver instead of leaving a visible hole.
-            for fan_index in 1..remaining.len().saturating_sub(1) {
-                indices.extend_from_slice(&[
-                    remaining[0],
-                    remaining[fan_index],
-                    remaining[fan_index + 1],
-                ]);
-            }
-            return;
-        };
-        indices.extend_from_slice(&triangle);
-        remaining.remove(index);
-    }
-}
-
-fn point_in_triangle(point: Vec2, a: Vec2, b: Vec2, c: Vec2) -> bool {
-    let first = (b - a).perp_dot(point - a);
-    let second = (c - b).perp_dot(point - b);
-    let third = (a - c).perp_dot(point - c);
-    (first >= -0.000_01 && second >= -0.000_01 && third >= -0.000_01)
-        || (first <= 0.000_01 && second <= 0.000_01 && third <= 0.000_01)
 }
 
 #[cfg(test)]
@@ -938,6 +443,38 @@ struct RenderedMembranePoint {
     temporary: bool,
     appendage: bool,
     attachment: bool,
+}
+
+/// Shared per-frame contour consumed by the body, membrane and shield renderers.
+struct RenderedBlobContour {
+    points: Vec<RenderedMembranePoint>,
+    inward_normals: Vec<Vec2>,
+}
+
+impl RenderedBlobContour {
+    fn new(blob: &Blob, load: Option<(Vec2, f32, f32, f32, usize, f32)>) -> Self {
+        let points = rendered_membrane_points(blob, load);
+        let center = blob.center();
+        let count = points.len();
+        let inward_normals = (0..count)
+            .map(|index| {
+                let previous = points[(index + count - 1) % count].position;
+                let current = points[index].position;
+                let next = points[(index + 1) % count].position;
+                let first = (current - previous).perp().normalize_or_zero();
+                let second = (next - current).perp().normalize_or_zero();
+                (first + second).normalize_or((center - current).normalize_or(Vec2::Y))
+            })
+            .collect();
+        Self {
+            points,
+            inward_normals,
+        }
+    }
+
+    fn positions(&self) -> Vec<Vec2> {
+        self.points.iter().map(|point| point.position).collect()
+    }
 }
 
 fn rendered_membrane_points(

@@ -235,7 +235,12 @@ bevy_blob/
 │   ├── level_format.rs Versioned JSON parsing and level validation
 │   ├── camera.rs       Smooth tracking of the selected creature
 │   ├── environment.rs  Level geometry, Avian layers, and static colliders
-│   ├── rendering.rs    Dynamic meshes, family colors, outlines, and indicators
+│   ├── rendering.rs    Rendering orchestration, shared contour, and indicators
+│   ├── rendering/      Modular blob rendering implementation
+│   │   ├── body.rs     Filled body mesh and appendage triangulation
+│   │   ├── membrane.rs Layered membrane and integrated defensive spines
+│   │   ├── palette.rs  Family colors and level-light evaluation
+│   │   └── vacuoles.rs Internal organic vacuoles and inertial animation
 │   ├── blob_tests.rs   Soft-body and movement regression tests
 │   └── game_tests.rs   Split, merge, camera, collision, and rendering tests
 └── target/             Generated Cargo build output; not tracked by Git
