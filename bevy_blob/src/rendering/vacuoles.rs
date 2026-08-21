@@ -9,14 +9,14 @@ pub(super) fn update_blob_vacuole_mesh(
     lights: &[LightDefinition],
 ) {
     let blob = &active_blob.body;
-    if !alive {
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, Vec::<[f32; 3]>::new());
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, Vec::<[f32; 4]>::new());
-        mesh.insert_indices(Indices::U32(Vec::new()));
-        return;
-    }
+    // Keep topology allocated after death. Replacing this dynamic mesh with
+    // empty buffers can race Bevy's render extraction and free its slab before
+    // the last queued copy completes.
+    let visibility = alive as u8 as f32;
+    let motion_time = if alive { elapsed } else { 0.0 };
 
     const SEGMENTS: usize = 10;
+    const INTERNAL_ROTATION_FOLLOW: f32 = 0.22;
     let count = ((blob.rest_radius / 10.0).round() as usize).clamp(3, 7);
     let center = blob.center();
     let average_motion = blob
@@ -26,6 +26,21 @@ pub(super) fn update_blob_vacuole_mesh(
         .sum::<Vec2>()
         / blob.particles.len() as f32;
     let inertial_offset = (-average_motion * 3.2).clamp_length_max(blob.rest_radius * 0.16);
+    // Follow the material orientation rather than linear movement. Vacuoles
+    // suspended in fluid should rotate gently when the body rolls, while a
+    // pure translation should only produce the inertial lag above.
+    let material_rotation = blob
+        .particles
+        .iter()
+        .enumerate()
+        .map(|(index, particle)| {
+            let material_angle = index as f32 / blob.particles.len() as f32 * std::f32::consts::TAU;
+            let radial =
+                (particle.position - center).normalize_or(Vec2::from_angle(material_angle));
+            Vec2::from_angle(-material_angle).rotate(radial)
+        })
+        .sum::<Vec2>()
+        .normalize_or(Vec2::X);
     let polygon = blob
         .particles
         .iter()
@@ -38,8 +53,11 @@ pub(super) fn update_blob_vacuole_mesh(
     for index in 0..count {
         let angle_seed = random_unit(active_blob.id, index, 0) * std::f32::consts::TAU;
         let radial_seed = 0.16 + random_unit(active_blob.id, index, 1) * 0.38;
-        let phase = angle_seed + elapsed * (0.34 + random_unit(active_blob.id, index, 2) * 0.30);
-        let base = Vec2::from_angle(angle_seed) * blob.rest_radius * radial_seed;
+        let phase =
+            angle_seed + motion_time * (0.34 + random_unit(active_blob.id, index, 2) * 0.30);
+        let resting_base = Vec2::from_angle(angle_seed) * blob.rest_radius * radial_seed;
+        let rotated_base = material_rotation.rotate(resting_base);
+        let base = resting_base.lerp(rotated_base, INTERNAL_ROTATION_FOLLOW);
         let drift = Vec2::new(
             phase.sin() * blob.rest_radius * 0.055,
             (phase * 0.73).cos() * blob.rest_radius * 0.075,
@@ -65,7 +83,7 @@ pub(super) fn update_blob_vacuole_mesh(
             visible_light[0] * tint.x * 0.72,
             visible_light[1] * tint.y * 0.76,
             visible_light[2] * tint.z * 0.80,
-            0.72,
+            0.72 * visibility,
         ]);
 
         let stretch = 0.82 + random_unit(active_blob.id, index, 4) * 0.34;
@@ -82,7 +100,7 @@ pub(super) fn update_blob_vacuole_mesh(
                 visible_light[0] * tint.x,
                 visible_light[1] * tint.y,
                 visible_light[2] * tint.z,
-                1.0,
+                visibility,
             ]);
         }
         for segment in 0..SEGMENTS {

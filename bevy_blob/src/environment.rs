@@ -22,6 +22,7 @@ pub(super) enum GameLayer {
 #[derive(Component, Debug)]
 pub(super) struct EnvironmentCollider {
     platform_index: Option<usize>,
+    fixture_index: Option<usize>,
 }
 
 #[derive(Component, Debug)]
@@ -72,6 +73,9 @@ pub(super) struct AvianContactDiagnostics {
     pub(super) selected_ground_contacts: usize,
     pub(super) selected_max_depth: f32,
     pub(super) selected_contact_span: f32,
+    pub(super) fixture_corrections: usize,
+    pub(super) lateral_fixture_corrections: usize,
+    pub(super) shared_edge_corrections: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -198,7 +202,9 @@ impl Level {
                         fixtures.extend(wave_fixtures(-330.0, 330.0, 285.0, 220.0, 9));
                         fixtures
                     },
-                    spawn_position: Vec2::new(-300.0, -285.0),
+                    // Fall onto the shared vertex between two upper wave
+                    // segments so the problematic contact is reproducible.
+                    spawn_position: Vec2::new(36.67, 430.0),
                     route: vec![
                         Vec2::new(-300.0, -285.0),
                         Vec2::new(-150.0, -270.0),
@@ -218,7 +224,7 @@ impl Level {
                     expulsion_points: Vec::new(),
                     hazards: Vec::new(),
                 },
-                Vec2::new(-300.0, -285.0),
+                Vec2::new(36.67, 430.0),
             ),
             4 => (
                 Self {
@@ -423,6 +429,7 @@ fn spawn_level_colliders(commands: &mut Commands, level: &Level) {
         let mut entity = commands.spawn((
             EnvironmentCollider {
                 platform_index: Some(platform_index),
+                fixture_index: None,
             },
             RigidBody::Static,
             Collider::rectangle(platform.half_size.x * 2.0, platform.half_size.y * 2.0),
@@ -440,11 +447,12 @@ fn spawn_level_colliders(commands: &mut Commands, level: &Level) {
             entity.insert(AvianMigratedSurface);
         }
     }
-    for vertices in &level.fixtures {
+    for (fixture_index, vertices) in level.fixtures.iter().enumerate() {
         if let Some(collider) = Collider::convex_hull(vertices.clone()) {
             commands.spawn((
                 EnvironmentCollider {
                     platform_index: None,
+                    fixture_index: Some(fixture_index),
                 },
                 AvianMigratedSurface,
                 RigidBody::Static,
@@ -548,10 +556,14 @@ pub(super) fn resolve_avian_environment(
     environment_colliders: Query<&EnvironmentCollider>,
     level: Res<Level>,
     mut blobs: ResMut<BlobWorld>,
+    mut diagnostics: ResMut<AvianContactDiagnostics>,
 ) {
     let filter = SpatialQueryFilter::from_mask(GameLayer::Environment);
     let dt = time.delta_secs();
-    for active_blob in &mut blobs.active {
+    diagnostics.fixture_corrections = 0;
+    diagnostics.lateral_fixture_corrections = 0;
+    let selected = blobs.selected;
+    for (blob_index, active_blob) in blobs.active.iter_mut().enumerate() {
         let blob_center = active_blob.body.center();
         let skin = 5.0 * active_blob.body.size_scale();
         let probe_radius = (skin * 0.55).max(0.8);
@@ -581,6 +593,28 @@ pub(super) fn resolve_avian_environment(
                     &|entity| environment_colliders.contains(entity),
                 )
             {
+                let shared_edge = environment_colliders
+                    .get(hit.entity)
+                    .ok()
+                    .and_then(|marker| marker.fixture_index)
+                    .is_some_and(|fixture_index| {
+                        point_on_shared_fixture_edge(hit.point1, fixture_index, &level.fixtures)
+                    });
+                if blob_index == selected
+                    && let Ok(marker) = environment_colliders.get(hit.entity)
+                    && marker.fixture_index.is_some()
+                {
+                    diagnostics.fixture_corrections += 1;
+                    diagnostics.lateral_fixture_corrections +=
+                        (hit.normal1.y.abs() < 0.55) as usize;
+                    diagnostics.shared_edge_corrections += shared_edge as usize;
+                }
+                if shared_edge {
+                    // This edge lies inside the authored solid. Applying the
+                    // query hit would create a false lateral wall after the
+                    // membrane solver has already completed its iterations.
+                    continue;
+                }
                 let contact = resolve_swept_particle(
                     particle,
                     hit.point1,
@@ -600,6 +634,25 @@ pub(super) fn resolve_avian_environment(
             let Some(projection) = current_projection else {
                 continue;
             };
+            let shared_edge = environment_colliders
+                .get(projection.entity)
+                .ok()
+                .and_then(|marker| marker.fixture_index)
+                .is_some_and(|fixture_index| {
+                    point_on_shared_fixture_edge(projection.point, fixture_index, &level.fixtures)
+                });
+            if blob_index == selected
+                && let Ok(marker) = environment_colliders.get(projection.entity)
+                && marker.fixture_index.is_some()
+            {
+                let normal = (projection.point - particle.position).normalize_or(Vec2::Y);
+                diagnostics.fixture_corrections += 1;
+                diagnostics.lateral_fixture_corrections += (normal.y.abs() < 0.55) as usize;
+                diagnostics.shared_edge_corrections += shared_edge as usize;
+            }
+            if shared_edge {
+                continue;
+            }
             let (surface_point, forced_normal) = if projection.is_inside {
                 let Ok(marker) = environment_colliders.get(projection.entity) else {
                     continue;
@@ -646,6 +699,37 @@ pub(super) fn resolve_avian_environment(
             .last_impact_speed
             .max(contact_patch_impact(&mut impacts));
     }
+}
+
+fn point_on_shared_fixture_edge(point: Vec2, owner: usize, fixtures: &[Vec<Vec2>]) -> bool {
+    const CONTACT_TOLERANCE: f32 = 0.75;
+    let Some(polygon) = fixtures.get(owner) else {
+        return false;
+    };
+    polygon
+        .iter()
+        .copied()
+        .zip(polygon.iter().copied().cycle().skip(1))
+        .take(polygon.len())
+        .any(|(start, end)| {
+            point_segment_distance(point, start, end) <= CONTACT_TOLERANCE
+                && fixtures.iter().enumerate().any(|(index, candidate)| {
+                    index != owner
+                        && candidate.iter().any(|candidate_start| {
+                            candidate_start.distance_squared(start) <= 0.0001
+                        })
+                        && candidate
+                            .iter()
+                            .any(|candidate_end| candidate_end.distance_squared(end) <= 0.0001)
+                })
+        })
+}
+
+fn point_segment_distance(point: Vec2, start: Vec2, end: Vec2) -> f32 {
+    let edge = end - start;
+    let fraction =
+        ((point - start).dot(edge) / edge.length_squared().max(f32::EPSILON)).clamp(0.0, 1.0);
+    point.distance(start + edge * fraction)
 }
 
 fn contact_patch_impact(impacts: &mut [f32]) -> f32 {
@@ -885,6 +969,35 @@ mod tests {
     fn isolated_corner_contact_is_not_treated_as_full_body_impact() {
         assert_eq!(contact_patch_impact(&mut [1_000.0]), 680.0);
         assert!(contact_patch_impact(&mut [1_000.0, 900.0, 800.0]) > 900.0);
+    }
+
+    #[test]
+    fn shared_fixture_edge_is_detected_as_internal() {
+        let fixtures = vec![
+            vec![
+                Vec2::new(-10.0, -10.0),
+                Vec2::new(0.0, -10.0),
+                Vec2::new(0.0, 0.0),
+                Vec2::new(-10.0, 0.0),
+            ],
+            vec![
+                Vec2::new(0.0, -10.0),
+                Vec2::new(10.0, -10.0),
+                Vec2::new(10.0, 0.0),
+                Vec2::new(0.0, 0.0),
+            ],
+        ];
+
+        assert!(point_on_shared_fixture_edge(
+            Vec2::new(0.0, -5.0),
+            0,
+            &fixtures
+        ));
+        assert!(!point_on_shared_fixture_edge(
+            Vec2::new(-5.0, 0.0),
+            0,
+            &fixtures
+        ));
     }
 
     #[test]

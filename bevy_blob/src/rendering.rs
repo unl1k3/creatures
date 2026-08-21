@@ -435,6 +435,31 @@ mod membrane_detail_tests {
         assert_ne!(vacuole_tint(Some(2), 1), vacuole_tint(Some(2), 2));
         assert_ne!(vacuole_tint(Some(2), 0), vacuole_tint(Some(3), 0));
     }
+
+    #[test]
+    fn dead_vacuoles_keep_their_mesh_allocation() {
+        let active_blob = ActiveBlob {
+            id: 7,
+            parent_id: None,
+            body: Blob::new(Vec2::ZERO, 30.0),
+        };
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        );
+        update_blob_vacuole_mesh(&mut mesh, &active_blob, 1.0, true, &[]);
+        let live_vertices = mesh.count_vertices();
+        let live_indices = mesh.indices().expect("live vacuole indices").len();
+
+        update_blob_vacuole_mesh(&mut mesh, &active_blob, 2.0, false, &[]);
+
+        assert!(live_vertices > 0);
+        assert_eq!(mesh.count_vertices(), live_vertices);
+        assert_eq!(
+            mesh.indices().expect("dead vacuole indices").len(),
+            live_indices
+        );
+    }
 }
 
 #[derive(Clone, Copy)]

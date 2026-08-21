@@ -80,9 +80,9 @@ pub(super) fn setup_legend(mut commands: Commands) {
             MetricsWindow,
             Window {
                 title: "Blob — Metrics".into(),
-                resolution: WindowResolution::new(350, 520),
+                resolution: WindowResolution::new(430, 680),
                 position: WindowPosition::At(IVec2::new(1_000, 540)),
-                resizable: false,
+                resizable: true,
                 ..default()
             },
         ))
@@ -112,7 +112,7 @@ pub(super) fn setup_legend(mut commands: Commands) {
             color: Color::srgba(0.0, 0.0, 0.0, 0.76),
         },
         Anchor::TOP_LEFT,
-        Transform::from_xyz(-155.0, 240.0, -0.01),
+        Transform::from_xyz(-195.0, 320.0, -0.01),
         RenderLayers::layer(METRICS_LAYER),
     ));
 }
@@ -208,7 +208,7 @@ pub(super) fn update_metrics(
         .map(|progress| format!("{:5.1}%", progress * 100.0))
         .unwrap_or_else(|| "   -- ".to_string());
     metrics.0 = format!(
-        "METRICS\n\nFPS          {fps:5.1}\nFrame        {frame_time:5.2} ms\nPhysics      120 Hz\nBlobs        {}\nPoints       {}\nSize         {:5.1}%\nState        {state}\nEnergy       {:5.1}%\nDigestion    {digestion}\nCapacity     {:5.1}%\nHealth       {:5.1}%\nTrauma       {:5.1}%\nImpact       {:5.0}\nShield       {:5.1}%\nAcid drops   {}\nAvian touch  {} / {}\nAgreement    {:5.1}%\nContact pts  {}\nSurfaces     {}\nGround pts   {}\nMax depth    {:5.2}\nSpan         {:5.1}",
+        "METRICS\n\nFPS          {fps:5.1}\nFrame        {frame_time:5.2} ms\nPhysics      120 Hz\nBlobs        {}\nPoints       {}\nSize         {:5.1}%\nState        {state}\nEnergy       {:5.1}%\nDigestion    {digestion}\nCapacity     {:5.1}%\nHealth       {:5.1}%\nTrauma       {:5.1}%\nImpact       {:5.0}\nShield       {:5.1}%\nAcid drops   {}\nAvian touch  {} / {}\nAgreement    {:5.1}%\nContact pts  {}\nSurfaces     {}\nGround pts   {}\nMax depth    {:5.2}\nSpan         {:5.1}\nFixture fix  {}\nLateral fix  {}\nShared skip  {}",
         blobs.active.len(),
         selected.body.particles.len(),
         selected.body.rest_radius / INITIAL_RADIUS * 100.0,
@@ -227,5 +227,8 @@ pub(super) fn update_metrics(
         avian_contacts.selected_ground_contacts,
         avian_contacts.selected_max_depth,
         avian_contacts.selected_contact_span,
+        avian_contacts.fixture_corrections,
+        avian_contacts.lateral_fixture_corrections,
+        avian_contacts.shared_edge_corrections,
     );
 }
