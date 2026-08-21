@@ -39,7 +39,7 @@ use nutrition::{
 #[cfg(test)]
 use rendering::blob_family_color;
 use rendering::{draw_world, sync_blob_meshes, sync_route_markers};
-use shield::{ShieldWorld, draw_shields, simulate_shields};
+use shield::{ShieldWorld, simulate_shields};
 use std::{
     collections::HashMap,
     time::{SystemTime, UNIX_EPOCH},
@@ -141,7 +141,6 @@ fn main() {
                 draw_world,
                 draw_acid,
                 draw_nutrition,
-                draw_shields,
             )
                 .chain(),
         )

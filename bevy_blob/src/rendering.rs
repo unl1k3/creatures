@@ -1,5 +1,6 @@
 use super::*;
 use crate::level_format::LightDefinition;
+use crate::shield::shield_spine_fans;
 use bevy::sprite::Anchor;
 use bevy::{asset::RenderAssetUsages, mesh::Indices, render::render_resource::PrimitiveTopology};
 use std::collections::HashSet;
@@ -149,6 +150,7 @@ pub(super) fn sync_blob_meshes(
     time: Res<Time>,
     vitality_world: Res<VitalityWorld>,
     nutrition: Res<NutritionWorld>,
+    shields: Res<ShieldWorld>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut rendered: Query<
@@ -256,7 +258,7 @@ pub(super) fn sync_blob_meshes(
     }
 
     let mut outlined_ids = HashSet::new();
-    for (entity, mut marker, mesh_handle, material_handle) in &mut outlines {
+    for (entity, mut marker, mesh_handle, _material_handle) in &mut outlines {
         let Some(active_blob) = blobs.active.iter().find(|blob| blob.id == marker.blob_id) else {
             commands.entity(entity).despawn();
             continue;
@@ -273,14 +275,18 @@ pub(super) fn sync_blob_meshes(
                 &active_blob.body,
                 nutrition.internal_load(active_blob.id),
                 selected,
+                active_blob.parent_id,
+                vitality,
+                &level.lights,
+                active_blob.id,
+                shields.extension(active_blob.id),
+                shields.energy(active_blob.id),
+                &level.platforms,
             );
         }
         if marker.selected != selected || marker.life_state != vitality.state {
             marker.selected = selected;
             marker.life_state = vitality.state;
-            if let Some(mut material) = materials.get_mut(&material_handle.0) {
-                material.color = blob_outline_color(active_blob.parent_id, selected, vitality);
-            }
         }
     }
     for active_blob in blobs
@@ -302,6 +308,13 @@ pub(super) fn sync_blob_meshes(
             &active_blob.body,
             nutrition.internal_load(active_blob.id),
             selected,
+            active_blob.parent_id,
+            vitality,
+            &level.lights,
+            active_blob.id,
+            shields.extension(active_blob.id),
+            shields.energy(active_blob.id),
+            &level.platforms,
         );
         commands.spawn((
             BlobOutlineMesh {
@@ -310,11 +323,7 @@ pub(super) fn sync_blob_meshes(
                 life_state: vitality.state,
             },
             Mesh2d(meshes.add(mesh)),
-            MeshMaterial2d(materials.add(ColorMaterial::from(blob_outline_color(
-                active_blob.parent_id,
-                selected,
-                vitality,
-            )))),
+            MeshMaterial2d(materials.add(ColorMaterial::from(Color::WHITE))),
             Transform::from_xyz(0.0, 0.0, -0.08),
         ));
     }
@@ -646,11 +655,26 @@ fn update_blob_outline_mesh(
     blob: &Blob,
     load: Option<(Vec2, f32, f32, f32, usize, f32)>,
     selected: bool,
+    parent_id: Option<u64>,
+    vitality: Vitality,
+    lights: &[LightDefinition],
+    blob_id: u64,
+    shield_extension: f32,
+    shield_energy: f32,
+    platforms: &[Platform],
 ) {
     let membrane = rendered_membrane_points(blob, load);
     let count = membrane.len();
-    let thickness = (if selected { 4.2 } else { 2.5 } * blob.size_scale()).max(1.1);
-    let mut positions = Vec::with_capacity(count * 2);
+    let thickness =
+        (if selected { 7.0 } else { 5.2 } * blob.size_scale() * (1.0 + shield_extension * 0.52))
+            .max(2.4);
+    let transition_depth = thickness * 0.42;
+    let mut positions = Vec::with_capacity(count * 3);
+    let mut colors = Vec::with_capacity(count * 3);
+    let mut inward_normals = Vec::with_capacity(count);
+    let base = blob_outline_color(parent_id, selected, vitality).to_srgba();
+    let base_rgb = Vec3::new(base.red, base.green, base.blue)
+        .lerp(Vec3::new(0.34, 0.88, 1.0), shield_extension * 0.62);
     for point in &membrane {
         positions.push([point.position.x, point.position.y, 0.0]);
     }
@@ -662,10 +686,41 @@ fn update_blob_outline_mesh(
         let second_inward = (next - current).perp().normalize_or_zero();
         let inward = (first_inward + second_inward)
             .normalize_or((blob.center() - current).normalize_or(Vec2::Y));
-        let inner = current + inward * thickness;
+        inward_normals.push(inward);
+        let transition = current + inward * transition_depth;
+        positions.push([transition.x, transition.y, 0.0]);
+    }
+    for (index, point) in membrane.iter().enumerate() {
+        let inner = point.position + inward_normals[index] * thickness;
         positions.push([inner.x, inner.y, 0.0]);
     }
-    let mut indices = Vec::with_capacity(count * 6);
+    for (index, point) in membrane.iter().enumerate() {
+        let illumination = blob_vertex_light(point.position, -inward_normals[index], lights, false);
+        let energy = 0.72 + vitality.energy * 0.28;
+        colors.push([
+            (base_rgb.x * (0.62 + illumination[0] * 0.70) * energy).min(1.0),
+            (base_rgb.y * (0.62 + illumination[1] * 0.70) * energy).min(1.0),
+            (base_rgb.z * (0.62 + illumination[2] * 0.70) * energy).min(1.0),
+            if selected { 0.98 } else { 0.90 },
+        ]);
+    }
+    for _ in 0..count {
+        colors.push([
+            base_rgb.x * 0.76,
+            base_rgb.y * 0.76,
+            base_rgb.z * 0.76,
+            0.88,
+        ]);
+    }
+    for _ in 0..count {
+        colors.push([
+            base_rgb.x * 0.34,
+            base_rgb.y * 0.34,
+            base_rgb.z * 0.34,
+            0.68,
+        ]);
+    }
+    let mut indices = Vec::with_capacity(count * 12);
     for index in 0..count {
         let next = (index + 1) % count;
         indices.extend_from_slice(&[
@@ -675,9 +730,42 @@ fn update_blob_outline_mesh(
             index as u32,
             (count + next) as u32,
             (count + index) as u32,
+            (count + index) as u32,
+            (count + next) as u32,
+            (count * 2 + next) as u32,
+            (count + index) as u32,
+            (count * 2 + next) as u32,
+            (count * 2 + index) as u32,
         ]);
     }
+    let contour = membrane
+        .iter()
+        .map(|point| point.position)
+        .collect::<Vec<_>>();
+    for (base_arc, tip) in shield_spine_fans(blob_id, blob, shield_extension, platforms, &contour) {
+        let shield_brightness = 0.58 + shield_energy * 0.42;
+        for edge in base_arc.windows(2) {
+            let first = positions.len() as u32;
+            positions.extend_from_slice(&[
+                [edge[0].x, edge[0].y, 0.0],
+                [tip.x, tip.y, 0.0],
+                [edge[1].x, edge[1].y, 0.0],
+            ]);
+            colors.extend_from_slice(&[
+                [0.22, 0.72, 0.82, 0.82],
+                [
+                    0.52 * shield_brightness,
+                    0.96 * shield_brightness,
+                    1.0 * shield_brightness,
+                    0.96,
+                ],
+                [0.22, 0.72, 0.82, 0.82],
+            ]);
+            indices.extend_from_slice(&[first, first + 1, first + 2]);
+        }
+    }
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     mesh.insert_indices(Indices::U32(indices));
 }
 
@@ -781,13 +869,25 @@ mod membrane_detail_tests {
             PrimitiveTopology::TriangleList,
             RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
         );
-        update_blob_outline_mesh(&mut mesh, &blob, None, true);
+        update_blob_outline_mesh(
+            &mut mesh,
+            &blob,
+            None,
+            true,
+            None,
+            Vitality::default(),
+            &[],
+            0,
+            0.0,
+            1.0,
+            &[],
+        );
 
         assert_eq!(
             mesh.indices().expect("outline indices").len(),
-            blob.particles.len() * 6
+            blob.particles.len() * 12
         );
-        assert_eq!(mesh.count_vertices(), blob.particles.len() * 2);
+        assert_eq!(mesh.count_vertices(), blob.particles.len() * 3);
     }
 
     #[test]

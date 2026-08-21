@@ -108,51 +108,100 @@ struct SpineSpec {
     width_factor: f32,
 }
 
-pub(super) fn draw_shields(
-    mut gizmos: Gizmos,
-    blobs: Res<BlobWorld>,
-    shields: Res<ShieldWorld>,
-    level: Res<Level>,
-) {
-    for active_blob in &blobs.active {
-        let Some(status) = shields.states.get(&active_blob.id) else {
-            continue;
-        };
-        let blob = &active_blob.body;
-        let center = blob.center();
-        if status.extension > 0.01 {
-            let spine_count = shield_spine_count(blob.rest_radius);
-            let membrane_count = blob.particles.len();
-            for spec in spine_layout(active_blob.id, spine_count) {
-                let contour_position = spec.contour_fraction * membrane_count as f32;
-                let index = contour_position.floor() as usize % membrane_count;
-                let next = (index + 1) % membrane_count;
-                let interpolation = contour_position.fract();
-                let base = blob.particles[index]
-                    .position
-                    .lerp(blob.particles[next].position, interpolation);
-                let tangent = (blob.particles[next].position - blob.particles[index].position)
-                    .normalize_or(Vec2::X);
-                let length = blob.rest_radius * spec.length_factor * status.extension;
-                let desired_tip = base + (base - center).normalize_or(Vec2::Y) * length;
-                let tip = clip_spine_tip(
-                    base,
-                    desired_tip,
-                    &level.platforms,
-                    (0.8 * blob.size_scale()).max(0.35),
-                );
-                let half_width = blob.rest_edge * 0.34 * spec.width_factor;
-                gizmos.linestrip_2d(
-                    [
-                        base - tangent * half_width,
-                        tip,
-                        base + tangent * half_width,
-                    ],
-                    Color::srgba(0.36, 0.94, 1.0, 0.55 + 0.42 * status.extension),
-                );
-            }
+pub(super) fn shield_spine_fans(
+    blob_id: u64,
+    blob: &Blob,
+    extension: f32,
+    platforms: &[Platform],
+    contour: &[Vec2],
+) -> Vec<(Vec<Vec2>, Vec2)> {
+    if extension <= 0.01 {
+        return Vec::new();
+    }
+    let center = blob.center();
+    let perimeter = contour
+        .iter()
+        .copied()
+        .zip(contour.iter().copied().cycle().skip(1))
+        .take(contour.len())
+        .map(|(start, end)| start.distance(end))
+        .sum::<f32>();
+    spine_layout(blob_id, shield_spine_count(blob.rest_radius))
+        .into_iter()
+        .map(|spec| {
+            let size_multiplier = spine_size_multiplier(blob.rest_radius);
+            let center_distance = spec.contour_fraction * perimeter;
+            let base_center = sample_closed_contour(contour, center_distance, perimeter);
+            let length = blob.rest_radius * spec.length_factor * extension * size_multiplier;
+            let desired_tip = base_center + (base_center - center).normalize_or(Vec2::Y) * length;
+            let tip = clip_spine_tip(
+                base_center,
+                desired_tip,
+                platforms,
+                (0.8 * blob.size_scale()).max(0.35),
+            );
+            let half_width = blob.rest_edge
+                * (0.40 + extension * 0.10)
+                * spec.width_factor
+                * size_multiplier.powf(0.68);
+            (
+                contour_arc(
+                    contour,
+                    center_distance - half_width,
+                    center_distance + half_width,
+                    perimeter,
+                ),
+                tip,
+            )
+        })
+        .collect()
+}
+
+fn spine_size_multiplier(radius: f32) -> f32 {
+    1.12 * (INITIAL_RADIUS / radius.max(MIN_SHIELD_RADIUS))
+        .sqrt()
+        .clamp(1.0, 1.75)
+}
+
+fn sample_closed_contour(contour: &[Vec2], distance: f32, perimeter: f32) -> Vec2 {
+    let target = distance.rem_euclid(perimeter);
+    let mut traversed = 0.0;
+    for (start, end) in contour
+        .iter()
+        .copied()
+        .zip(contour.iter().copied().cycle().skip(1))
+        .take(contour.len())
+    {
+        let edge_length = start.distance(end);
+        if traversed + edge_length >= target {
+            return start.lerp(end, (target - traversed) / edge_length.max(f32::EPSILON));
+        }
+        traversed += edge_length;
+    }
+    contour[0]
+}
+
+fn contour_arc(contour: &[Vec2], start: f32, end: f32, perimeter: f32) -> Vec<Vec2> {
+    let mut points = vec![sample_closed_contour(contour, start, perimeter)];
+    let mut traversed = 0.0;
+    let mut interior = Vec::new();
+    for index in 0..contour.len() {
+        if index > 0 {
+            traversed += contour[index - 1].distance(contour[index]);
+        }
+        let mut unwrapped = traversed;
+        while unwrapped <= start {
+            unwrapped += perimeter;
+        }
+        if unwrapped < end {
+            interior.push((unwrapped, contour[index]));
         }
     }
+    interior.sort_by(|first, second| first.0.total_cmp(&second.0));
+    points.extend(interior.into_iter().map(|(_, point)| point));
+    points.push(sample_closed_contour(contour, end, perimeter));
+    points.dedup_by(|first, second| first.distance_squared(*second) < 0.000_001);
+    points
 }
 
 fn shield_spine_count(radius: f32) -> usize {
@@ -270,6 +319,15 @@ mod tests {
     }
 
     #[test]
+    fn small_blobs_receive_larger_relative_spines() {
+        let normal = spine_size_multiplier(INITIAL_RADIUS);
+        let small = spine_size_multiplier(INITIAL_RADIUS * 0.45);
+
+        assert!(normal > 1.0);
+        assert!(small > normal * 1.35);
+    }
+
+    #[test]
     fn spine_stops_smoothly_before_a_contact_surface() {
         let platform = Platform {
             center: Vec2::new(50.0, 0.0),
@@ -281,6 +339,20 @@ mod tests {
         let unobstructed =
             clip_spine_tip(Vec2::new(0.0, 40.0), Vec2::new(0.0, 60.0), &[platform], 0.5);
         assert_eq!(unobstructed, Vec2::new(0.0, 60.0));
+    }
+
+    #[test]
+    fn spine_base_keeps_all_membrane_vertices_across_the_seam() {
+        let contour = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(10.0, 0.0),
+            Vec2::new(10.0, 10.0),
+            Vec2::new(0.0, 10.0),
+        ];
+        let arc = contour_arc(&contour, 35.0, 45.0, 40.0);
+
+        assert_eq!(arc.len(), 3);
+        assert_eq!(arc[1], contour[0]);
     }
 
     #[test]
