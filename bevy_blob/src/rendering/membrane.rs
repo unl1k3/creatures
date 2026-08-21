@@ -15,10 +15,12 @@ pub(super) fn update_blob_outline_mesh(
 ) {
     let contour = RenderedBlobContour::new(blob, load);
     let count = contour.points.len();
+    // Keep the membrane proportional to the creature. The old fixed minimum
+    // dominated small fragments and made their three layers look like a thick
+    // painted outline.
+    let thickness_ratio = if selected { 0.043 } else { 0.036 };
     let thickness =
-        (if selected { 7.0 } else { 5.2 } * blob.size_scale() * (1.0 + shield_extension * 0.52))
-            .max(2.4);
-    let transition_depth = thickness * 0.42;
+        (blob.rest_radius * thickness_ratio * (1.0 + shield_extension * 0.58)).clamp(1.25, 3.4);
     let mut positions = Vec::with_capacity(count * 3);
     let mut colors = Vec::with_capacity(count * 3);
     let base = blob_outline_color(parent_id, selected, vitality).to_srgba();
@@ -28,12 +30,24 @@ pub(super) fn update_blob_outline_mesh(
     for point in &contour.points {
         positions.push([point.position.x, point.position.y, 0.0]);
     }
-    for (point, inward) in contour.points.iter().zip(&contour.inward_normals) {
-        let transition = point.position + *inward * transition_depth;
+    for (index, (point, inward)) in contour
+        .points
+        .iter()
+        .zip(&contour.inward_normals)
+        .enumerate()
+    {
+        let organic = 1.0 + (index as f32 * 1.73 + blob_id as f32 * 0.31).sin() * 0.045;
+        let transition = point.position + *inward * thickness * organic * 0.34;
         positions.push([transition.x, transition.y, 0.0]);
     }
-    for (point, inward) in contour.points.iter().zip(&contour.inward_normals) {
-        let inner = point.position + *inward * thickness;
+    for (index, (point, inward)) in contour
+        .points
+        .iter()
+        .zip(&contour.inward_normals)
+        .enumerate()
+    {
+        let organic = 1.0 + (index as f32 * 1.73 + blob_id as f32 * 0.31).sin() * 0.045;
+        let inner = point.position + *inward * thickness * organic;
         positions.push([inner.x, inner.y, 0.0]);
     }
     for (point, inward) in contour.points.iter().zip(&contour.inward_normals) {
@@ -43,7 +57,7 @@ pub(super) fn update_blob_outline_mesh(
             (base_rgb.x * (0.62 + illumination[0] * 0.70) * energy).min(1.0),
             (base_rgb.y * (0.62 + illumination[1] * 0.70) * energy).min(1.0),
             (base_rgb.z * (0.62 + illumination[2] * 0.70) * energy).min(1.0),
-            if selected { 0.98 } else { 0.90 },
+            if selected { 0.96 } else { 0.84 },
         ]);
     }
     colors.extend((0..count).map(|_| {
@@ -51,7 +65,7 @@ pub(super) fn update_blob_outline_mesh(
             base_rgb.x * 0.76,
             base_rgb.y * 0.76,
             base_rgb.z * 0.76,
-            0.88,
+            0.58,
         ]
     }));
     colors.extend((0..count).map(|_| {
@@ -59,7 +73,7 @@ pub(super) fn update_blob_outline_mesh(
             base_rgb.x * 0.34,
             base_rgb.y * 0.34,
             base_rgb.z * 0.34,
-            0.68,
+            0.26,
         ]
     }));
 

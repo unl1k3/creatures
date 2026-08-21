@@ -72,14 +72,16 @@ pub(crate) fn blob_fill_color(parent_id: Option<u64>, selected: bool) -> Color {
     }
 }
 
-/// Inexpensive 2D diffuse lighting shared by all blob rendering layers.
+/// Inexpensive translucent 2D lighting shared by all blob rendering layers.
 pub(super) fn blob_vertex_light(
     position: Vec2,
     outward_normal: Vec2,
     lights: &[LightDefinition],
     center_vertex: bool,
 ) -> [f32; 4] {
-    let mut rgb = Vec3::new(0.38, 0.44, 0.48);
+    // Cool sewer ambience keeps the unlit side readable without flattening
+    // the warm contribution of nearby lamps.
+    let mut rgb = Vec3::new(0.24, 0.31, 0.36);
     for light in lights.iter().filter(|light| light.enabled) {
         let toward_light = light.position - position;
         let distance = toward_light.length();
@@ -87,15 +89,30 @@ pub(super) fn blob_vertex_light(
             continue;
         }
         let radial = 1.0 - distance / light.radius;
-        let facing = if center_vertex {
-            0.42
+        let attenuation = radial * radial * (3.0 - 2.0 * radial);
+        let light_direction = toward_light.normalize_or_zero();
+        let normal_light = outward_normal.dot(light_direction);
+        let response = if center_vertex {
+            0.30
         } else {
-            0.12 + 0.88
-                * outward_normal
-                    .dot(toward_light.normalize_or_zero())
-                    .max(0.0)
+            // Wrapped diffuse light suggests subsurface scattering. A weaker
+            // back-facing term lets warm light bleed through the gelatin.
+            let wrapped = ((normal_light + 0.32) / 1.32).clamp(0.0, 1.0);
+            let transmission = (-normal_light).max(0.0).powi(2) * 0.16;
+            0.10 + wrapped * 0.66 + transmission
         };
-        rgb += Vec3::from_array(light.color) * radial * facing * light.intensity;
+        let light_color = Vec3::from_array(light.color);
+        rgb += light_color * attenuation * response * light.intensity;
+
+        if !center_vertex {
+            // A compact, pale highlight makes the membrane look wet. This is
+            // deliberately subtle until a per-pixel shader replaces it.
+            let specular = normal_light.max(0.0).powi(8) * attenuation * light.intensity * 0.24;
+            rgb += light_color.lerp(Vec3::ONE, 0.62) * specular;
+        }
     }
-    [rgb.x.min(1.0), rgb.y.min(1.0), rgb.z.min(1.0), 1.0]
+    // Reinhard-style compression preserves hue when several lamps overlap,
+    // unlike a hard clamp that turns the whole surface white.
+    let mapped = rgb / (Vec3::ONE + rgb) * 1.34;
+    [mapped.x.min(1.0), mapped.y.min(1.0), mapped.z.min(1.0), 1.0]
 }
