@@ -1,0 +1,162 @@
+use super::palette::blob_family_rgb;
+use super::*;
+
+pub(super) fn update_blob_vacuole_mesh(
+    mesh: &mut Mesh,
+    active_blob: &ActiveBlob,
+    elapsed: f32,
+    alive: bool,
+    lights: &[LightDefinition],
+) {
+    let blob = &active_blob.body;
+    if !alive {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, Vec::<[f32; 3]>::new());
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, Vec::<[f32; 4]>::new());
+        mesh.insert_indices(Indices::U32(Vec::new()));
+        return;
+    }
+
+    const SEGMENTS: usize = 10;
+    let count = ((blob.rest_radius / 10.0).round() as usize).clamp(3, 7);
+    let center = blob.center();
+    let average_motion = blob
+        .particles
+        .iter()
+        .map(|particle| particle.position - particle.previous)
+        .sum::<Vec2>()
+        / blob.particles.len() as f32;
+    let inertial_offset = (-average_motion * 3.2).clamp_length_max(blob.rest_radius * 0.16);
+    let polygon = blob
+        .particles
+        .iter()
+        .map(|particle| particle.position)
+        .collect::<Vec<_>>();
+    let mut positions = Vec::with_capacity(count * (SEGMENTS + 1));
+    let mut colors = Vec::with_capacity(count * (SEGMENTS + 1));
+    let mut indices = Vec::with_capacity(count * SEGMENTS * 3);
+
+    for index in 0..count {
+        let angle_seed = random_unit(active_blob.id, index, 0) * std::f32::consts::TAU;
+        let radial_seed = 0.16 + random_unit(active_blob.id, index, 1) * 0.38;
+        let phase = angle_seed + elapsed * (0.34 + random_unit(active_blob.id, index, 2) * 0.30);
+        let base = Vec2::from_angle(angle_seed) * blob.rest_radius * radial_seed;
+        let drift = Vec2::new(
+            phase.sin() * blob.rest_radius * 0.055,
+            (phase * 0.73).cos() * blob.rest_radius * 0.075,
+        );
+        let radius =
+            (blob.rest_radius * (0.075 + random_unit(active_blob.id, index, 3) * 0.055)).max(1.5);
+        let vacuole_center = fit_circle_inside_polygon(
+            center,
+            center + base + drift + inertial_offset,
+            radius * 1.35,
+            &polygon,
+        );
+        let first_vertex = positions.len() as u32;
+        positions.push([vacuole_center.x, vacuole_center.y, 0.0]);
+        let light = blob_vertex_light(vacuole_center, Vec2::Y, lights, true);
+        let tint = vacuole_tint(active_blob.parent_id, index);
+        let visible_light = [
+            0.40 + light[0] * 0.60,
+            0.44 + light[1] * 0.56,
+            0.48 + light[2] * 0.52,
+        ];
+        colors.push([
+            visible_light[0] * tint.x * 0.72,
+            visible_light[1] * tint.y * 0.76,
+            visible_light[2] * tint.z * 0.80,
+            0.72,
+        ]);
+
+        let stretch = 0.82 + random_unit(active_blob.id, index, 4) * 0.34;
+        let tilt = angle_seed * 1.7;
+        for segment in 0..SEGMENTS {
+            let angle = segment as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+            let organic = 1.0 + 0.08 * (angle * 3.0 + phase).sin();
+            let local = Vec2::from_angle(tilt).rotate(Vec2::new(
+                angle.cos() * radius * stretch,
+                angle.sin() * radius / stretch,
+            )) * organic;
+            positions.push([vacuole_center.x + local.x, vacuole_center.y + local.y, 0.0]);
+            colors.push([
+                visible_light[0] * tint.x,
+                visible_light[1] * tint.y,
+                visible_light[2] * tint.z,
+                1.0,
+            ]);
+        }
+        for segment in 0..SEGMENTS {
+            indices.extend_from_slice(&[
+                first_vertex,
+                first_vertex + 1 + segment as u32,
+                first_vertex + 1 + ((segment + 1) % SEGMENTS) as u32,
+            ]);
+        }
+    }
+
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    mesh.insert_indices(Indices::U32(indices));
+}
+
+pub(super) fn vacuole_tint(parent_id: Option<u64>, index: usize) -> Vec3 {
+    let (red, green, blue) = blob_family_rgb(parent_id);
+    let base = Vec3::new(red, green, blue);
+    let white = Vec3::ONE;
+    match index % 3 {
+        0 => (white - base).lerp(white, 0.34),
+        1 => Vec3::new(base.z, base.x, base.y).lerp(white, 0.30),
+        _ => base.lerp(white, 0.58),
+    }
+}
+
+fn random_unit(blob_id: u64, index: usize, channel: u64) -> f32 {
+    let mut value = blob_id
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add((index as u64 + 1).wrapping_mul(0xBF58_476D_1CE4_E5B9))
+        .wrapping_add(channel.wrapping_mul(0x94D0_49BB_1331_11EB));
+    value ^= value >> 30;
+    value = value.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value ^= value >> 27;
+    value = value.wrapping_mul(0x94D0_49BB_1331_11EB);
+    value ^= value >> 31;
+    (value as u32) as f32 / u32::MAX as f32
+}
+
+fn fit_circle_inside_polygon(center: Vec2, desired: Vec2, radius: f32, polygon: &[Vec2]) -> Vec2 {
+    let mut candidate = desired;
+    for _ in 0..12 {
+        let clearance = polygon
+            .iter()
+            .copied()
+            .zip(polygon.iter().copied().cycle().skip(1))
+            .take(polygon.len())
+            .map(|(start, end)| point_segment_distance(candidate, start, end))
+            .fold(f32::INFINITY, f32::min);
+        if point_in_polygon(candidate, polygon) && clearance >= radius {
+            break;
+        }
+        candidate = center.lerp(candidate, 0.78);
+    }
+    candidate
+}
+
+fn point_in_polygon(point: Vec2, polygon: &[Vec2]) -> bool {
+    polygon
+        .iter()
+        .copied()
+        .zip(polygon.iter().copied().cycle().skip(1))
+        .take(polygon.len())
+        .fold(false, |inside, (first, second)| {
+            let crosses = (first.y > point.y) != (second.y > point.y)
+                && point.x
+                    < (second.x - first.x) * (point.y - first.y) / (second.y - first.y) + first.x;
+            inside ^ crosses
+        })
+}
+
+fn point_segment_distance(point: Vec2, start: Vec2, end: Vec2) -> f32 {
+    let edge = end - start;
+    let fraction = (point - start).dot(edge) / edge.length_squared().max(f32::EPSILON);
+    point.distance(start + edge * fraction.clamp(0.0, 1.0))
+}
