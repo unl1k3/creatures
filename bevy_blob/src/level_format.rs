@@ -42,6 +42,7 @@ pub(super) struct LightDefinition {
     pub(super) color: [f32; 3],
     pub(super) radius: f32,
     pub(super) intensity: f32,
+    pub(super) enabled: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -146,6 +147,12 @@ struct LightDocument {
     color: [f32; 3],
     radius: f32,
     intensity: f32,
+    #[serde(default = "enabled_by_default")]
+    enabled: bool,
+}
+
+const fn enabled_by_default() -> bool {
+    true
 }
 
 #[derive(Deserialize)]
@@ -263,6 +270,7 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
                 color: light.color,
                 radius: positive_number(&format!("light {index} radius"), light.radius)?,
                 intensity: positive_number(&format!("light {index} intensity"), light.intensity)?,
+                enabled: light.enabled,
             })
         })
         .collect::<Result<Vec<_>, LevelFormatError>>()?;

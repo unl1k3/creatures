@@ -891,7 +891,7 @@ mod tests {
     fn prototype_loads_authored_objects_from_json() {
         let level = Level::prototype();
         assert_eq!(level.nutrients.len(), 3);
-        assert_eq!(level.lights.len(), 2);
+        assert_eq!(level.lights.len(), 7);
         assert_eq!(level.expulsion_points.len(), 1);
         assert_eq!(level.hazards.len(), 1);
         assert_eq!(level.decorations.len(), 1);

@@ -49,8 +49,13 @@
     { "position": { "x": 210, "y": 40 }, "radius": 15 }
   ],
   "lights": [
-    { "position": { "x": -520, "y": 300 }, "color": [1.0, 0.55, 0.18], "radius": 240, "intensity": 1.1 },
-    { "position": { "x": 430, "y": 160 }, "color": [0.20, 0.75, 0.82], "radius": 310, "intensity": 0.8 }
+    { "position": { "x": -214, "y": 762 }, "color": [1.0, 0.58, 0.20], "radius": 250, "intensity": 1.15, "enabled": true },
+    { "position": { "x": 201, "y": 621 }, "color": [1.0, 0.52, 0.15], "radius": 275, "intensity": 1.30, "enabled": true },
+    { "position": { "x": -187, "y": 294 }, "color": [1.0, 0.57, 0.18], "radius": 255, "intensity": 1.20, "enabled": true },
+    { "position": { "x": -563, "y": -39 }, "color": [1.0, 0.62, 0.24], "radius": 240, "intensity": 1.05, "enabled": true },
+    { "position": { "x": -272, "y": -68 }, "color": [1.0, 0.54, 0.16], "radius": 285, "intensity": 1.25, "enabled": true },
+    { "position": { "x": 259, "y": -54 }, "color": [1.0, 0.57, 0.18], "radius": 285, "intensity": 1.25, "enabled": true },
+    { "position": { "x": 636, "y": 32 }, "color": [1.0, 0.61, 0.22], "radius": 250, "intensity": 1.10, "enabled": true }
   ],
   "expulsion_points": [
     { "position": { "x": 810, "y": -210 }, "direction": { "x": -1, "y": 0.15 }, "strength": 420 }

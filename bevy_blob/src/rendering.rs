@@ -1,4 +1,5 @@
 use super::*;
+use crate::level_format::LightDefinition;
 use bevy::sprite::Anchor;
 use bevy::{asset::RenderAssetUsages, mesh::Indices, render::render_resource::PrimitiveTopology};
 use std::collections::HashSet;
@@ -13,6 +14,13 @@ pub(super) struct BlobMesh {
 }
 
 #[derive(Component)]
+pub(super) struct BlobOutlineMesh {
+    blob_id: u64,
+    selected: bool,
+    life_state: LifeState,
+}
+
+#[derive(Component)]
 pub(super) struct RouteMarker {
     scenario: u8,
     index: usize,
@@ -23,8 +31,15 @@ pub(super) fn sync_route_markers(
     scenario: Res<TestScenario>,
     progress: Res<RouteProgress>,
     level: Res<Level>,
+    debug_overlay: Res<LevelDebugOverlay>,
     markers: Query<(Entity, &RouteMarker)>,
 ) {
+    if !debug_overlay.visible {
+        for (entity, _) in &markers {
+            commands.entity(entity).despawn();
+        }
+        return;
+    }
     let mut existing = HashSet::new();
     for (entity, marker) in &markers {
         if marker.scenario != scenario.0
@@ -69,6 +84,23 @@ fn blob_vital_color(parent_id: Option<u64>, selected: bool, vitality: Vitality) 
     )
 }
 
+fn blob_outline_color(parent_id: Option<u64>, selected: bool, vitality: Vitality) -> Color {
+    if !vitality.is_alive() {
+        return Color::srgba(0.24, 0.28, 0.30, 0.88);
+    }
+    let (red, green, blue) = blob_family_rgb(parent_id);
+    if selected {
+        Color::srgba(
+            (red * 1.18 + 0.16).min(1.0),
+            (green * 1.18 + 0.16).min(1.0),
+            (blue * 1.18 + 0.16).min(1.0),
+            0.98,
+        )
+    } else {
+        Color::srgba(red * 0.38, green * 0.38, blue * 0.38, 0.78)
+    }
+}
+
 fn blob_family_rgb(parent_id: Option<u64>) -> (f32, f32, f32) {
     const FAMILY_COLORS: [(f32, f32, f32); 6] = [
         (0.30, 0.82, 0.72),
@@ -85,6 +117,7 @@ fn blob_family_rgb(parent_id: Option<u64>) -> (f32, f32, f32) {
     (red, green, blue)
 }
 
+#[cfg(test)]
 pub(super) fn blob_family_color(parent_id: Option<u64>) -> Color {
     let (red, green, blue) = blob_family_rgb(parent_id);
     Color::srgba(red, green, blue, 0.9)
@@ -107,16 +140,29 @@ pub(super) fn blob_fill_color(parent_id: Option<u64>, selected: bool) -> Color {
 pub(super) fn sync_blob_meshes(
     mut commands: Commands,
     blobs: Res<BlobWorld>,
+    level: Res<Level>,
     vitality_world: Res<VitalityWorld>,
     nutrition: Res<NutritionWorld>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    mut rendered: Query<(
-        Entity,
-        &mut BlobMesh,
-        &Mesh2d,
-        &MeshMaterial2d<ColorMaterial>,
-    )>,
+    mut rendered: Query<
+        (
+            Entity,
+            &mut BlobMesh,
+            &Mesh2d,
+            &MeshMaterial2d<ColorMaterial>,
+        ),
+        (With<BlobMesh>, Without<BlobOutlineMesh>),
+    >,
+    mut outlines: Query<
+        (
+            Entity,
+            &mut BlobOutlineMesh,
+            &Mesh2d,
+            &MeshMaterial2d<ColorMaterial>,
+        ),
+        (With<BlobOutlineMesh>, Without<BlobMesh>),
+    >,
 ) {
     let active_ids = blobs
         .active
@@ -137,6 +183,7 @@ pub(super) fn sync_blob_meshes(
                 &mut mesh,
                 &active_blob.body,
                 nutrition.internal_load(active_blob.id),
+                &level.lights,
             );
         }
         let selected = blobs
@@ -172,6 +219,7 @@ pub(super) fn sync_blob_meshes(
         let mesh = meshes.add(create_blob_mesh_with_load(
             &active_blob.body,
             nutrition.internal_load(active_blob.id),
+            &level.lights,
         ));
         let vitality = vitality_world.get(active_blob.id);
         let material = materials.add(ColorMaterial::from(blob_vital_color(
@@ -192,22 +240,87 @@ pub(super) fn sync_blob_meshes(
             Transform::from_xyz(0.0, 0.0, -0.1),
         ));
     }
+
+    let mut outlined_ids = HashSet::new();
+    for (entity, mut marker, mesh_handle, material_handle) in &mut outlines {
+        let Some(active_blob) = blobs.active.iter().find(|blob| blob.id == marker.blob_id) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        outlined_ids.insert(marker.blob_id);
+        let selected = blobs
+            .active
+            .get(blobs.selected)
+            .is_some_and(|blob| blob.id == active_blob.id);
+        let vitality = vitality_world.get(active_blob.id);
+        if let Some(mut mesh) = meshes.get_mut(&mesh_handle.0) {
+            update_blob_outline_mesh(
+                &mut mesh,
+                &active_blob.body,
+                nutrition.internal_load(active_blob.id),
+                selected,
+            );
+        }
+        if marker.selected != selected || marker.life_state != vitality.state {
+            marker.selected = selected;
+            marker.life_state = vitality.state;
+            if let Some(mut material) = materials.get_mut(&material_handle.0) {
+                material.color = blob_outline_color(active_blob.parent_id, selected, vitality);
+            }
+        }
+    }
+    for active_blob in blobs
+        .active
+        .iter()
+        .filter(|blob| !outlined_ids.contains(&blob.id))
+    {
+        let selected = blobs
+            .active
+            .get(blobs.selected)
+            .is_some_and(|blob| blob.id == active_blob.id);
+        let vitality = vitality_world.get(active_blob.id);
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        );
+        update_blob_outline_mesh(
+            &mut mesh,
+            &active_blob.body,
+            nutrition.internal_load(active_blob.id),
+            selected,
+        );
+        commands.spawn((
+            BlobOutlineMesh {
+                blob_id: active_blob.id,
+                selected,
+                life_state: vitality.state,
+            },
+            Mesh2d(meshes.add(mesh)),
+            MeshMaterial2d(materials.add(ColorMaterial::from(blob_outline_color(
+                active_blob.parent_id,
+                selected,
+                vitality,
+            )))),
+            Transform::from_xyz(0.0, 0.0, -0.08),
+        ));
+    }
 }
 
 #[cfg(test)]
 pub(super) fn create_blob_mesh(blob: &Blob) -> Mesh {
-    create_blob_mesh_with_load(blob, None)
+    create_blob_mesh_with_load(blob, None, &[])
 }
 
 fn create_blob_mesh_with_load(
     blob: &Blob,
     load: Option<(Vec2, f32, f32, f32, usize, f32)>,
+    lights: &[LightDefinition],
 ) -> Mesh {
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
     );
-    update_blob_mesh_with_load(&mut mesh, blob, load);
+    update_blob_mesh_with_load(&mut mesh, blob, load, lights);
     mesh
 }
 
@@ -225,17 +338,26 @@ fn update_blob_mesh_with_load(
     mesh: &mut Mesh,
     blob: &Blob,
     load: Option<(Vec2, f32, f32, f32, usize, f32)>,
+    lights: &[LightDefinition],
 ) {
     let center = blob.center();
     let membrane = rendered_membrane_points(blob, load);
     let mut positions = Vec::with_capacity(membrane.len() + 1);
     let mut uvs = Vec::with_capacity(membrane.len() + 1);
+    let mut colors = Vec::with_capacity(membrane.len() + 1);
     positions.push([center.x, center.y, 0.0]);
     uvs.push([0.5, 0.5]);
+    colors.push(blob_vertex_light(center, Vec2::Y, lights, true));
     for point in &membrane {
         positions.push([point.position.x, point.position.y, 0.0]);
         let local = (point.position - center) / (blob.rest_radius * 2.0);
         uvs.push([0.5 + local.x, 0.5 + local.y]);
+        colors.push(blob_vertex_light(
+            point.position,
+            (point.position - center).normalize_or(Vec2::Y),
+            lights,
+            false,
+        ));
     }
 
     let mut indices = Vec::with_capacity(membrane.len() * 3);
@@ -262,6 +384,78 @@ fn update_blob_mesh_with_load(
     }
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    mesh.insert_indices(Indices::U32(indices));
+}
+
+/// Computes inexpensive 2D diffuse lighting for one mesh vertex. The ambient
+/// term keeps the creature readable outside a lamp's radius, while nearby
+/// lights tint only the membrane portions facing them.
+fn blob_vertex_light(
+    position: Vec2,
+    outward_normal: Vec2,
+    lights: &[LightDefinition],
+    center_vertex: bool,
+) -> [f32; 4] {
+    let mut rgb = Vec3::new(0.38, 0.44, 0.48);
+    for light in lights.iter().filter(|light| light.enabled) {
+        let toward_light = light.position - position;
+        let distance = toward_light.length();
+        if distance >= light.radius {
+            continue;
+        }
+        let radial = 1.0 - distance / light.radius;
+        let facing = if center_vertex {
+            0.42
+        } else {
+            0.12 + 0.88
+                * outward_normal
+                    .dot(toward_light.normalize_or_zero())
+                    .max(0.0)
+        };
+        let contribution = radial * facing * light.intensity;
+        rgb += Vec3::from_array(light.color) * contribution;
+    }
+    [rgb.x.min(1.0), rgb.y.min(1.0), rgb.z.min(1.0), 1.0]
+}
+
+fn update_blob_outline_mesh(
+    mesh: &mut Mesh,
+    blob: &Blob,
+    load: Option<(Vec2, f32, f32, f32, usize, f32)>,
+    selected: bool,
+) {
+    let membrane = rendered_membrane_points(blob, load);
+    let count = membrane.len();
+    let thickness = (if selected { 4.2 } else { 2.5 } * blob.size_scale()).max(1.1);
+    let mut positions = Vec::with_capacity(count * 2);
+    for point in &membrane {
+        positions.push([point.position.x, point.position.y, 0.0]);
+    }
+    for index in 0..count {
+        let previous = membrane[(index + count - 1) % count].position;
+        let current = membrane[index].position;
+        let next = membrane[(index + 1) % count].position;
+        let first_inward = (current - previous).perp().normalize_or_zero();
+        let second_inward = (next - current).perp().normalize_or_zero();
+        let inward = (first_inward + second_inward)
+            .normalize_or((blob.center() - current).normalize_or(Vec2::Y));
+        let inner = current + inward * thickness;
+        positions.push([inner.x, inner.y, 0.0]);
+    }
+    let mut indices = Vec::with_capacity(count * 6);
+    for index in 0..count {
+        let next = (index + 1) % count;
+        indices.extend_from_slice(&[
+            index as u32,
+            next as u32,
+            (count + next) as u32,
+            index as u32,
+            (count + next) as u32,
+            (count + index) as u32,
+        ]);
+    }
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_indices(Indices::U32(indices));
 }
 
@@ -349,13 +543,63 @@ mod membrane_detail_tests {
         for strength in [0.011, 0.025, 0.05, 0.10] {
             let load = Some((Vec2::new(72.0, 8.0), 5.0, strength, 0.61, 0, 0.5));
             let membrane = rendered_membrane_points(&blob, load);
-            let mesh = create_blob_mesh_with_load(&blob, load);
+            let mesh = create_blob_mesh_with_load(&blob, load, &[]);
             assert_eq!(
                 mesh.indices().expect("mesh indices").len(),
                 membrane.len() * 3,
                 "incomplete triangulation at strength {strength}"
             );
         }
+    }
+
+    #[test]
+    fn outline_is_a_closed_triangle_ring() {
+        let blob = Blob::new(Vec2::ZERO, 40.0);
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        );
+        update_blob_outline_mesh(&mut mesh, &blob, None, true);
+
+        assert_eq!(
+            mesh.indices().expect("outline indices").len(),
+            blob.particles.len() * 6
+        );
+        assert_eq!(mesh.count_vertices(), blob.particles.len() * 2);
+    }
+
+    #[test]
+    fn nearby_light_brightens_the_facing_membrane() {
+        let light = LightDefinition {
+            position: Vec2::new(20.0, 0.0),
+            color: [1.0, 0.3, 0.1],
+            radius: 100.0,
+            intensity: 1.0,
+            enabled: true,
+        };
+        let facing = blob_vertex_light(Vec2::ZERO, Vec2::X, &[light], false);
+        let opposite = blob_vertex_light(Vec2::ZERO, Vec2::NEG_X, &[light], false);
+        let outside = blob_vertex_light(Vec2::new(-100.0, 0.0), Vec2::X, &[light], false);
+
+        assert!(facing[0] > opposite[0]);
+        assert!(opposite[0] > outside[0]);
+        assert!(facing[0] - facing[2] > opposite[0] - opposite[2]);
+    }
+
+    #[test]
+    fn disabled_light_does_not_affect_the_blob() {
+        let light = LightDefinition {
+            position: Vec2::new(10.0, 0.0),
+            color: [1.0, 1.0, 1.0],
+            radius: 100.0,
+            intensity: 2.0,
+            enabled: false,
+        };
+
+        assert_eq!(
+            blob_vertex_light(Vec2::ZERO, Vec2::X, &[light], false),
+            blob_vertex_light(Vec2::ZERO, Vec2::X, &[], false)
+        );
     }
 }
 
@@ -589,7 +833,7 @@ pub(super) fn draw_world(
                 Color::srgb(0.25, 1.0, 0.35),
             );
         }
-        for light in &level.lights {
+        for light in level.lights.iter().filter(|light| light.enabled) {
             let color = Color::srgba(
                 light.color[0],
                 light.color[1],
@@ -614,9 +858,11 @@ pub(super) fn draw_world(
             }
         }
     }
-    for (index, checkpoint) in level.route.iter().enumerate().skip(route_progress.next) {
-        let radius = (7.0 + index as f32 * 1.5).min(20.0);
-        gizmos.circle_2d(*checkpoint, radius, Color::srgba(1.0, 0.72, 0.18, 0.72));
+    if debug_overlay.visible {
+        for (index, checkpoint) in level.route.iter().enumerate().skip(route_progress.next) {
+            let radius = (7.0 + index as f32 * 1.5).min(20.0);
+            gizmos.circle_2d(*checkpoint, radius, Color::srgba(1.0, 0.72, 0.18, 0.72));
+        }
     }
     if !debug_overlay.visible {
         for hazard in &level.hazards {
@@ -644,37 +890,29 @@ pub(super) fn draw_world(
     for active_blob in &blobs.active {
         let blob = &active_blob.body;
         let vitality = vitality_world.get(active_blob.id);
-        let color = if vitality.is_alive() {
-            blob_family_color(active_blob.parent_id)
-        } else {
-            Color::srgba(0.48, 0.52, 0.54, 0.96)
-        };
-        let membrane = rendered_membrane_points(blob, nutrition.internal_load(active_blob.id));
-        gizmos.lineloop_2d(membrane.iter().map(|point| point.position), color);
-        for point in membrane.iter().filter(|point| point.temporary) {
-            let radius = if point.attachment { 2.0 } else { 1.35 };
-            let point_color = if point.attachment {
-                Color::srgba(1.0, 0.90, 0.42, 0.82)
-            } else {
-                Color::srgba(1.0, 0.82, 0.30, 0.58)
-            };
-            gizmos.circle_2d(
-                point.position,
-                (radius * blob.size_scale()).max(0.72),
-                point_color,
-            );
-        }
         let center = blob.center();
         let size_scale = blob.size_scale();
-        for particle in &blob.particles {
-            gizmos.line_2d(
-                center,
-                particle.position,
-                Color::srgba(0.12, 0.55, 0.48, 0.22),
-            );
-        }
-        if vitality.is_alive() {
-            gizmos.circle_2d(center, 9.0 * size_scale, Color::srgb(0.72, 0.42, 0.95));
+        if debug_overlay.visible {
+            let membrane = rendered_membrane_points(blob, nutrition.internal_load(active_blob.id));
+            for point in membrane.iter().filter(|point| point.temporary) {
+                let radius = if point.attachment { 2.0 } else { 1.35 };
+                let point_color = if point.attachment {
+                    Color::srgba(1.0, 0.90, 0.42, 0.82)
+                } else {
+                    Color::srgba(1.0, 0.82, 0.30, 0.58)
+                };
+                gizmos.circle_2d(point.position, (radius * size_scale).max(0.72), point_color);
+            }
+            for particle in &blob.particles {
+                gizmos.line_2d(
+                    center,
+                    particle.position,
+                    Color::srgba(0.12, 0.55, 0.48, 0.42),
+                );
+            }
+            if vitality.is_alive() {
+                gizmos.circle_2d(center, 9.0 * size_scale, Color::srgb(0.72, 0.42, 0.95));
+            }
         }
 
         if vitality.is_alive() && blob.charge > 0.0 {

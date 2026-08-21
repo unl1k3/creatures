@@ -152,23 +152,6 @@ pub(super) fn draw_shields(
                 );
             }
         }
-
-        let is_selected = blobs
-            .active
-            .get(blobs.selected)
-            .is_some_and(|selected| selected.id == active_blob.id);
-        if is_selected {
-            let radius = blob.rest_radius * 0.36;
-            gizmos.circle_2d(center, radius, Color::srgba(0.20, 0.62, 0.72, 0.28));
-            if status.energy > 0.001 {
-                gizmos.arc_2d(
-                    center,
-                    std::f32::consts::TAU * status.energy,
-                    radius,
-                    Color::srgba(0.38, 0.94, 1.0, 0.92),
-                );
-            }
-        }
     }
 }
 
