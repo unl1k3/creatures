@@ -54,6 +54,8 @@ const BLOB_START: Vec2 = Vec2::new(0.0, -280.0);
 const INITIAL_RADIUS: f32 = REFERENCE_RADIUS * DEFAULT_CREATURE_SCALE;
 const MAX_ACTIVE_BLOBS: usize = 4;
 const REJOIN_TIMEOUT: f32 = 4.0;
+const BLOB_CONTACT_PREDICTION_CLEARANCE: f32 = 1.5;
+const BLOB_CONTACT_VISUAL_CLEARANCE: f32 = 0.0;
 
 struct ActiveBlob {
     id: u64,
@@ -576,12 +578,23 @@ fn resolve_blob_collisions_impl(
             }
             let second = &mut second.body;
             let pair_scale = (first.size_scale() + second.size_scale()) * 0.5;
-            let clearance = 1.5 * pair_scale;
+            // Keep a generous predictive skin for stable continuous contact,
+            // but do not expose that entire skin as a visible gap between the
+            // rendered membranes.
+            let prediction_clearance = BLOB_CONTACT_PREDICTION_CLEARANCE * pair_scale;
+            let visual_clearance = BLOB_CONTACT_VISUAL_CLEARANCE * pair_scale;
             let Some((normal, contact_points, penetration)) =
-                avian_blob_contacts(first, second, clearance)
+                avian_blob_contacts(first, second, prediction_clearance)
             else {
                 continue;
             };
+
+            // A predictive manifold only says that contact is imminent. Do
+            // not deform the membranes or cancel their closing velocity until
+            // their visible contours have actually reached one another.
+            if blob_surface_gap(first, second) > visual_clearance {
+                continue;
+            }
 
             let first_mass = first.mass();
             let second_mass = second.mass();
@@ -589,7 +602,7 @@ fn resolve_blob_collisions_impl(
             let contact_load = (penetration + 3.0 * pair_scale)
                 .min(first.rest_radius.min(second.rest_radius) * 0.18);
             let point_count = contact_points.len().max(1) as f32;
-            let actual_overlap = (penetration - clearance).max(0.0);
+            let actual_overlap = (penetration - prediction_clearance).max(0.0);
             for point in contact_points {
                 let first_load = if first_alive {
                     contact_load / point_count
@@ -609,9 +622,12 @@ fn resolve_blob_collisions_impl(
                 }
             }
 
-            let post_penetration = avian_blob_contacts(first, second, clearance)
-                .map(|(_, _, penetration)| penetration)
-                .unwrap_or(0.0);
+            let predicted_post_correction =
+                avian_blob_contacts(first, second, prediction_clearance)
+                    .map(|(_, _, penetration)| penetration)
+                    .unwrap_or(0.0);
+            let post_penetration =
+                (predicted_post_correction - (prediction_clearance - visual_clearance)).max(0.0);
             match (first_alive, second_alive) {
                 (true, false) => first.translate(-normal * post_penetration),
                 (false, true) => second.translate(normal * post_penetration),
@@ -626,7 +642,7 @@ fn resolve_blob_collisions_impl(
             // the visible contours never remain interpenetrating.
             let final_delta = second.center() - first.center();
             let final_normal = final_delta.normalize_or(normal);
-            let residual = (clearance - blob_surface_gap(first, second)).max(0.0);
+            let residual = (visual_clearance - blob_surface_gap(first, second)).max(0.0);
             match (first_alive, second_alive) {
                 (true, false) => first.translate(-final_normal * residual),
                 (false, true) => second.translate(final_normal * residual),

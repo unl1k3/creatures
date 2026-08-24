@@ -29,7 +29,7 @@ mod tests {
             active(1, None, Blob::new(Vec2::ZERO, 30.0)),
         ];
         resolve_blob_collisions(&mut blobs);
-        let scaled_gap = 1.5 * blobs[0].body.size_scale();
+        let scaled_gap = BLOB_CONTACT_VISUAL_CLEARANCE * blobs[0].body.size_scale();
         assert!(blob_surface_gap(&blobs[0].body, &blobs[1].body) >= scaled_gap - 0.01);
     }
 
@@ -195,8 +195,18 @@ mod tests {
         assert!(blob_surface_gap(&blobs[0].body, &blobs[1].body) < 0.0);
         resolve_blob_collisions(&mut blobs);
 
-        let expected_gap = 1.5 * (blobs[0].body.size_scale() + blobs[1].body.size_scale()) * 0.5;
-        assert!(blob_surface_gap(&blobs[0].body, &blobs[1].body) >= expected_gap - 0.01);
+        let expected_gap = BLOB_CONTACT_VISUAL_CLEARANCE
+            * (blobs[0].body.size_scale() + blobs[1].body.size_scale())
+            * 0.5;
+        let resulting_gap = blob_surface_gap(&blobs[0].body, &blobs[1].body);
+        assert!(
+            resulting_gap >= expected_gap - 0.01,
+            "resulting gap {resulting_gap}, expected at least {expected_gap}"
+        );
+        assert!(
+            resulting_gap <= expected_gap + 0.5,
+            "contact correction left an excessive gap of {resulting_gap}"
+        );
         let center_of_mass_after = (blobs[0].body.center() * blobs[0].body.mass()
             + blobs[1].body.center() * blobs[1].body.mass())
             / (blobs[0].body.mass() + blobs[1].body.mass());

@@ -21,14 +21,19 @@ pub(super) fn update_blob_outline_mesh(
     let thickness_ratio = if selected { 0.043 } else { 0.036 };
     let thickness =
         (blob.rest_radius * thickness_ratio * (1.0 + shield_extension * 0.58)).clamp(1.25, 3.4);
+    // Cover the sub-pixel seam produced when two translucent, antialiased
+    // contours terminate on the exact same physical coordinate. This affects
+    // only the membrane artwork; collision geometry remains unchanged.
+    let outer_expansion = (blob.rest_radius * 0.009).clamp(0.35, 0.75);
     let mut positions = Vec::with_capacity(count * 3);
     let mut colors = Vec::with_capacity(count * 3);
     let base = blob_outline_color(parent_id, selected, vitality).to_srgba();
     let base_rgb = Vec3::new(base.red, base.green, base.blue)
         .lerp(Vec3::new(0.34, 0.88, 1.0), shield_extension * 0.62);
 
-    for point in &contour.points {
-        positions.push([point.position.x, point.position.y, 0.0]);
+    for (point, inward) in contour.points.iter().zip(&contour.inward_normals) {
+        let outer = point.position - *inward * outer_expansion;
+        positions.push([outer.x, outer.y, 0.0]);
     }
     for (index, (point, inward)) in contour
         .points
@@ -57,7 +62,7 @@ pub(super) fn update_blob_outline_mesh(
             (base_rgb.x * (0.62 + illumination[0] * 0.70) * energy).min(1.0),
             (base_rgb.y * (0.62 + illumination[1] * 0.70) * energy).min(1.0),
             (base_rgb.z * (0.62 + illumination[2] * 0.70) * energy).min(1.0),
-            if selected { 0.96 } else { 0.84 },
+            if selected { 0.98 } else { 0.94 },
         ]);
     }
     colors.extend((0..count).map(|_| {
