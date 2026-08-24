@@ -43,6 +43,64 @@
     { "image": "levels/sewer_01/platform.png", "position": { "x": 460, "y": 213.25 }, "size": { "x": 180, "y": 74 }, "depth": -1 },
     { "image": "levels/sewer_01/platform.png", "position": { "x": 700, "y": 393.25 }, "size": { "x": 180, "y": 74 }, "depth": -1 }
   ],
+  "drop_emitters": [
+    {
+      "position": { "x": -43, "y": -237 },
+      "interval": 2.6,
+      "initial_delay": 0.7,
+      "radius": 3.2,
+      "gravity": 420,
+      "depth": -5
+    },
+    {
+      "position": { "x": -420, "y": 140 },
+      "interval": 3.4,
+      "initial_delay": 1.9,
+      "radius": 2.7,
+      "gravity": 390,
+      "depth": -5.2
+    },
+    {
+      "position": { "x": -14, "y": 42 },
+      "interval": 4.3,
+      "initial_delay": 2.8,
+      "radius": 3.0,
+      "gravity": 440,
+      "depth": -5.1
+    },
+    {
+      "position": { "x": -811, "y": 735 },
+      "interval": 5.2,
+      "initial_delay": 0.3,
+      "radius": 2.5,
+      "gravity": 370,
+      "depth": -5.4
+    },
+    {
+      "position": { "x": 752, "y": 730 },
+      "interval": 3.8,
+      "initial_delay": 2.1,
+      "radius": 2.9,
+      "gravity": 410,
+      "depth": -5.3
+    },
+    {
+      "position": { "x": 634, "y": 80 },
+      "interval": 2.9,
+      "initial_delay": 1.2,
+      "radius": 2.4,
+      "gravity": 460,
+      "depth": -5.2
+    },
+    {
+      "position": { "x": 663, "y": -310 },
+      "interval": 4.7,
+      "initial_delay": 3.5,
+      "radius": 3.1,
+      "gravity": 430,
+      "depth": -5.1
+    }
+  ],
   "nutrients": [
     { "position": { "x": 145, "y": -215 }, "radius": 13 },
     { "position": { "x": -175, "y": -70 }, "radius": 11 },

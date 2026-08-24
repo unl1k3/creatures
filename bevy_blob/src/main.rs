@@ -38,7 +38,10 @@ use nutrition::{
 };
 #[cfg(test)]
 use rendering::blob_family_color;
-use rendering::{draw_world, sync_blob_meshes, sync_route_markers};
+use rendering::{
+    InkStylePreview, draw_world, setup_ambient_drop_assets, simulate_ambient_drops,
+    sync_blob_meshes, sync_ink_preview, sync_route_markers, toggle_ink_style,
+};
 use shield::{ShieldWorld, simulate_shields};
 use std::{
     collections::HashMap,
@@ -89,8 +92,9 @@ impl SplitRng {
 
 fn main() {
     App::new()
-        .insert_resource(ClearColor(Color::srgb(0.025, 0.035, 0.075)))
+        .insert_resource(ClearColor(Color::srgb(0.89, 0.86, 0.77)))
         .insert_resource(Time::<Fixed>::from_hz(120.0))
+        .init_resource::<InkStylePreview>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Blob — X divide, E ricongiunge, R reset, TAB seleziona".into(),
@@ -105,7 +109,14 @@ fn main() {
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_systems(
             Startup,
-            (setup_environment, setup, setup_nutrition, setup_legend).chain(),
+            (
+                setup_environment,
+                setup,
+                setup_nutrition,
+                setup_ambient_drop_assets,
+                setup_legend,
+            )
+                .chain(),
         )
         .add_systems(
             FixedUpdate,
@@ -127,6 +138,7 @@ fn main() {
                 arrange_auxiliary_windows,
                 toggle_legend,
                 toggle_level_debug,
+                toggle_ink_style,
                 switch_test_scenario,
                 handle_blob_actions,
                 start_phagocytosis,
@@ -136,7 +148,8 @@ fn main() {
                 advance_route_progress,
                 sample_avian_contacts,
                 update_metrics,
-                sync_blob_meshes,
+                (simulate_ambient_drops, sync_blob_meshes).chain(),
+                sync_ink_preview,
                 sync_route_markers,
                 draw_world,
                 draw_acid,

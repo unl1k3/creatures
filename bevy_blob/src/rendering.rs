@@ -1,14 +1,239 @@
 use super::*;
+use crate::environment::LevelArtwork;
 use crate::level_format::LightDefinition;
 use crate::shield::shield_spine_fans;
 use bevy::sprite::Anchor;
 use bevy::{asset::RenderAssetUsages, mesh::Indices, render::render_resource::PrimitiveTopology};
 use std::collections::HashSet;
 
+#[derive(Resource)]
+pub(super) struct InkStylePreview {
+    pub(super) enabled: bool,
+}
+
+impl Default for InkStylePreview {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+#[derive(Component)]
+pub(super) struct InkPreviewShape {
+    scenario: u8,
+}
+
+pub(super) fn toggle_ink_style(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut ink_style: ResMut<InkStylePreview>,
+    mut clear_color: ResMut<ClearColor>,
+    mut artwork: Query<&mut Visibility, With<LevelArtwork>>,
+) {
+    if !keyboard.just_pressed(KeyCode::KeyM) {
+        return;
+    }
+    ink_style.enabled = !ink_style.enabled;
+    clear_color.0 = if ink_style.enabled {
+        Color::srgb(0.89, 0.86, 0.77)
+    } else {
+        Color::srgb(0.025, 0.035, 0.075)
+    };
+    for mut visibility in &mut artwork {
+        *visibility = if ink_style.enabled {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+    }
+}
+
+pub(super) fn sync_ink_preview(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    ink_style: Res<InkStylePreview>,
+    scenario: Res<TestScenario>,
+    level: Res<Level>,
+    existing: Query<(Entity, &InkPreviewShape)>,
+    mut artwork: Query<&mut Visibility, With<LevelArtwork>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
+    for mut visibility in &mut artwork {
+        *visibility = if ink_style.enabled {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+    }
+    let current = existing
+        .iter()
+        .all(|(_, marker)| marker.scenario == scenario.0);
+    if !ink_style.enabled || !current {
+        for (entity, _) in &existing {
+            commands.entity(entity).despawn();
+        }
+    }
+    if !ink_style.enabled || (current && !existing.is_empty()) {
+        return;
+    }
+
+    // The illustration supplies depth and atmosphere only. Playable silhouettes
+    // are generated below from the same geometry used by collision detection.
+    if supports_ink_background(scenario.0) {
+        commands.spawn((
+            InkPreviewShape {
+                scenario: scenario.0,
+            },
+            Sprite {
+                image: asset_server.load("levels/sewer_01/ink_sample/background-v3-static.png"),
+                custom_size: Some(level.size()),
+                ..default()
+            },
+            Transform::from_translation(level.center().extend(-20.0)),
+        ));
+    }
+
+    let ink = Color::srgb(0.035, 0.045, 0.055);
+    for (index, platform) in level.platforms.iter().enumerate() {
+        spawn_ink_platform(&mut commands, scenario.0, index, platform, ink);
+    }
+    let material = materials.add(ColorMaterial::from(ink));
+    for fixture in &level.fixtures {
+        if fixture.len() < 3 {
+            continue;
+        }
+        let positions = fixture
+            .iter()
+            .map(|point| [point.x, point.y, 0.0])
+            .collect::<Vec<_>>();
+        let mut indices = Vec::with_capacity((fixture.len() - 2) * 3);
+        for index in 1..fixture.len() - 1 {
+            indices.extend_from_slice(&[0, index as u32, index as u32 + 1]);
+        }
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        );
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+        mesh.insert_indices(Indices::U32(indices));
+        commands.spawn((
+            InkPreviewShape {
+                scenario: scenario.0,
+            },
+            Mesh2d(meshes.add(mesh)),
+            MeshMaterial2d(material.clone()),
+            Transform::from_xyz(0.0, 0.0, -0.20),
+        ));
+    }
+}
+
+fn spawn_ink_platform(
+    commands: &mut Commands,
+    scenario: u8,
+    index: usize,
+    platform: &Platform,
+    ink: Color,
+) {
+    const VISUAL_CONTACT_OFFSET: f32 = 5.0 * DEFAULT_CREATURE_SCALE;
+    let visual_center = platform.center + Vec2::Y * VISUAL_CONTACT_OFFSET;
+    let size = platform.half_size * 2.0;
+    commands.spawn((
+        InkPreviewShape { scenario },
+        Sprite::from_color(ink, size),
+        Transform::from_translation(visual_center.extend(-0.20)),
+    ));
+
+    // A continuous cap marks the exact walkable edge. Light printed slabs below
+    // echo the ivory/charcoal background without extending beyond the collider.
+    let cap_height = (size.y * 0.24).clamp(4.0, 7.0);
+    commands.spawn((
+        InkPreviewShape { scenario },
+        Sprite::from_color(
+            Color::srgb(0.015, 0.020, 0.024),
+            Vec2::new(size.x, cap_height),
+        ),
+        Transform::from_translation(
+            (visual_center + Vec2::Y * (platform.half_size.y - cap_height * 0.5)).extend(-0.13),
+        ),
+    ));
+
+    let block_count = (size.x / 62.0).round().clamp(2.0, 9.0) as usize;
+    let block_width = size.x / block_count as f32;
+    let body_height = (size.y - cap_height - 2.0).max(2.0);
+    for block in 0..block_count {
+        let variation = ink_hash(index, block);
+        let red = 0.46 + variation * 0.12;
+        let green = 0.44 + variation * 0.10;
+        let blue = 0.36 + variation * 0.08;
+        let position = visual_center
+            + Vec2::new(
+                -platform.half_size.x + block_width * (block as f32 + 0.5),
+                -platform.half_size.y + body_height * 0.5 + 1.0,
+            );
+        commands.spawn((
+            InkPreviewShape { scenario },
+            Sprite::from_color(
+                Color::srgb(red, green, blue),
+                Vec2::new((block_width - 2.2).max(3.0), body_height),
+            ),
+            Transform::from_translation(position.extend(-0.11)),
+        ));
+
+        if block_width > 24.0 && body_height > 7.0 {
+            let stroke_length = block_width.min(42.0) * (0.28 + variation * 0.18);
+            let stroke_offset = Vec2::new(
+                (ink_hash(index + 31, block) - 0.5) * block_width * 0.28,
+                (ink_hash(index + 67, block) - 0.5) * body_height * 0.30,
+            );
+            let angle = (ink_hash(index + 97, block) - 0.5) * 0.22;
+            commands.spawn((
+                InkPreviewShape { scenario },
+                Sprite::from_color(
+                    Color::srgba(0.055, 0.060, 0.058, 0.58),
+                    Vec2::new(stroke_length, 1.1),
+                ),
+                Transform::from_translation((position + stroke_offset).extend(-0.105))
+                    .with_rotation(Quat::from_rotation_z(angle)),
+            ));
+        }
+    }
+}
+
+fn ink_hash(first: usize, second: usize) -> f32 {
+    let value = (first as u32)
+        .wrapping_mul(0x9e37_79b9)
+        .wrapping_add((second as u32).wrapping_mul(0x85eb_ca6b));
+    let mixed = value ^ (value >> 16);
+    (mixed & 0xffff) as f32 / u16::MAX as f32
+}
+
+// Scenario 0 is the startup instance of F1; pressing F1 explicitly assigns 1.
+fn supports_ink_background(scenario: u8) -> bool {
+    matches!(scenario, 0 | 1)
+}
+
+#[cfg(test)]
+mod ink_preview_tests {
+    use super::{InkStylePreview, supports_ink_background};
+
+    #[test]
+    fn ink_preview_is_the_default_rendering_mode() {
+        assert!(InkStylePreview::default().enabled);
+    }
+
+    #[test]
+    fn background_is_available_before_and_after_pressing_f1() {
+        assert!(supports_ink_background(0));
+        assert!(supports_ink_background(1));
+        assert!(!supports_ink_background(2));
+    }
+}
+
+mod ambient;
 mod body;
 mod membrane;
 mod palette;
 mod vacuoles;
+pub(super) use ambient::{setup_ambient_drop_assets, simulate_ambient_drops};
 #[cfg(test)]
 pub(super) use body::create_blob_mesh;
 use body::{create_blob_mesh_with_load, update_blob_mesh_with_load};
@@ -662,9 +887,10 @@ pub(super) fn draw_world(
     debug_overlay: Res<LevelDebugOverlay>,
     route_progress: Res<RouteProgress>,
     nutrition: Res<NutritionWorld>,
+    ink_style: Res<InkStylePreview>,
 ) {
     // Laboratories without artwork retain their unobtrusive collision view.
-    if !level.has_artwork() && !debug_overlay.visible {
+    if !ink_style.enabled && !level.has_artwork() && !debug_overlay.visible {
         for platform in &level.platforms {
             gizmos.rect_2d(
                 platform.center,
@@ -818,11 +1044,6 @@ pub(super) fn draw_world(
                     Color::srgba(1.0, 0.78, 0.16, 0.96),
                 );
             }
-            gizmos.circle_2d(
-                center,
-                (6.0 + 5.0 * blob.charge) * size_scale.max(0.45),
-                Color::srgba(1.0, 0.62 + 0.24 * blob.charge, 0.12, 0.88),
-            );
         }
     }
 }

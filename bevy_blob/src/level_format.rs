@@ -20,6 +20,7 @@ pub(super) struct ParsedLevel {
     pub(super) expulsion_points: Vec<ExpulsionPointDefinition>,
     pub(super) hazards: Vec<HazardDefinition>,
     pub(super) decorations: Vec<VisualLayer>,
+    pub(super) drop_emitters: Vec<DropEmitterDefinition>,
 }
 
 #[derive(Clone, Debug)]
@@ -27,6 +28,16 @@ pub(super) struct VisualLayer {
     pub(super) image: String,
     pub(super) position: Vec2,
     pub(super) size: Vec2,
+    pub(super) depth: f32,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct DropEmitterDefinition {
+    pub(super) position: Vec2,
+    pub(super) interval: f32,
+    pub(super) initial_delay: f32,
+    pub(super) radius: f32,
+    pub(super) gravity: f32,
     pub(super) depth: f32,
 }
 
@@ -95,6 +106,8 @@ struct LevelDocument {
     hazards: Vec<HazardDocument>,
     #[serde(default)]
     decorations: Vec<VisualLayerDocument>,
+    #[serde(default)]
+    drop_emitters: Vec<DropEmitterDocument>,
 }
 
 #[derive(Clone, Copy, Default, Deserialize)]
@@ -130,6 +143,18 @@ struct VisualLayerDocument {
     image: String,
     position: Point,
     size: Point,
+    depth: f32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DropEmitterDocument {
+    position: Point,
+    interval: f32,
+    #[serde(default)]
+    initial_delay: f32,
+    radius: f32,
+    gravity: f32,
     depth: f32,
 }
 
@@ -240,6 +265,39 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
         })
         .collect::<Result<Vec<_>, LevelFormatError>>()?;
     let decorations = parse_visual_layers(document.decorations, "decoration")?;
+    let drop_emitters = document
+        .drop_emitters
+        .into_iter()
+        .enumerate()
+        .map(|(index, emitter)| {
+            let initial_delay = finite_number(
+                &format!("drop emitter {index} initial_delay"),
+                emitter.initial_delay,
+            )?;
+            if initial_delay < 0.0 {
+                return Err(LevelFormatError(format!(
+                    "drop emitter {index} initial_delay cannot be negative"
+                )));
+            }
+            Ok(DropEmitterDefinition {
+                position: finite_point(
+                    &format!("drop emitter {index} position"),
+                    emitter.position,
+                )?,
+                interval: positive_number(
+                    &format!("drop emitter {index} interval"),
+                    emitter.interval,
+                )?,
+                initial_delay,
+                radius: positive_number(&format!("drop emitter {index} radius"), emitter.radius)?,
+                gravity: positive_number(
+                    &format!("drop emitter {index} gravity"),
+                    emitter.gravity,
+                )?,
+                depth: finite_number(&format!("drop emitter {index} depth"), emitter.depth)?,
+            })
+        })
+        .collect::<Result<Vec<_>, LevelFormatError>>()?;
     let nutrients = document
         .nutrients
         .into_iter()
@@ -331,6 +389,7 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
         expulsion_points,
         hazards,
         decorations,
+        drop_emitters,
     })
 }
 
@@ -411,7 +470,15 @@ mod tests {
                     { "shape": "rectangle", "id": "floor", "position": { "x": 0, "y": -20 }, "size": { "x": 200, "y": 20 } },
                     { "shape": "polygon", "id": "ramp", "points": [{ "x": 0, "y": 0 }, { "x": 50, "y": 0 }, { "x": 50, "y": 30 }] }
                 ],
-                "visual_layers": [{ "image": "levels/test/background.png", "position": { "x": 0, "y": 0 }, "size": { "x": 1000, "y": 800 }, "depth": -20 }]
+                "visual_layers": [{ "image": "levels/test/background.png", "position": { "x": 0, "y": 0 }, "size": { "x": 1000, "y": 800 }, "depth": -20 }],
+                "drop_emitters": [{
+                    "position": { "x": 20, "y": 30 },
+                    "interval": 2.5,
+                    "initial_delay": 0.4,
+                    "radius": 3,
+                    "gravity": 420,
+                    "depth": -5
+                }]
             }"#,
         )
         .expect("valid level");
@@ -419,6 +486,8 @@ mod tests {
         assert_eq!(level.platforms.len(), 1);
         assert_eq!(level.fixtures.len(), 1);
         assert_eq!(level.visual_layers.len(), 1);
+        assert_eq!(level.drop_emitters.len(), 1);
+        assert_eq!(level.drop_emitters[0].gravity, 420.0);
     }
 
     #[test]

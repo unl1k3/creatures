@@ -1,8 +1,8 @@
 use super::*;
 use crate::blob::Particle;
 use crate::level_format::{
-    ExpulsionPointDefinition, HazardDefinition, LightDefinition, NutrientDefinition, ParsedLevel,
-    VisualLayer, parse_level,
+    DropEmitterDefinition, ExpulsionPointDefinition, HazardDefinition, LightDefinition,
+    NutrientDefinition, ParsedLevel, VisualLayer, parse_level,
 };
 use avian2d::prelude::{
     Collider, CollisionLayers, PhysicsLayer, RigidBody, ShapeCastConfig, SpatialQuery,
@@ -42,6 +42,7 @@ pub(super) struct Level {
     pub(super) route: Vec<Vec2>,
     visual_layers: Vec<VisualLayer>,
     decorations: Vec<VisualLayer>,
+    pub(super) drop_emitters: Vec<DropEmitterDefinition>,
     pub(super) nutrients: Vec<NutrientDefinition>,
     pub(super) lights: Vec<LightDefinition>,
     pub(super) expulsion_points: Vec<ExpulsionPointDefinition>,
@@ -114,6 +115,7 @@ impl Level {
             expulsion_points: parsed.expulsion_points,
             hazards: parsed.hazards,
             decorations: parsed.decorations,
+            drop_emitters: parsed.drop_emitters,
         }
     }
 
@@ -141,6 +143,7 @@ impl Level {
             route: Vec::new(),
             visual_layers: Vec::new(),
             decorations: Vec::new(),
+            drop_emitters: Vec::new(),
             nutrients: Vec::new(),
             lights: Vec::new(),
             expulsion_points: Vec::new(),
@@ -175,6 +178,7 @@ impl Level {
                     ],
                     visual_layers: Vec::new(),
                     decorations: Vec::new(),
+                    drop_emitters: Vec::new(),
                     nutrients: Vec::new(),
                     lights: Vec::new(),
                     expulsion_points: Vec::new(),
@@ -219,6 +223,7 @@ impl Level {
                     ],
                     visual_layers: Vec::new(),
                     decorations: Vec::new(),
+                    drop_emitters: Vec::new(),
                     nutrients: Vec::new(),
                     lights: Vec::new(),
                     expulsion_points: Vec::new(),
@@ -249,6 +254,7 @@ impl Level {
                     ],
                     visual_layers: Vec::new(),
                     decorations: Vec::new(),
+                    drop_emitters: Vec::new(),
                     nutrients: Vec::new(),
                     lights: Vec::new(),
                     expulsion_points: Vec::new(),
@@ -288,6 +294,7 @@ impl Level {
                     ],
                     visual_layers: Vec::new(),
                     decorations: Vec::new(),
+                    drop_emitters: Vec::new(),
                     nutrients: Vec::new(),
                     lights: Vec::new(),
                     expulsion_points: Vec::new(),
@@ -317,6 +324,7 @@ impl Level {
                     ],
                     visual_layers: Vec::new(),
                     decorations: Vec::new(),
+                    drop_emitters: Vec::new(),
                     nutrients: Vec::new(),
                     lights: Vec::new(),
                     expulsion_points: Vec::new(),
@@ -1008,6 +1016,7 @@ mod tests {
         assert_eq!(level.expulsion_points.len(), 1);
         assert_eq!(level.hazards.len(), 1);
         assert_eq!(level.decorations.len(), 1);
+        assert_eq!(level.drop_emitters.len(), 7);
     }
 
     #[test]

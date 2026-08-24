@@ -12,7 +12,7 @@ const METRICS_LAYER: usize = 2;
 // WindowResolution describes the client area and excludes native borders and
 // title bars. Keep enough logical space for those decorations on every OS.
 const NATIVE_WINDOW_GAP: f32 = 64.0;
-const CONTROLS: &str = "CONTROLS\n\nA / D or arrows   Roll and move\nHold Down         Charge jump\nRelease Down      Jump\nHold C            Probe for nutrient\nQ                 Pseudo-spine shield\nSpace             Radial acid burst\nX                 Split selected blob\nTab               Select next blob\nE                 Rejoin siblings\nR                 Reset game\nF1                Standard level\nF2                Supports lab\nF3                Curves lab\nF4                U and low passage\nF5                Fall and impact lab\nF6                V and split bridge\nF7                Level physics overlay\nI / J / K / L     Move debug camera\nU / O             Debug camera zoom\nP                 Return and follow blob\nH                 Show / hide this window\nEsc               Exit";
+const CONTROLS: &str = "CONTROLS\n\nA / D or arrows   Roll and move\nHold Down         Charge jump\nRelease Down      Jump\nHold C            Probe for nutrient\nQ                 Pseudo-spine shield\nSpace             Radial acid burst\nX                 Split selected blob\nTab               Select next blob\nE                 Rejoin siblings\nR                 Reset game\nM                 Toggle ink style preview\nF1                Standard level\nF2                Supports lab\nF3                Curves lab\nF4                U and low passage\nF5                Fall and impact lab\nF6                V and split bridge\nF7                Level physics overlay\nI / J / K / L     Move debug camera\nU / O             Debug camera zoom\nP                 Return and follow blob\nH                 Show / hide this window\nEsc               Exit";
 
 #[derive(Resource)]
 pub(super) struct LegendState {
@@ -36,7 +36,7 @@ pub(super) fn setup_legend(mut commands: Commands) {
             ControlsWindow,
             Window {
                 title: "Blob — Controls".into(),
-                resolution: WindowResolution::new(390, 550),
+                resolution: WindowResolution::new(390, 605),
                 position: WindowPosition::At(IVec2::new(1_000, 30)),
                 resizable: false,
                 enabled_buttons: EnabledButtons {
@@ -71,7 +71,7 @@ pub(super) fn setup_legend(mut commands: Commands) {
             color: Color::srgba(0.0, 0.0, 0.0, 0.72),
         },
         Anchor::TOP_LEFT,
-        Transform::from_xyz(-178.0, 258.0, -0.01),
+        Transform::from_xyz(-178.0, 285.0, -0.01),
         RenderLayers::layer(CONTROLS_LAYER),
     ));
 
