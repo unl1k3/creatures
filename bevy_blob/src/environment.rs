@@ -2,7 +2,7 @@ use super::*;
 use crate::blob::Particle;
 use crate::level_format::{
     DropEmitterDefinition, ExpulsionPointDefinition, HazardDefinition, LightDefinition,
-    NutrientDefinition, ParsedLevel, VisualLayer, parse_level,
+    NutrientDefinition, ParsedLevel, VisualLayer, WastewaterAreaDefinition, parse_level,
 };
 use avian2d::prelude::{
     Collider, CollisionLayers, PhysicsLayer, RigidBody, ShapeCastConfig, SpatialQuery,
@@ -43,6 +43,7 @@ pub(super) struct Level {
     visual_layers: Vec<VisualLayer>,
     decorations: Vec<VisualLayer>,
     pub(super) drop_emitters: Vec<DropEmitterDefinition>,
+    pub(super) wastewater_areas: Vec<WastewaterAreaDefinition>,
     pub(super) nutrients: Vec<NutrientDefinition>,
     pub(super) lights: Vec<LightDefinition>,
     pub(super) expulsion_points: Vec<ExpulsionPointDefinition>,
@@ -116,6 +117,7 @@ impl Level {
             hazards: parsed.hazards,
             decorations: parsed.decorations,
             drop_emitters: parsed.drop_emitters,
+            wastewater_areas: parsed.wastewater_areas,
         }
     }
 
@@ -144,6 +146,7 @@ impl Level {
             visual_layers: Vec::new(),
             decorations: Vec::new(),
             drop_emitters: Vec::new(),
+            wastewater_areas: Vec::new(),
             nutrients: Vec::new(),
             lights: Vec::new(),
             expulsion_points: Vec::new(),
@@ -179,6 +182,7 @@ impl Level {
                     visual_layers: Vec::new(),
                     decorations: Vec::new(),
                     drop_emitters: Vec::new(),
+                    wastewater_areas: Vec::new(),
                     nutrients: Vec::new(),
                     lights: Vec::new(),
                     expulsion_points: Vec::new(),
@@ -224,6 +228,7 @@ impl Level {
                     visual_layers: Vec::new(),
                     decorations: Vec::new(),
                     drop_emitters: Vec::new(),
+                    wastewater_areas: Vec::new(),
                     nutrients: Vec::new(),
                     lights: Vec::new(),
                     expulsion_points: Vec::new(),
@@ -255,6 +260,7 @@ impl Level {
                     visual_layers: Vec::new(),
                     decorations: Vec::new(),
                     drop_emitters: Vec::new(),
+                    wastewater_areas: Vec::new(),
                     nutrients: Vec::new(),
                     lights: Vec::new(),
                     expulsion_points: Vec::new(),
@@ -295,6 +301,7 @@ impl Level {
                     visual_layers: Vec::new(),
                     decorations: Vec::new(),
                     drop_emitters: Vec::new(),
+                    wastewater_areas: Vec::new(),
                     nutrients: Vec::new(),
                     lights: Vec::new(),
                     expulsion_points: Vec::new(),
@@ -325,6 +332,7 @@ impl Level {
                     visual_layers: Vec::new(),
                     decorations: Vec::new(),
                     drop_emitters: Vec::new(),
+                    wastewater_areas: Vec::new(),
                     nutrients: Vec::new(),
                     lights: Vec::new(),
                     expulsion_points: Vec::new(),

@@ -21,6 +21,7 @@ pub(super) struct ParsedLevel {
     pub(super) hazards: Vec<HazardDefinition>,
     pub(super) decorations: Vec<VisualLayer>,
     pub(super) drop_emitters: Vec<DropEmitterDefinition>,
+    pub(super) wastewater_areas: Vec<WastewaterAreaDefinition>,
 }
 
 #[derive(Clone, Debug)]
@@ -39,6 +40,25 @@ pub(super) struct DropEmitterDefinition {
     pub(super) radius: f32,
     pub(super) gravity: f32,
     pub(super) depth: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct WastewaterAreaDefinition {
+    pub(super) position: Vec2,
+    pub(super) size: Vec2,
+    pub(super) color: [f32; 4],
+    pub(super) wave_height: f32,
+    pub(super) wave_speed: f32,
+    pub(super) depth: f32,
+    pub(super) bubbles: Option<BubbleSettingsDefinition>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct BubbleSettingsDefinition {
+    pub(super) interval: [f32; 2],
+    pub(super) radius: [f32; 2],
+    pub(super) rise_speed: [f32; 2],
+    pub(super) max_active: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -108,6 +128,8 @@ struct LevelDocument {
     decorations: Vec<VisualLayerDocument>,
     #[serde(default)]
     drop_emitters: Vec<DropEmitterDocument>,
+    #[serde(default)]
+    wastewater_areas: Vec<WastewaterAreaDocument>,
 }
 
 #[derive(Clone, Copy, Default, Deserialize)]
@@ -156,6 +178,28 @@ struct DropEmitterDocument {
     radius: f32,
     gravity: f32,
     depth: f32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WastewaterAreaDocument {
+    position: Point,
+    size: Point,
+    color: [f32; 4],
+    wave_height: f32,
+    wave_speed: f32,
+    depth: f32,
+    #[serde(default)]
+    bubbles: Option<BubbleSettingsDocument>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BubbleSettingsDocument {
+    interval: [f32; 2],
+    radius: [f32; 2],
+    rise_speed: [f32; 2],
+    max_active: usize,
 }
 
 #[derive(Deserialize)]
@@ -298,6 +342,43 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
             })
         })
         .collect::<Result<Vec<_>, LevelFormatError>>()?;
+    let wastewater_areas = document
+        .wastewater_areas
+        .into_iter()
+        .enumerate()
+        .map(|(index, area)| {
+            if area
+                .color
+                .iter()
+                .any(|channel| !channel.is_finite() || !(0.0..=1.0).contains(channel))
+            {
+                return Err(LevelFormatError(format!(
+                    "wastewater area {index} color channels must be between 0 and 1"
+                )));
+            }
+            Ok(WastewaterAreaDefinition {
+                position: finite_point(
+                    &format!("wastewater area {index} position"),
+                    area.position,
+                )?,
+                size: positive_size(&format!("wastewater area {index} size"), area.size)?,
+                color: area.color,
+                wave_height: positive_number(
+                    &format!("wastewater area {index} wave_height"),
+                    area.wave_height,
+                )?,
+                wave_speed: positive_number(
+                    &format!("wastewater area {index} wave_speed"),
+                    area.wave_speed,
+                )?,
+                depth: finite_number(&format!("wastewater area {index} depth"), area.depth)?,
+                bubbles: area
+                    .bubbles
+                    .map(|bubbles| parse_bubble_settings(index, bubbles))
+                    .transpose()?,
+            })
+        })
+        .collect::<Result<Vec<_>, LevelFormatError>>()?;
     let nutrients = document
         .nutrients
         .into_iter()
@@ -390,7 +471,49 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
         hazards,
         decorations,
         drop_emitters,
+        wastewater_areas,
     })
+}
+
+fn parse_bubble_settings(
+    area_index: usize,
+    settings: BubbleSettingsDocument,
+) -> Result<BubbleSettingsDefinition, LevelFormatError> {
+    let interval = positive_range(
+        &format!("wastewater area {area_index} bubble interval"),
+        settings.interval,
+    )?;
+    let radius = positive_range(
+        &format!("wastewater area {area_index} bubble radius"),
+        settings.radius,
+    )?;
+    let rise_speed = positive_range(
+        &format!("wastewater area {area_index} bubble rise_speed"),
+        settings.rise_speed,
+    )?;
+    if settings.max_active == 0 {
+        return Err(LevelFormatError(format!(
+            "wastewater area {area_index} bubble max_active must be positive"
+        )));
+    }
+    Ok(BubbleSettingsDefinition {
+        interval,
+        radius,
+        rise_speed,
+        max_active: settings.max_active,
+    })
+}
+
+fn positive_range(label: &str, range: [f32; 2]) -> Result<[f32; 2], LevelFormatError> {
+    let minimum = positive_number(&format!("{label} minimum"), range[0])?;
+    let maximum = positive_number(&format!("{label} maximum"), range[1])?;
+    if maximum < minimum {
+        Err(LevelFormatError(format!(
+            "{label} maximum cannot be smaller than minimum"
+        )))
+    } else {
+        Ok([minimum, maximum])
+    }
 }
 
 fn parse_visual_layers(
@@ -478,6 +601,20 @@ mod tests {
                     "radius": 3,
                     "gravity": 420,
                     "depth": -5
+                }],
+                "wastewater_areas": [{
+                    "position": { "x": 0, "y": -350 },
+                    "size": { "x": 900, "y": 100 },
+                    "color": [0.42, 0.58, 0.08, 0.8],
+                    "wave_height": 4,
+                    "wave_speed": 0.35,
+                    "depth": -4,
+                    "bubbles": {
+                        "interval": [0.7, 2.4],
+                        "radius": [2, 7],
+                        "rise_speed": [22, 48],
+                        "max_active": 12
+                    }
                 }]
             }"#,
         )
@@ -487,6 +624,14 @@ mod tests {
         assert_eq!(level.fixtures.len(), 1);
         assert_eq!(level.visual_layers.len(), 1);
         assert_eq!(level.drop_emitters.len(), 1);
+        assert_eq!(level.wastewater_areas.len(), 1);
+        assert_eq!(
+            level.wastewater_areas[0]
+                .bubbles
+                .expect("bubble settings")
+                .max_active,
+            12
+        );
         assert_eq!(level.drop_emitters[0].gravity, 420.0);
     }
 

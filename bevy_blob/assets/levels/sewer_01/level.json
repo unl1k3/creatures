@@ -101,6 +101,22 @@
       "depth": -5.1
     }
   ],
+  "wastewater_areas": [
+    {
+      "position": { "x": 0, "y": -518 },
+      "size": { "x": 1800, "y": 100 },
+      "color": [0.42, 0.56, 0.06, 0.82],
+      "wave_height": 10.0,
+      "wave_speed": 0.68,
+      "depth": -0.12,
+      "bubbles": {
+        "interval": [0.55, 1.8],
+        "radius": [2.5, 7.5],
+        "rise_speed": [25.0, 52.0],
+        "max_active": 16
+      }
+    }
+  ],
   "nutrients": [
     { "position": { "x": 145, "y": -215 }, "radius": 13 },
     { "position": { "x": -175, "y": -70 }, "radius": 11 },

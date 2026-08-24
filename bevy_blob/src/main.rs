@@ -40,7 +40,8 @@ use nutrition::{
 use rendering::blob_family_color;
 use rendering::{
     InkStylePreview, draw_world, setup_ambient_drop_assets, simulate_ambient_drops,
-    sync_blob_meshes, sync_ink_preview, sync_route_markers, toggle_ink_style,
+    simulate_wastewater, simulate_wastewater_bubbles, sync_blob_meshes, sync_ink_preview,
+    sync_route_markers, toggle_ink_style,
 };
 use shield::{ShieldWorld, simulate_shields};
 use std::{
@@ -148,7 +149,13 @@ fn main() {
                 advance_route_progress,
                 sample_avian_contacts,
                 update_metrics,
-                (simulate_ambient_drops, sync_blob_meshes).chain(),
+                (
+                    simulate_ambient_drops,
+                    simulate_wastewater,
+                    simulate_wastewater_bubbles,
+                    sync_blob_meshes,
+                )
+                    .chain(),
                 sync_ink_preview,
                 sync_route_markers,
                 draw_world,

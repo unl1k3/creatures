@@ -233,7 +233,10 @@ mod body;
 mod membrane;
 mod palette;
 mod vacuoles;
-pub(super) use ambient::{setup_ambient_drop_assets, simulate_ambient_drops};
+pub(super) use ambient::{
+    setup_ambient_drop_assets, simulate_ambient_drops, simulate_wastewater,
+    simulate_wastewater_bubbles,
+};
 #[cfg(test)]
 pub(super) use body::create_blob_mesh;
 use body::{create_blob_mesh_with_load, update_blob_mesh_with_load};
