@@ -34,6 +34,26 @@ mod tests {
     }
 
     #[test]
+    fn crowded_blob_contact_does_not_amplify_a_neighbours_impulse() {
+        let mut middle = Blob::new(Vec2::new(25.0, 0.0), 30.0);
+        middle.add_velocity(Vec2::new(20.0, 0.0));
+        let mut blobs = vec![
+            active(0, None, Blob::new(Vec2::new(-25.0, 0.0), 30.0)),
+            active(1, None, middle),
+            active(2, None, Blob::new(Vec2::new(75.0, 0.0), 30.0)),
+        ];
+
+        resolve_blob_collisions(&mut blobs);
+
+        assert!(blobs.iter().all(|blob| blob.body.center().is_finite()));
+        assert!(
+            blobs[2].body.velocity().length() <= 5.0,
+            "crowded contact transferred an excessive impulse: {}",
+            blobs[2].body.velocity().length()
+        );
+    }
+
+    #[test]
     fn scenario_one_split_children_do_not_drift_left_while_breathing() {
         let (level, spawn) = Level::test_scenario(1);
         let dt = 1.0 / 120.0;
@@ -142,7 +162,10 @@ mod tests {
         assert!(blobs[1].body.grounded);
         assert!(support_extent(&blobs[0].body, Vec2::Y) < 30.0);
         assert!(support_extent(&blobs[1].body, Vec2::NEG_Y) < 30.0);
-        assert!(blob_surface_gap(&blobs[0].body, &blobs[1].body) >= 0.0);
+        let expected_gap = BLOB_CONTACT_VISUAL_CLEARANCE
+            * (blobs[0].body.size_scale() + blobs[1].body.size_scale())
+            * 0.5;
+        assert!(blob_surface_gap(&blobs[0].body, &blobs[1].body) >= expected_gap - 0.01);
     }
 
     #[test]

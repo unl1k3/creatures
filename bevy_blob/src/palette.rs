@@ -77,9 +77,10 @@ pub(crate) const HAZARD_BUBBLE: [f32; 4] = [0.72, 1.0, 0.08, 0.72];
 pub(crate) const ROUTE_LABEL: [f32; 4] = [1.0, 0.82, 0.28, 1.0];
 pub(crate) const TRANSLUCENT_WHITE: [f32; 4] = [1.0, 1.0, 1.0, 0.66];
 
-/// Test/default wastewater only. Authored levels override it in JSON.
+/// Fallback wastewater only. Authored levels override it in JSON.
+pub(crate) const DEFAULT_WASTEWATER_RUNTIME: [f32; 4] = [0.4, 0.5, 0.1, 0.8];
 #[cfg(test)]
-pub(crate) const DEFAULT_WASTEWATER: [f32; 4] = [0.4, 0.5, 0.1, 0.8];
+pub(crate) const DEFAULT_WASTEWATER: [f32; 4] = DEFAULT_WASTEWATER_RUNTIME;
 
 pub(crate) fn color(value: [f32; 4]) -> Color {
     Color::srgba(value[0], value[1], value[2], value[3])

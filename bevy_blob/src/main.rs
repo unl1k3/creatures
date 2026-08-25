@@ -57,6 +57,8 @@ const MAX_ACTIVE_BLOBS: usize = 4;
 const REJOIN_TIMEOUT: f32 = 4.0;
 const BLOB_CONTACT_PREDICTION_CLEARANCE: f32 = 1.5;
 const BLOB_CONTACT_VISUAL_CLEARANCE: f32 = 0.0;
+const BLOB_CONTACT_MAX_CORRECTION: f32 = 4.0;
+const BLOB_CONTACT_MAX_TRANSFER_SPEED: f32 = 4.0;
 
 struct ActiveBlob {
     id: u64,
@@ -568,6 +570,7 @@ fn resolve_blob_collisions_impl(
     blobs: &mut [ActiveBlob],
     interaction: impl Fn(u64) -> (bool, bool),
 ) {
+    let crowded = blobs.len() > 2;
     for first_index in 0..blobs.len() {
         let (before_second, from_second) = blobs.split_at_mut(first_index + 1);
         let first_active = &mut before_second[first_index];
@@ -601,8 +604,13 @@ fn resolve_blob_collisions_impl(
             let first_mass = first.mass();
             let second_mass = second.mass();
             let total_mass = first_mass + second_mass;
-            let contact_load = (penetration + 3.0 * pair_scale)
-                .min(first.rest_radius.min(second.rest_radius) * 0.18);
+            let contact_load = if crowded {
+                (penetration + 1.5 * pair_scale)
+                    .min(first.rest_radius.min(second.rest_radius) * 0.12)
+            } else {
+                (penetration + 3.0 * pair_scale)
+                    .min(first.rest_radius.min(second.rest_radius) * 0.18)
+            };
             let point_count = contact_points.len().max(1) as f32;
             let actual_overlap = (penetration - prediction_clearance).max(0.0);
             for point in contact_points {
@@ -628,8 +636,11 @@ fn resolve_blob_collisions_impl(
                 avian_blob_contacts(first, second, prediction_clearance)
                     .map(|(_, _, penetration)| penetration)
                     .unwrap_or(0.0);
-            let post_penetration =
+            let mut post_penetration =
                 (predicted_post_correction - (prediction_clearance - visual_clearance)).max(0.0);
+            if crowded {
+                post_penetration = post_penetration.min(BLOB_CONTACT_MAX_CORRECTION * pair_scale);
+            }
             match (first_alive, second_alive) {
                 (true, false) => first.translate(-normal * post_penetration),
                 (false, true) => second.translate(normal * post_penetration),
@@ -665,7 +676,11 @@ fn resolve_blob_collisions_impl(
                 first.record_support_normal(-normal);
             }
 
-            let relative_normal_speed = (second.velocity() - first.velocity()).dot(normal);
+            let mut relative_normal_speed = (second.velocity() - first.velocity()).dot(normal);
+            if crowded {
+                relative_normal_speed =
+                    relative_normal_speed.max(-BLOB_CONTACT_MAX_TRANSFER_SPEED * pair_scale);
+            }
             if relative_normal_speed < 0.0 {
                 match (first_alive, second_alive) {
                     (true, true) => {

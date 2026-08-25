@@ -80,6 +80,9 @@ pub(super) struct NutritionWorld {
 #[derive(Resource)]
 pub(super) struct NutrientRenderAssets {
     mesh: Handle<Mesh>,
+    // Never shrink the extracted mesh: Bevy's render slab can still reference
+    // the previous allocation during a scenario switch.
+    slots: usize,
 }
 
 impl NutritionWorld {
@@ -368,15 +371,18 @@ pub(super) fn setup_nutrition(
 ) {
     let mut nutrition = NutritionWorld::default();
     nutrition.reset_from_definitions(&level.nutrients);
+    let slots = nutrition.nutrients.len().max(1);
+    let mut nutrient_mesh = empty_nutrient_mesh();
+    update_nutrient_mesh(&mut nutrient_mesh, &nutrition.nutrients, slots, 0.0);
     commands.insert_resource(nutrition);
-    let mesh = meshes.add(empty_nutrient_mesh());
+    let mesh = meshes.add(nutrient_mesh);
     commands.spawn((
         Mesh2d(mesh.clone()),
         // Vertex alpha shows nutrients through the translucent blob membrane.
         MeshMaterial2d(materials.add(ColorMaterial::default())),
         Transform::from_xyz(0.0, 0.0, -0.06),
     ));
-    commands.insert_resource(NutrientRenderAssets { mesh });
+    commands.insert_resource(NutrientRenderAssets { mesh, slots });
 }
 
 pub(super) fn simulate_nutrition(
@@ -780,8 +786,8 @@ fn free_object_touches_environment(position: Vec2, radius: f32, level: &Level) -
         circle_aabb_penetration(
             position,
             radius + CONTACT_TOLERANCE,
-            platform.center + Vec2::Y * NUTRIENT_STRUCTURE_VISUAL_OFFSET,
-            platform.half_size,
+            platform.center,
+            platform.half_size + Vec2::splat(NUTRIENT_STRUCTURE_VISUAL_OFFSET),
         )
         .is_some()
     }) || level.fixtures.iter().any(|vertices| {
@@ -1206,13 +1212,15 @@ fn resolve_free_object_environment(
     velocity: &mut Vec2,
     level: &Level,
 ) {
-    // Ink platforms are drawn with this upward offset so their visible top
-    // matches blob contact. Nutrients must use the same reference surface.
+    // Ink platforms are expanded by this skin in every direction so their
+    // visible contour matches blob contact. Nutrients use the same contour.
     for platform in &level.platforms {
-        let visual_center = platform.center + Vec2::Y * NUTRIENT_STRUCTURE_VISUAL_OFFSET;
-        if let Some((depth, normal)) =
-            circle_aabb_penetration(*position, contact_radius, visual_center, platform.half_size)
-        {
+        if let Some((depth, normal)) = circle_aabb_penetration(
+            *position,
+            contact_radius,
+            platform.center,
+            platform.half_size + Vec2::splat(NUTRIENT_STRUCTURE_VISUAL_OFFSET),
+        ) {
             *position += normal * depth;
             resolve_object_velocity(velocity, normal);
         }
@@ -1366,27 +1374,55 @@ fn circle_convex_penetration(center: Vec2, radius: f32, vertices: &[Vec2]) -> Op
 pub(super) fn draw_nutrition(
     time: Res<Time>,
     nutrition: Res<NutritionWorld>,
-    render_assets: Res<NutrientRenderAssets>,
+    mut render_assets: ResMut<NutrientRenderAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     let Some(mut mesh) = meshes.get_mut(&render_assets.mesh) else {
         return;
     };
+    render_assets.slots = render_assets.slots.max(nutrition.nutrients.len()).max(1);
+    update_nutrient_mesh(
+        &mut mesh,
+        &nutrition.nutrients,
+        render_assets.slots,
+        time.elapsed_secs(),
+    );
+}
+
+fn update_nutrient_mesh(mesh: &mut Mesh, nutrients: &[Nutrient], slots: usize, elapsed: f32) {
     let mut positions = Vec::new();
     let mut colors = Vec::new();
     let mut indices = Vec::new();
-    for nutrient in &nutrition.nutrients {
-        append_nutrient_mesh(
-            nutrient,
-            time.elapsed_secs(),
-            &mut positions,
-            &mut colors,
-            &mut indices,
-        );
+    for nutrient in nutrients {
+        append_nutrient_mesh(nutrient, elapsed, &mut positions, &mut colors, &mut indices);
+    }
+    for _ in nutrients.len()..slots {
+        append_hidden_nutrient_mesh(&mut positions, &mut colors, &mut indices);
     }
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     mesh.insert_indices(Indices::U32(indices));
+}
+
+fn append_hidden_nutrient_mesh(
+    positions: &mut Vec<[f32; 3]>,
+    colors: &mut Vec<[f32; 4]>,
+    indices: &mut Vec<u32>,
+) {
+    let first_position = positions.len();
+    let hidden = Nutrient {
+        position: Vec2::ZERO,
+        radius: 0.0,
+        original_radius: 0.0,
+        state: NutrientState::Waste {
+            velocity: Vec2::ZERO,
+        },
+        was_submerged: false,
+    };
+    append_nutrient_mesh(&hidden, 0.0, positions, colors, indices);
+    for color in &mut colors[first_position..] {
+        color[3] = 0.0;
+    }
 }
 
 fn empty_nutrient_mesh() -> Mesh {
@@ -1740,6 +1776,31 @@ mod tests {
         assert_eq!(positions.len(), 85);
         assert_eq!(colors.len(), positions.len());
         assert_eq!(indices.len(), 300);
+    }
+
+    #[test]
+    fn empty_scenario_keeps_nutrient_mesh_allocation_alive() {
+        let nutrient = Nutrient {
+            position: Vec2::ZERO,
+            radius: 10.0,
+            original_radius: 10.0,
+            state: NutrientState::Available {
+                velocity: Vec2::ZERO,
+            },
+            was_submerged: false,
+        };
+        let mut mesh = empty_nutrient_mesh();
+        update_nutrient_mesh(&mut mesh, &[nutrient], 1, 0.0);
+        let live_vertices = mesh.count_vertices();
+        let live_indices = mesh.indices().expect("live nutrient indices").len();
+
+        update_nutrient_mesh(&mut mesh, &[], 1, 1.0);
+
+        assert_eq!(mesh.count_vertices(), live_vertices);
+        assert_eq!(
+            mesh.indices().expect("hidden nutrient indices").len(),
+            live_indices
+        );
     }
 
     #[test]

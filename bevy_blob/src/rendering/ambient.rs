@@ -4,14 +4,17 @@ use crate::level_format::{BubbleSettingsDefinition, WastewaterAreaDefinition};
 use crate::palette;
 use bevy::prelude::*;
 use bevy::{asset::RenderAssetUsages, mesh::Indices, render::render_resource::PrimitiveTopology};
+use std::collections::HashMap;
 
 #[derive(Resource)]
 pub(crate) struct AmbientDropAssets {
     mesh: Handle<Mesh>,
     material: Handle<ColorMaterial>,
     bubble_mesh: Handle<Mesh>,
-    bubble_material: Handle<ColorMaterial>,
 }
+
+#[derive(Resource, Default)]
+pub(crate) struct WastewaterEffectMaterials(HashMap<[u8; 3], Handle<ColorMaterial>>);
 
 #[derive(Resource, Default)]
 pub(crate) struct AmbientDropState {
@@ -99,8 +102,8 @@ pub(crate) fn setup_ambient_drop_assets(
         material: materials.add(ColorMaterial::from(palette::color(palette::AMBIENT_DROP))),
         bubble_mesh: meshes.add(create_bubble_mesh()),
         // The bubble mesh and its internal highlight rely on vertex alpha.
-        bubble_material: materials.add(ColorMaterial::default()),
     });
+    commands.insert_resource(WastewaterEffectMaterials::default());
     commands.insert_resource(AmbientDropState::default());
     commands.insert_resource(WastewaterState::default());
     commands.insert_resource(WastewaterBubbleState::default());
@@ -190,6 +193,9 @@ pub(crate) fn simulate_wastewater_impacts(
     mut commands: Commands,
     time: Res<Time>,
     assets: Res<AmbientDropAssets>,
+    level: Res<Level>,
+    mut effect_materials: ResMut<WastewaterEffectMaterials>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
     mut effects: ResMut<WastewaterEffects>,
 ) {
     effects.advance(time.delta_secs().min(1.0 / 20.0));
@@ -197,12 +203,15 @@ pub(crate) fn simulate_wastewater_impacts(
         // Keep droplets in the readable range established for bubble bursts.
         // Object size and impact energy affect the wave, not particle size.
         let splash_radius = (impact.source_radius * 0.55).clamp(4.5, 7.5);
+        let color = wastewater_color_at(&level, impact.position);
+        let material = wastewater_effect_material(color, &mut effect_materials, &mut materials);
         spawn_bubble_burst(
             &mut commands,
             &assets,
             impact.position,
             splash_radius,
             impact.variation,
+            material,
         );
     }
 }
@@ -214,6 +223,8 @@ pub(crate) fn simulate_wastewater_bubbles(
     scenario: Res<TestScenario>,
     level: Res<Level>,
     assets: Res<AmbientDropAssets>,
+    mut effect_materials: ResMut<WastewaterEffectMaterials>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
     mut effects: ResMut<WastewaterEffects>,
     mut state: ResMut<WastewaterBubbleState>,
     mut bubbles: Query<(Entity, &WastewaterBubble, &mut Transform)>,
@@ -254,7 +265,12 @@ pub(crate) fn simulate_wastewater_bubbles(
         if transform.translation.y + radius >= surface_y {
             let impact = Vec2::new(transform.translation.x, surface_y);
             let variation = effects.emit_ripple(impact, radius * 0.72, 0.45);
-            spawn_bubble_burst(&mut commands, &assets, impact, radius, variation);
+            let material = wastewater_effect_material(
+                bubble.area.color,
+                &mut effect_materials,
+                &mut materials,
+            );
+            spawn_bubble_burst(&mut commands, &assets, impact, radius, variation, material);
             commands.entity(entity).despawn();
         }
     }
@@ -273,6 +289,8 @@ pub(crate) fn simulate_wastewater_bubbles(
             .count();
         state.timers[area_index] = state.range(settings.interval);
         if active < settings.max_active {
+            let material =
+                wastewater_effect_material(area.color, &mut effect_materials, &mut materials);
             spawn_wastewater_bubble(
                 &mut commands,
                 &assets,
@@ -280,6 +298,7 @@ pub(crate) fn simulate_wastewater_bubbles(
                 area_index,
                 area,
                 settings,
+                material,
             );
         }
     }
@@ -292,6 +311,7 @@ fn spawn_wastewater_bubble(
     area_index: usize,
     area: WastewaterAreaDefinition,
     settings: BubbleSettingsDefinition,
+    material: Handle<ColorMaterial>,
 ) {
     let radius = state.range(settings.radius);
     let margin = radius * 2.0 + 8.0;
@@ -307,7 +327,7 @@ fn spawn_wastewater_bubble(
             sway_phase: state.unit_random() * std::f32::consts::TAU,
         },
         Mesh2d(assets.bubble_mesh.clone()),
-        MeshMaterial2d(assets.bubble_material.clone()),
+        MeshMaterial2d(material),
         Transform {
             // Explicitly above the front wastewater layer. The previous
             // near-identical depths made transparent sorting unreliable.
@@ -324,6 +344,7 @@ fn spawn_bubble_burst(
     impact: Vec2,
     source_radius: f32,
     variation: f32,
+    material: Handle<ColorMaterial>,
 ) {
     let count = 3 + (variation * 4.0).floor() as usize;
     for index in 0..count {
@@ -345,7 +366,7 @@ fn spawn_bubble_burst(
                 radius,
             },
             Mesh2d(assets.mesh.clone()),
-            MeshMaterial2d(assets.bubble_material.clone()),
+            MeshMaterial2d(material.clone()),
             Transform {
                 translation: (impact + Vec2::Y * radius).extend(0.11),
                 scale: Vec3::new(radius, radius * 1.25, 1.0),
@@ -353,6 +374,44 @@ fn spawn_bubble_burst(
             },
         ));
     }
+}
+
+fn wastewater_color_at(level: &Level, position: Vec2) -> [f32; 4] {
+    level
+        .wastewater_areas
+        .iter()
+        .filter(|area| area.contains_x(position.x))
+        .min_by(|first, second| {
+            (first.surface_y(position.x, 0.0) - position.y)
+                .abs()
+                .total_cmp(&(second.surface_y(position.x, 0.0) - position.y).abs())
+        })
+        .or_else(|| level.wastewater_areas.first())
+        .map(|area| area.color)
+        .unwrap_or(palette::DEFAULT_WASTEWATER_RUNTIME)
+}
+
+fn wastewater_effect_material(
+    water: [f32; 4],
+    cache: &mut WastewaterEffectMaterials,
+    materials: &mut Assets<ColorMaterial>,
+) -> Handle<ColorMaterial> {
+    let key = [
+        (water[0].clamp(0.0, 1.0) * 255.0).round() as u8,
+        (water[1].clamp(0.0, 1.0) * 255.0).round() as u8,
+        (water[2].clamp(0.0, 1.0) * 255.0).round() as u8,
+    ];
+    cache
+        .0
+        .entry(key)
+        .or_insert_with(|| {
+            let mut tint = palette::mix(water, palette::IVORY, 0.26);
+            // A translucent base selects Bevy's alpha-blended material path,
+            // preserving the bubble mesh's internal alpha gradient.
+            tint[3] = 0.92;
+            materials.add(ColorMaterial::from(palette::color(tint)))
+        })
+        .clone()
 }
 
 fn organic_splash_random(variation: f32, particle: usize, channel: u32) -> f32 {

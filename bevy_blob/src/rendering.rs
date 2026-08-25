@@ -170,8 +170,12 @@ fn spawn_ink_platform(
     ink: Color,
 ) {
     const VISUAL_CONTACT_OFFSET: f32 = 5.0 * DEFAULT_CREATURE_SCALE;
-    let visual_center = platform.center + Vec2::Y * VISUAL_CONTACT_OFFSET;
-    let size = platform.half_size * 2.0;
+    // Blob collision carries a skin in every direction. Grow the visual slab
+    // by that same skin instead of shifting it upward: the top remains in its
+    // current correct position while side and underside contact also align.
+    let visual_center = platform.center;
+    let visual_half_size = platform.half_size + Vec2::splat(VISUAL_CONTACT_OFFSET);
+    let size = visual_half_size * 2.0;
     commands.spawn((
         InkPreviewShape { scenario },
         Sprite::from_color(ink, size),
@@ -188,7 +192,7 @@ fn spawn_ink_platform(
             Vec2::new(size.x, cap_height),
         ),
         Transform::from_translation(
-            (visual_center + Vec2::Y * (platform.half_size.y - cap_height * 0.5)).extend(-0.13),
+            (visual_center + Vec2::Y * (visual_half_size.y - cap_height * 0.5)).extend(-0.13),
         ),
     ));
 
@@ -204,8 +208,8 @@ fn spawn_ink_platform(
         );
         let position = visual_center
             + Vec2::new(
-                -platform.half_size.x + block_width * (block as f32 + 0.5),
-                -platform.half_size.y + body_height * 0.5 + 1.0,
+                -visual_half_size.x + block_width * (block as f32 + 0.5),
+                -visual_half_size.y + body_height * 0.5 + 1.0,
             );
         commands.spawn((
             InkPreviewShape { scenario },
