@@ -6,6 +6,7 @@ mod hud;
 mod input;
 mod level_format;
 mod nutrition;
+mod palette;
 mod rendering;
 mod shield;
 mod vitality;
@@ -40,8 +41,8 @@ use nutrition::{
 use rendering::blob_family_color;
 use rendering::{
     InkStylePreview, draw_world, setup_ambient_drop_assets, simulate_ambient_drops,
-    simulate_wastewater, simulate_wastewater_bubbles, sync_blob_meshes, sync_ink_preview,
-    sync_route_markers, toggle_ink_style,
+    simulate_wastewater, simulate_wastewater_bubbles, simulate_wastewater_impacts,
+    sync_blob_meshes, sync_ink_preview, sync_route_markers, toggle_ink_style,
 };
 use shield::{ShieldWorld, simulate_shields};
 use std::{
@@ -95,7 +96,7 @@ impl SplitRng {
 
 fn main() {
     App::new()
-        .insert_resource(ClearColor(Color::srgb(0.89, 0.86, 0.77)))
+        .insert_resource(ClearColor(palette::color(palette::IVORY)))
         .insert_resource(Time::<Fixed>::from_hz(120.0))
         .init_resource::<InkStylePreview>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -153,6 +154,7 @@ fn main() {
                 update_metrics,
                 (
                     simulate_ambient_drops,
+                    simulate_wastewater_impacts,
                     simulate_wastewater,
                     simulate_wastewater_bubbles,
                     sync_blob_meshes,

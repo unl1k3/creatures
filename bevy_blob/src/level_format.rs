@@ -53,6 +53,28 @@ pub(super) struct WastewaterAreaDefinition {
     pub(super) bubbles: Option<BubbleSettingsDefinition>,
 }
 
+impl WastewaterAreaDefinition {
+    pub(super) fn contains_x(self, world_x: f32) -> bool {
+        (world_x - self.position.x).abs() <= self.size.x * 0.5
+    }
+
+    pub(super) fn surface_y(self, world_x: f32, elapsed: f32) -> f32 {
+        self.position.y + self.size.y * 0.5 + self.wave_offset(world_x - self.position.x, elapsed)
+    }
+
+    pub(super) fn wave_offset(self, local_x: f32, elapsed: f32) -> f32 {
+        let travel = elapsed * self.wave_speed;
+        let broad_wave = (local_x * 0.014 + travel * 0.72).sin() * 0.42;
+        let opposing_wave = (local_x * 0.031 - travel * 1.24 + 1.9).sin() * 0.27;
+        let short_ripple = (local_x * 0.072 + travel * 1.83 + 4.2).sin() * 0.18;
+        let pulse_center =
+            ((travel * 115.0 + self.size.x * 0.5).rem_euclid(self.size.x)) - self.size.x * 0.5;
+        let pulse_distance = (local_x - pulse_center).abs();
+        let moving_pulse = (1.0 - pulse_distance / 105.0).max(0.0).powi(2) * 0.34;
+        self.wave_height * (broad_wave + opposing_wave + short_ripple + moving_pulse)
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct BubbleSettingsDefinition {
     pub(super) interval: [f32; 2],

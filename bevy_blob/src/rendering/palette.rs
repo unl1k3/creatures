@@ -22,7 +22,7 @@ pub(super) fn blob_outline_color(
     vitality: Vitality,
 ) -> Color {
     if !vitality.is_alive() {
-        return Color::srgba(0.24, 0.28, 0.30, 0.88);
+        return crate::palette::color(crate::palette::DEAD_BLOB);
     }
     let (red, green, blue) = blob_family_rgb(parent_id);
     if selected {
@@ -38,18 +38,21 @@ pub(super) fn blob_outline_color(
 }
 
 pub(super) fn blob_family_rgb(parent_id: Option<u64>) -> (f32, f32, f32) {
-    const FAMILY_COLORS: [(f32, f32, f32); 6] = [
-        (0.30, 0.82, 0.72),
-        (0.42, 0.68, 1.00),
-        (0.88, 0.48, 0.82),
-        (1.00, 0.58, 0.34),
-        (0.62, 0.82, 0.34),
-        (0.65, 0.52, 0.96),
-    ];
-    let index = parent_id
-        .map(|id| (id as usize).wrapping_mul(5).wrapping_add(1) % FAMILY_COLORS.len())
-        .unwrap_or(0);
-    FAMILY_COLORS[index]
+    const FAMILY_COLORS: &[[f32; 3]] = &crate::palette::BLOB_FAMILIES;
+    // The root blob owns the base colour. Every split uses the parent's stable
+    // id to select a different sibling-family colour: both children match one
+    // another, including the first pair, but remain distinct from their parent.
+    let index = match parent_id {
+        None => 0,
+        Some(id) => {
+            // Reserve entry zero for the root family so a descendant can
+            // never accidentally reuse the parent's initial cyan.
+            let descendant_colors = FAMILY_COLORS.len() - 1;
+            (id as usize).wrapping_mul(3) % descendant_colors + 1
+        }
+    };
+    let [red, green, blue] = FAMILY_COLORS[index];
+    (red, green, blue)
 }
 
 #[cfg(test)]

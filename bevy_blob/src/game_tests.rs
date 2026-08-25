@@ -241,10 +241,69 @@ mod tests {
     }
 
     #[test]
-    fn siblings_share_a_color_and_other_families_do_not() {
+    fn first_split_has_a_new_shared_color() {
+        assert_ne!(blob_family_color(None), blob_family_color(Some(0)));
+    }
+
+    #[test]
+    fn later_siblings_share_a_new_stable_color() {
         assert_eq!(blob_family_color(Some(4)), blob_family_color(Some(4)));
         assert_ne!(blob_family_color(Some(4)), blob_family_color(Some(5)));
-        assert_ne!(blob_family_color(None), blob_family_color(Some(4)));
+        assert_ne!(blob_family_color(Some(0)), blob_family_color(Some(4)));
+    }
+
+    #[test]
+    fn every_blob_family_is_visibly_distinct() {
+        let colors = [
+            blob_family_color(None),
+            blob_family_color(Some(0)),
+            blob_family_color(Some(1)),
+            blob_family_color(Some(2)),
+            blob_family_color(Some(3)),
+            blob_family_color(Some(4)),
+        ];
+        for first in 0..colors.len() {
+            for second in first + 1..colors.len() {
+                let first = colors[first].to_srgba();
+                let second = colors[second].to_srgba();
+                let distance = Vec3::new(
+                    first.red - second.red,
+                    first.green - second.green,
+                    first.blue - second.blue,
+                )
+                .length();
+                assert!(
+                    distance >= 0.40,
+                    "blob family colors are too similar: distance {distance:.3}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn split_lineage_assigns_color_by_sibling_group() {
+        let mut world = BlobWorld {
+            active: vec![active(0, None, Blob::new(Vec2::ZERO, INITIAL_RADIUS))],
+            selected: 0,
+            rejoin_parent: None,
+            rejoin_elapsed: 0.0,
+            parent_links: HashMap::new(),
+            next_id: 1,
+        };
+        let mut rng = SplitRng(0x1234_5678);
+
+        split_selected(&mut world, &mut rng, 1.0 / 120.0);
+        assert_eq!(world.active[0].parent_id, Some(0));
+        assert_eq!(world.active[1].parent_id, Some(0));
+        assert_ne!(
+            blob_family_color(world.active[0].parent_id),
+            blob_family_color(None)
+        );
+
+        split_selected(&mut world, &mut rng, 1.0 / 120.0);
+        let child_color = blob_family_color(world.active[0].parent_id);
+        assert_eq!(child_color, blob_family_color(world.active[1].parent_id));
+        assert_ne!(child_color, blob_family_color(Some(0)));
     }
 
     #[test]

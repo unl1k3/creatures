@@ -1,4 +1,5 @@
 use super::*;
+use crate::palette;
 use std::collections::{HashMap, HashSet};
 
 const MIN_ACID_RADIUS: f32 = INITIAL_RADIUS * 0.55;
@@ -162,16 +163,16 @@ pub(super) fn simulate_acid(
 pub(super) fn draw_acid(mut gizmos: Gizmos, acid: Res<AcidWorld>) {
     for drop in &acid.drops {
         let tail = drop.previous.lerp(drop.position, 0.25);
-        gizmos.line_2d(tail, drop.position, Color::srgba(0.55, 1.0, 0.12, 0.72));
+        gizmos.line_2d(tail, drop.position, palette::color(palette::ACID_TRAIL));
         gizmos.circle_2d(
             drop.position,
             drop.radius,
-            Color::srgba(0.68, 1.0, 0.16, 0.98),
+            palette::color(palette::ACID_BODY),
         );
         gizmos.circle_2d(
             drop.position,
             drop.radius * 0.48,
-            Color::srgba(0.92, 1.0, 0.55, 0.92),
+            palette::color(palette::ACID_CORE),
         );
     }
 }

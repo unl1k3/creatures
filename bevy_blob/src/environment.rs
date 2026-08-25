@@ -64,6 +64,89 @@ pub(super) struct RouteProgress {
     pub(super) next: usize,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct WastewaterImpact {
+    pub(super) position: Vec2,
+    pub(super) source_radius: f32,
+    pub(super) variation: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct WastewaterRipple {
+    pub(super) center_x: f32,
+    pub(super) age: f32,
+    pub(super) duration: f32,
+    pub(super) amplitude: f32,
+}
+
+#[derive(Resource, Default)]
+pub(super) struct WastewaterEffects {
+    pub(super) pending: Vec<WastewaterImpact>,
+    pub(super) ripples: Vec<WastewaterRipple>,
+    variation_serial: u64,
+}
+
+impl WastewaterEffects {
+    pub(super) fn emit(&mut self, position: Vec2, source_radius: f32, strength: f32) {
+        let variation = self.next_variation();
+        let strength = strength.clamp(0.2, 1.8);
+        self.pending.push(WastewaterImpact {
+            position,
+            source_radius,
+            variation,
+        });
+        self.push_ripple(position.x, source_radius, strength);
+    }
+
+    pub(super) fn emit_ripple(&mut self, position: Vec2, source_radius: f32, strength: f32) -> f32 {
+        let variation = self.next_variation();
+        self.push_ripple(position.x, source_radius, strength.clamp(0.2, 1.8));
+        variation
+    }
+
+    fn push_ripple(&mut self, center_x: f32, source_radius: f32, strength: f32) {
+        self.ripples.push(WastewaterRipple {
+            center_x,
+            age: 0.0,
+            duration: 1.45,
+            amplitude: (source_radius * 0.42 * strength).clamp(2.0, 13.0),
+        });
+    }
+
+    fn next_variation(&mut self) -> f32 {
+        self.variation_serial = self.variation_serial.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut value = self.variation_serial;
+        value ^= value >> 30;
+        value = value.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value ^= value >> 27;
+        ((value >> 40) & 0xffff) as f32 / 65_535.0
+    }
+
+    pub(super) fn advance(&mut self, dt: f32) {
+        for ripple in &mut self.ripples {
+            ripple.age += dt;
+        }
+        self.ripples.retain(|ripple| ripple.age < ripple.duration);
+    }
+
+    pub(super) fn surface_offset(&self, world_x: f32) -> f32 {
+        self.ripples
+            .iter()
+            .map(|ripple| {
+                let distance = (world_x - ripple.center_x).abs();
+                let front = ripple.age * 105.0;
+                let band = (1.0 - (distance - front).abs() / 52.0).max(0.0);
+                let decay = (1.0 - ripple.age / ripple.duration).powi(2);
+                let oscillation = ((distance - front) * 0.15).sin();
+                let initial_depression = (1.0 - ripple.age / 0.22).max(0.0)
+                    * (-ripple.amplitude * 0.55)
+                    * (1.0 - distance / 36.0).max(0.0);
+                oscillation * band * decay * ripple.amplitude + initial_depression
+            })
+            .sum()
+    }
+}
+
 #[derive(Resource, Default)]
 pub(super) struct AvianContactDiagnostics {
     pub(super) particles: usize,
@@ -407,6 +490,7 @@ pub(super) fn setup_environment(mut commands: Commands, asset_server: Option<Res
     commands.insert_resource(TestScenario::default());
     commands.insert_resource(LevelDebugOverlay::default());
     commands.insert_resource(RouteProgress { next: 1 });
+    commands.insert_resource(WastewaterEffects::default());
     commands.insert_resource(AvianContactDiagnostics::default());
     commands.insert_resource(AvianContactManifolds::default());
 }

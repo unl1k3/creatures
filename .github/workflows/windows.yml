@@ -30,6 +30,11 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
 
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "bevy_blob -> target"
+
       - name: Show toolchain
         run: rustc --version --verbose
 

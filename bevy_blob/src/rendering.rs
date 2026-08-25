@@ -1,6 +1,7 @@
 use super::*;
 use crate::environment::LevelArtwork;
 use crate::level_format::LightDefinition;
+use crate::palette as game_palette;
 use crate::shield::shield_spine_fans;
 use bevy::sprite::Anchor;
 use bevy::{asset::RenderAssetUsages, mesh::Indices, render::render_resource::PrimitiveTopology};
@@ -33,9 +34,9 @@ pub(super) fn toggle_ink_style(
     }
     ink_style.enabled = !ink_style.enabled;
     clear_color.0 = if ink_style.enabled {
-        Color::srgb(0.89, 0.86, 0.77)
+        game_palette::color(game_palette::IVORY)
     } else {
-        Color::srgb(0.025, 0.035, 0.075)
+        game_palette::color(game_palette::NIGHT)
     };
     for mut visibility in &mut artwork {
         *visibility = if ink_style.enabled {
@@ -92,7 +93,7 @@ pub(super) fn sync_ink_preview(
         ));
     }
 
-    let ink = Color::srgb(0.035, 0.045, 0.055);
+    let ink = game_palette::color(game_palette::INK);
     for (index, platform) in level.platforms.iter().enumerate() {
         spawn_ink_platform(&mut commands, scenario.0, index, platform, ink);
     }
@@ -101,7 +102,11 @@ pub(super) fn sync_ink_preview(
         if fixture.len() < 3 {
             continue;
         }
-        let positions = fixture
+        // Rectangular artwork is already shifted by the default 5-unit
+        // collision skin. Expand polygon artwork by the same amount along its
+        // edge normals, keeping the stable collider untouched.
+        let visual_fixture = offset_convex_polygon(fixture, 5.0 * DEFAULT_CREATURE_SCALE);
+        let positions = visual_fixture
             .iter()
             .map(|point| [point.x, point.y, 0.0])
             .collect::<Vec<_>>();
@@ -126,6 +131,37 @@ pub(super) fn sync_ink_preview(
     }
 }
 
+fn offset_convex_polygon(vertices: &[Vec2], distance: f32) -> Vec<Vec2> {
+    if vertices.len() < 3 || distance <= 0.0 {
+        return vertices.to_vec();
+    }
+    let signed_area = vertices
+        .iter()
+        .copied()
+        .zip(vertices.iter().copied().cycle().skip(1))
+        .take(vertices.len())
+        .map(|(first, second)| first.perp_dot(second))
+        .sum::<f32>();
+    let orientation = signed_area.signum();
+    if orientation == 0.0 {
+        return vertices.to_vec();
+    }
+
+    (0..vertices.len())
+        .map(|index| {
+            let previous = vertices[(index + vertices.len() - 1) % vertices.len()];
+            let current = vertices[index];
+            let next = vertices[(index + 1) % vertices.len()];
+            let previous_outward = -(current - previous).perp().normalize_or_zero() * orientation;
+            let next_outward = -(next - current).perp().normalize_or_zero() * orientation;
+            let bisector = (previous_outward + next_outward).normalize_or(previous_outward);
+            let alignment = bisector.dot(previous_outward).abs().max(0.35);
+            let miter = (distance / alignment).min(distance * 2.5);
+            current + bisector * miter
+        })
+        .collect()
+}
+
 fn spawn_ink_platform(
     commands: &mut Commands,
     scenario: u8,
@@ -148,7 +184,7 @@ fn spawn_ink_platform(
     commands.spawn((
         InkPreviewShape { scenario },
         Sprite::from_color(
-            Color::srgb(0.015, 0.020, 0.024),
+            game_palette::color(game_palette::DEEP_INK),
             Vec2::new(size.x, cap_height),
         ),
         Transform::from_translation(
@@ -161,9 +197,11 @@ fn spawn_ink_platform(
     let body_height = (size.y - cap_height - 2.0).max(2.0);
     for block in 0..block_count {
         let variation = ink_hash(index, block);
-        let red = 0.46 + variation * 0.12;
-        let green = 0.44 + variation * 0.10;
-        let blue = 0.36 + variation * 0.08;
+        let block_color = game_palette::mix(
+            game_palette::STONE_DARK,
+            game_palette::STONE_LIGHT,
+            variation,
+        );
         let position = visual_center
             + Vec2::new(
                 -platform.half_size.x + block_width * (block as f32 + 0.5),
@@ -172,7 +210,7 @@ fn spawn_ink_platform(
         commands.spawn((
             InkPreviewShape { scenario },
             Sprite::from_color(
-                Color::srgb(red, green, blue),
+                game_palette::color(block_color),
                 Vec2::new((block_width - 2.2).max(3.0), body_height),
             ),
             Transform::from_translation(position.extend(-0.11)),
@@ -188,7 +226,7 @@ fn spawn_ink_platform(
             commands.spawn((
                 InkPreviewShape { scenario },
                 Sprite::from_color(
-                    Color::srgba(0.055, 0.060, 0.058, 0.58),
+                    game_palette::color(game_palette::PAPER_STROKE),
                     Vec2::new(stroke_length, 1.1),
                 ),
                 Transform::from_translation((position + stroke_offset).extend(-0.105))
@@ -213,7 +251,8 @@ fn supports_ink_background(scenario: u8) -> bool {
 
 #[cfg(test)]
 mod ink_preview_tests {
-    use super::{InkStylePreview, supports_ink_background};
+    use super::{InkStylePreview, offset_convex_polygon, supports_ink_background};
+    use bevy::prelude::Vec2;
 
     #[test]
     fn ink_preview_is_the_default_rendering_mode() {
@@ -226,6 +265,22 @@ mod ink_preview_tests {
         assert!(supports_ink_background(1));
         assert!(!supports_ink_background(2));
     }
+
+    #[test]
+    fn polygon_artwork_expands_to_cover_the_contact_skin() {
+        let square = [
+            Vec2::new(-10.0, -10.0),
+            Vec2::new(10.0, -10.0),
+            Vec2::new(10.0, 10.0),
+            Vec2::new(-10.0, 10.0),
+        ];
+        let expanded = offset_convex_polygon(&square, 3.25);
+
+        assert!((expanded[0].x + 13.25).abs() < 0.001);
+        assert!((expanded[0].y + 13.25).abs() < 0.001);
+        assert!((expanded[2].x - 13.25).abs() < 0.001);
+        assert!((expanded[2].y - 13.25).abs() < 0.001);
+    }
 }
 
 mod ambient;
@@ -235,7 +290,7 @@ mod palette;
 mod vacuoles;
 pub(super) use ambient::{
     setup_ambient_drop_assets, simulate_ambient_drops, simulate_wastewater,
-    simulate_wastewater_bubbles,
+    simulate_wastewater_bubbles, simulate_wastewater_impacts,
 };
 #[cfg(test)]
 pub(super) use body::create_blob_mesh;
@@ -316,7 +371,7 @@ pub(super) fn sync_route_markers(
                 font_size: FontSize::Px((16.0 + index as f32 * 1.8).min(30.0)),
                 ..default()
             },
-            TextColor(Color::srgb(1.0, 0.82, 0.28)),
+            TextColor(game_palette::color(game_palette::ROUTE_LABEL)),
             Anchor::CENTER,
             Transform::from_translation(level.route[index].extend(0.35)),
         ));
@@ -547,7 +602,9 @@ pub(super) fn sync_blob_meshes(
                 blob_id: active_blob.id,
             },
             Mesh2d(meshes.add(mesh)),
-            MeshMaterial2d(materials.add(ColorMaterial::from(Color::srgba(1.0, 1.0, 1.0, 0.66)))),
+            MeshMaterial2d(materials.add(ColorMaterial::from(game_palette::color(
+                game_palette::TRANSLUCENT_WHITE,
+            )))),
             Transform::from_xyz(0.0, 0.0, -0.06),
         ));
     }
@@ -898,11 +955,14 @@ pub(super) fn draw_world(
             gizmos.rect_2d(
                 platform.center,
                 platform.half_size * 2.0,
-                Color::srgb(0.18, 0.27, 0.38),
+                game_palette::color(game_palette::LAB_PLATFORM),
             );
         }
         for fixture in &level.fixtures {
-            gizmos.lineloop_2d(fixture.iter().copied(), Color::srgb(0.24, 0.38, 0.52));
+            gizmos.lineloop_2d(
+                fixture.iter().copied(),
+                game_palette::color(game_palette::LAB_FIXTURE),
+            );
         }
     }
     if debug_overlay.visible {
@@ -912,7 +972,7 @@ pub(super) fn draw_world(
                 gizmos.rect_2d(
                     platform.center,
                     platform.half_size * 2.0 + Vec2::splat(expansion),
-                    Color::srgba(1.0, 0.28, 0.08, 0.96),
+                    game_palette::color(game_palette::DEBUG_PLATFORM),
                 );
             }
         }
@@ -928,7 +988,7 @@ pub(super) fn draw_world(
                     gizmos.line_2d(
                         first + normal * offset,
                         second + normal * offset,
-                        Color::srgba(1.0, 0.28, 0.08, 0.96),
+                        game_palette::color(game_palette::DEBUG_PLATFORM),
                     );
                 }
             }
@@ -937,7 +997,7 @@ pub(super) fn draw_world(
             gizmos.rect_2d(
                 level.center(),
                 level.size() + Vec2::splat(expansion),
-                Color::srgba(0.12, 0.85, 1.0, 0.92),
+                game_palette::color(game_palette::DEBUG_BOUNDS),
             );
         }
         let marker_size = 14.0;
@@ -945,12 +1005,12 @@ pub(super) fn draw_world(
             gizmos.line_2d(
                 level.spawn_position + Vec2::new(-marker_size, offset),
                 level.spawn_position + Vec2::new(marker_size, offset),
-                Color::srgb(0.25, 1.0, 0.35),
+                game_palette::color(game_palette::DEBUG_SPAWN),
             );
             gizmos.line_2d(
                 level.spawn_position + Vec2::new(offset, -marker_size),
                 level.spawn_position + Vec2::new(offset, marker_size),
-                Color::srgb(0.25, 1.0, 0.35),
+                game_palette::color(game_palette::DEBUG_SPAWN),
             );
         }
         for light in level.lights.iter().filter(|light| light.enabled) {
@@ -966,14 +1026,18 @@ pub(super) fn draw_world(
         for point in &level.expulsion_points {
             let length = (point.strength * 0.12).clamp(20.0, 80.0);
             let end = point.position + point.direction * length;
-            gizmos.arrow_2d(point.position, end, Color::srgb(0.82, 0.35, 1.0));
+            gizmos.arrow_2d(
+                point.position,
+                end,
+                game_palette::color(game_palette::DEBUG_EXPULSION),
+            );
         }
         for hazard in &level.hazards {
             for expansion in [-2.0, 0.0, 2.0] {
                 gizmos.rect_2d(
                     hazard.position,
                     hazard.size + Vec2::splat(expansion),
-                    Color::srgba(1.0, 0.08, 0.18, 0.94),
+                    game_palette::color(game_palette::DEBUG_HAZARD),
                 );
             }
         }
@@ -981,7 +1045,11 @@ pub(super) fn draw_world(
     if debug_overlay.visible {
         for (index, checkpoint) in level.route.iter().enumerate().skip(route_progress.next) {
             let radius = (7.0 + index as f32 * 1.5).min(20.0);
-            gizmos.circle_2d(*checkpoint, radius, Color::srgba(1.0, 0.72, 0.18, 0.72));
+            gizmos.circle_2d(
+                *checkpoint,
+                radius,
+                game_palette::color(game_palette::DEBUG_ROUTE),
+            );
         }
     }
     if !debug_overlay.visible {
@@ -996,12 +1064,12 @@ pub(super) fn draw_world(
                     surface_y + (fraction * std::f32::consts::TAU * 2.0).sin() * 2.4,
                 )
             });
-            gizmos.linestrip_2d(surface, Color::srgba(0.64, 1.0, 0.06, 0.94));
+            gizmos.linestrip_2d(surface, game_palette::color(game_palette::HAZARD_SURFACE));
             for offset in [0.2, 0.5, 0.78] {
                 gizmos.circle_2d(
                     Vec2::new(left + hazard.size.x * offset, surface_y - 5.0),
                     2.5,
-                    Color::srgba(0.72, 1.0, 0.08, 0.72),
+                    game_palette::color(game_palette::HAZARD_BUBBLE),
                 );
             }
         }
@@ -1017,9 +1085,9 @@ pub(super) fn draw_world(
             for point in membrane.iter().filter(|point| point.temporary) {
                 let radius = if point.attachment { 2.0 } else { 1.35 };
                 let point_color = if point.attachment {
-                    Color::srgba(1.0, 0.90, 0.42, 0.82)
+                    game_palette::color(game_palette::DEBUG_ATTACHMENT)
                 } else {
-                    Color::srgba(1.0, 0.82, 0.30, 0.58)
+                    game_palette::color(game_palette::DEBUG_PARTICLE)
                 };
                 gizmos.circle_2d(point.position, (radius * size_scale).max(0.72), point_color);
             }
@@ -1027,24 +1095,32 @@ pub(super) fn draw_world(
                 gizmos.line_2d(
                     center,
                     particle.position,
-                    Color::srgba(0.12, 0.55, 0.48, 0.42),
+                    game_palette::color(game_palette::DEBUG_SPRING),
                 );
             }
             if vitality.is_alive() {
-                gizmos.circle_2d(center, 9.0 * size_scale, Color::srgb(0.72, 0.42, 0.95));
+                gizmos.circle_2d(
+                    center,
+                    9.0 * size_scale,
+                    game_palette::color(game_palette::DEBUG_CENTER),
+                );
             }
         }
 
         if vitality.is_alive() && blob.charge > 0.0 {
             let radius = charge_indicator_radius(blob);
             let line_spacing = (1.8 * size_scale).max(0.9);
-            gizmos.circle_2d(center, radius, Color::srgba(1.0, 0.72, 0.12, 0.20));
+            gizmos.circle_2d(
+                center,
+                radius,
+                game_palette::color(game_palette::CHARGE_GLOW),
+            );
             for offset in [-line_spacing, 0.0, line_spacing] {
                 gizmos.arc_2d(
                     center,
                     std::f32::consts::TAU * blob.charge,
                     radius + offset,
-                    Color::srgba(1.0, 0.78, 0.16, 0.96),
+                    game_palette::color(game_palette::CHARGE_ARC),
                 );
             }
         }

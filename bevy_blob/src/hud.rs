@@ -1,4 +1,5 @@
 use super::*;
+use crate::palette;
 use bevy::{
     camera::{ClearColorConfig, RenderTarget, visibility::RenderLayers},
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
@@ -50,7 +51,7 @@ pub(super) fn setup_legend(mut commands: Commands) {
     commands.spawn((
         Camera2d,
         Camera {
-            clear_color: ClearColorConfig::Custom(Color::srgb(0.035, 0.065, 0.12)),
+            clear_color: ClearColorConfig::Custom(palette::color(palette::HUD_CONTROLS_BG)),
             ..default()
         },
         RenderLayers::layer(CONTROLS_LAYER),
@@ -64,11 +65,11 @@ pub(super) fn setup_legend(mut commands: Commands) {
             ..default()
         },
         TextLayout::no_wrap(),
-        TextColor(Color::srgb(0.88, 0.96, 1.0)),
-        TextBackgroundColor(Color::srgba(0.025, 0.045, 0.085, 0.92)),
+        TextColor(palette::color(palette::HUD_TEXT)),
+        TextBackgroundColor(palette::color(palette::HUD_TEXT_BG)),
         Text2dShadow {
             offset: Vec2::new(1.0, -1.0),
-            color: Color::srgba(0.0, 0.0, 0.0, 0.72),
+            color: palette::color(palette::SHADOW),
         },
         Anchor::TOP_LEFT,
         Transform::from_xyz(-178.0, 285.0, -0.01),
@@ -90,7 +91,7 @@ pub(super) fn setup_legend(mut commands: Commands) {
     commands.spawn((
         Camera2d,
         Camera {
-            clear_color: ClearColorConfig::Custom(Color::srgb(0.025, 0.075, 0.075)),
+            clear_color: ClearColorConfig::Custom(palette::color(palette::HUD_METRICS_BG)),
             ..default()
         },
         RenderLayers::layer(METRICS_LAYER),
@@ -105,11 +106,11 @@ pub(super) fn setup_legend(mut commands: Commands) {
             ..default()
         },
         TextLayout::no_wrap(),
-        TextColor(Color::srgb(0.68, 1.0, 0.88)),
-        TextBackgroundColor(Color::srgba(0.025, 0.045, 0.085, 0.92)),
+        TextColor(palette::color(palette::HUD_METRICS_TEXT)),
+        TextBackgroundColor(palette::color(palette::HUD_TEXT_BG)),
         Text2dShadow {
             offset: Vec2::new(1.0, -1.0),
-            color: Color::srgba(0.0, 0.0, 0.0, 0.76),
+            color: palette::with_alpha(palette::SHADOW, 0.76),
         },
         Anchor::TOP_LEFT,
         Transform::from_xyz(-195.0, 320.0, -0.01),

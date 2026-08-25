@@ -110,10 +110,10 @@
       "wave_speed": 0.68,
       "depth": -0.12,
       "bubbles": {
-        "interval": [0.55, 1.8],
-        "radius": [2.5, 7.5],
-        "rise_speed": [25.0, 52.0],
-        "max_active": 16
+        "interval": [0.35, 1.1],
+        "radius": [5.0, 11.0],
+        "rise_speed": [22.0, 46.0],
+        "max_active": 22
       }
     }
   ],
