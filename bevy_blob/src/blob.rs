@@ -265,6 +265,19 @@ impl Blob {
         }
     }
 
+    /// Avian can project one membrane point a long way out of a tight corner
+    /// after the internal solver has already run. Rebalance immediately so a
+    /// small blob never renders a one-frame spike before the next fixed step.
+    pub fn stabilize_after_external_projection(&mut self) {
+        for _ in 0..2 {
+            self.solve_edges();
+            self.solve_curvature();
+            self.limit_collapse();
+            self.limit_stretch();
+        }
+        self.repair_self_intersection();
+    }
+
     pub fn cancel_jump_charge(&mut self) {
         self.charge = 0.0;
         self.charge_direction = 0.0;

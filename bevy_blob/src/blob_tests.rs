@@ -211,6 +211,22 @@ mod tests {
     }
 
     #[test]
+    fn external_projection_is_rebalanced_before_rendering() {
+        let mut blob = Blob::new_with_count(Vec2::ZERO, 15.0, 14);
+        blob.particles[0].position += Vec2::X * 42.0;
+        blob.stabilize_after_external_projection();
+
+        let center = blob.center();
+        let furthest = blob
+            .particles
+            .iter()
+            .map(|particle| particle.position.distance(center))
+            .fold(0.0, f32::max);
+        assert!(furthest <= blob.rest_radius * MAX_STRETCH_RATIO + 0.001);
+        assert!(!has_self_intersections(&blob.particles));
+    }
+
+    #[test]
     fn collapse_limit_keeps_particles_outside_the_inner_core() {
         let mut blob = Blob::new_with_count(Vec2::ZERO, 15.0, 14);
         blob.particles[0].position = Vec2::new(0.1, 0.0);

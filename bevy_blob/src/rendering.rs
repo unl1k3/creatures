@@ -85,7 +85,7 @@ pub(super) fn sync_ink_preview(
                 scenario: scenario.0,
             },
             Sprite {
-                image: asset_server.load("levels/sewer_01/ink_sample/background-v3-static.png"),
+                image: asset_server.load("levels/sewer_01/ink_sample/background-v4-basin.png"),
                 custom_size: Some(level.size()),
                 ..default()
             },

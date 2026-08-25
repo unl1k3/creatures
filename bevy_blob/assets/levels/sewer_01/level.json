@@ -103,10 +103,10 @@
   ],
   "wastewater_areas": [
     {
-      "position": { "x": 0, "y": -518 },
-      "size": { "x": 1800, "y": 100 },
-      "color": [0.42, 0.56, 0.06, 0.82],
-      "wave_height": 10.0,
+      "position": { "x": 3, "y": -492 },
+      "size": { "x": 1640, "y": 120 },
+      "color": [0.42, 0.56, 0.06, 0.78],
+      "wave_height": 6.0,
       "wave_speed": 0.68,
       "depth": -0.12,
       "bubbles": {

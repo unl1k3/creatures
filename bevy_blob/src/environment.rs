@@ -673,6 +673,7 @@ pub(super) fn resolve_avian_environment(
         let mut support_normal_sum = Vec2::ZERO;
         let mut support_count = 0;
         let mut impacts = Vec::new();
+        let mut had_external_projection = false;
         for particle in &mut active_blob.body.particles {
             let movement = particle.position - particle.previous;
             let movement_length = movement.length();
@@ -721,6 +722,7 @@ pub(super) fn resolve_avian_environment(
                     hit.normal1,
                     probe_radius + skin * 0.45,
                 );
+                had_external_projection = true;
                 grounded |= contact.normal.y > 0.55;
                 if contact.normal.y > 0.55 {
                     support_normal_sum += contact.normal;
@@ -779,6 +781,7 @@ pub(super) fn resolve_avian_environment(
             ) else {
                 continue;
             };
+            had_external_projection = true;
             grounded |= contact.normal.y > 0.55;
             if contact.normal.y > 0.55 {
                 support_normal_sum += contact.normal;
@@ -787,6 +790,9 @@ pub(super) fn resolve_avian_environment(
             if !ignore_impact_trauma {
                 impacts.push(contact.impact_displacement / dt.max(0.000_001));
             }
+        }
+        if had_external_projection {
+            active_blob.body.stabilize_after_external_projection();
         }
         active_blob.body.grounded |= grounded;
         if support_count > 0 {

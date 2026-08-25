@@ -614,7 +614,7 @@ fn create_bubble_mesh() -> Mesh {
 }
 
 const WASTEWATER_SEGMENTS: usize = 64;
-const WASTEWATER_ROWS: usize = 3;
+const WASTEWATER_ROWS: usize = 4;
 
 fn create_wastewater_mesh(
     definition: WastewaterAreaDefinition,
@@ -683,8 +683,11 @@ fn wastewater_positions(
             let surface = definition.wave_offset(x, elapsed)
                 + effects.map_or(0.0, |effects| effects.surface_offset(world_x));
             let y = match row {
-                0 => half_size.y + surface,
-                1 => half_size.y - 16.0 + surface * 0.32,
+                // A thin, uneven scum rim breaks the hard rectangular edge
+                // and visually seats the animated water in the basin.
+                0 => half_size.y + surface + wastewater_shore_rim(x, elapsed),
+                1 => half_size.y + surface,
+                2 => half_size.y - 16.0 + surface * 0.32,
                 _ => -half_size.y,
             };
             positions.push([x, y, 0.0]);
@@ -693,24 +696,38 @@ fn wastewater_positions(
     positions
 }
 
+fn wastewater_shore_rim(local_x: f32, elapsed: f32) -> f32 {
+    let broad = (local_x * 0.021 + elapsed * 0.34).sin() * 0.72;
+    let fine = (local_x * 0.071 - elapsed * 0.52).sin() * 0.34;
+    2.6 + broad + fine
+}
+
 fn wastewater_colors(definition: WastewaterAreaDefinition, occlusion_layer: bool) -> Vec<[f32; 4]> {
     let [red, green, blue, alpha] = definition.color;
     let alphas = if occlusion_layer {
         // Objects remain visible below the surface, increasingly filtered by
         // murky water with depth instead of being cut away completely.
-        [0.48, 0.62, 0.78]
+        [0.86, 0.48, 0.62, 0.78]
     } else {
-        [alpha, alpha * 0.92, alpha * 0.96]
+        [alpha * 0.86, alpha, alpha * 0.92, alpha * 0.96]
     };
     let shades = [
+        // Dark, low-saturation rim: it reads as foam, grease and debris
+        // instead of a clean vector line over the water.
+        [
+            (red * 0.42).min(1.0),
+            (green * 0.50).min(1.0),
+            (blue * 0.28).min(1.0),
+            alphas[0],
+        ],
         [
             (red * 1.28).min(1.0),
             (green * 1.22).min(1.0),
             (blue * 0.82).min(1.0),
-            alphas[0],
+            alphas[1],
         ],
-        [red, green, blue, alphas[1]],
-        [red * 0.45, green * 0.48, blue * 0.38, alphas[2]],
+        [red, green, blue, alphas[2]],
+        [red * 0.45, green * 0.48, blue * 0.38, alphas[3]],
     ];
     let mut colors = Vec::with_capacity((WASTEWATER_SEGMENTS + 1) * WASTEWATER_ROWS);
     for shade in shades {
