@@ -22,6 +22,14 @@ const GROUND_ROLL_RATE: f32 = 5.2;
 const IDLE_ROCK_RATE: f32 = 0.018;
 const MAX_PARTICLE_HORIZONTAL_SPEED: f32 = 760.0;
 const INTERNAL_DAMPING_AIR: f32 = 0.955;
+const WATER_ROTATION_RESPONSE: f32 = 0.18;
+const WATER_ROTATION_RATE: f32 = 0.0024;
+const WATER_SPINE_DRAG_MULTIPLIER: f32 = 2.4;
+const WATER_FLATTENING: f32 = 0.08;
+const WATER_BARE_DRAG_RATE: f32 = 72.0;
+const WATER_SPINED_DRAG_RATE: f32 = 14.0;
+const WATER_SWIM_THRUST: f32 = 860.0;
+const WATER_SWIM_ROTATION: f32 = 0.0045;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Particle {
@@ -240,11 +248,26 @@ impl Blob {
     /// The water is not a solid collider: a partly immersed blob remains
     /// controllable and can bob with the surface, while the uniform drag keeps
     /// the solver stable instead of pinning individual membrane particles.
+    #[cfg(test)]
     pub fn apply_wastewater_forces(
         &mut self,
         surface_y: f32,
         bottom_y: f32,
         dt: f32,
+    ) -> Option<WastewaterContact> {
+        self.apply_wastewater_forces_with_spine_drag(surface_y, bottom_y, dt, 0.0, 0.0)
+    }
+
+    /// Variant of the wastewater model used by the gameplay layer. Extended
+    /// spines remain attached to the membrane but increase hydrodynamic drag,
+    /// making lateral motion produce a more visible, controlled roll.
+    pub fn apply_wastewater_forces_with_spine_drag(
+        &mut self,
+        surface_y: f32,
+        bottom_y: f32,
+        dt: f32,
+        spine_extension: f32,
+        swim_direction: f32,
     ) -> Option<WastewaterContact> {
         let submerged_fraction = self
             .particles
@@ -267,8 +290,20 @@ impl Blob {
         // The blob is slightly lighter than wastewater, settling with roughly
         // half its membrane immersed. Damping the entire membrane prevents an
         // impact from folding the contour under the waterline.
-        let retention = (-8.5 * submerged_fraction.sqrt() * dt).exp();
+        let drag_rate = if spine_extension > 0.05 {
+            WATER_SPINED_DRAG_RATE
+        } else {
+            WATER_BARE_DRAG_RATE
+        };
+        let retention = (-drag_rate * submerged_fraction.sqrt() * dt).exp();
         self.damp_velocity(retention);
+        self.apply_water_motion_shape(
+            surface_y,
+            submerged_fraction,
+            spine_extension,
+            swim_direction,
+            dt,
+        );
         // Verlet stores velocity as displacement per fixed step, so a force
         // must be converted with dt². Using dt here turns buoyancy into a
         // trampoline-like impulse at the first touch of the surface.
@@ -281,6 +316,75 @@ impl Blob {
             entered,
             entry_speed,
         })
+    }
+
+    /// Water resists translation but carries the membrane into a gentle roll.
+    /// The shape change is transient: springs still own the blob's neutral
+    /// contour once it leaves the liquid.
+    fn apply_water_motion_shape(
+        &mut self,
+        surface_y: f32,
+        submerged_fraction: f32,
+        spine_extension: f32,
+        swim_direction: f32,
+        dt: f32,
+    ) {
+        let center = self.center();
+        let center_velocity = self.velocity();
+        let angular_displacement = self
+            .particles
+            .iter()
+            .map(|particle| {
+                let offset = particle.position - center;
+                let relative_velocity = particle.position - particle.previous - center_velocity;
+                offset.perp_dot(relative_velocity) / offset.length_squared().max(1.0)
+            })
+            .sum::<f32>()
+            / self.particles.len() as f32;
+        let extension = spine_extension.clamp(0.0, 1.0);
+        let spine_drag = 1.0 + extension * WATER_SPINE_DRAG_MULTIPLIER;
+        let target_rotation = -center_velocity.x * WATER_ROTATION_RATE * spine_drag;
+        let rotation_correction =
+            (target_rotation - angular_displacement) * WATER_ROTATION_RESPONSE * submerged_fraction;
+        let flattening = WATER_FLATTENING * submerged_fraction;
+
+        let swimming = extension > 0.05 && swim_direction.abs() > 0.01;
+        let direction = swim_direction.signum();
+        // A short repeated contraction of the trailing immersed side is the
+        // blob's motor. The attached spines act as passive paddles against it.
+        let stroke =
+            (0.58 + 0.42 * (self.idle_phase * std::f32::consts::TAU * 1.7).sin()) * extension;
+        for particle in &mut self.particles {
+            let offset = particle.position - center;
+            let shape_target = center
+                + Vec2::new(
+                    offset.x * (1.0 + flattening * 0.45),
+                    offset.y * (1.0 - flattening),
+                );
+            // Applying the same shape offset to both Verlet positions makes
+            // this a visual body deformation, not an artificial velocity.
+            let shape_offset = (shape_target - particle.position) * 0.16;
+            particle.position += shape_offset;
+            particle.previous += shape_offset;
+            particle.previous -= offset.perp() * rotation_correction;
+
+            if swimming {
+                let immersed =
+                    ((surface_y - particle.position.y) / self.rest_radius).clamp(0.0, 1.0);
+                let trailing_side =
+                    ((-direction * offset.x / self.rest_radius) + 1.0).clamp(0.0, 1.0);
+                let paddle_weight = immersed * (0.30 + trailing_side * 0.70) * stroke;
+                // Forward impulse is distributed through the immersed membrane,
+                // while the unequal drag on the trailing side supplies torque.
+                particle.previous -=
+                    Vec2::X * direction * WATER_SWIM_THRUST * paddle_weight * dt * dt;
+                particle.previous -=
+                    offset.perp() * (-direction * WATER_SWIM_ROTATION * paddle_weight);
+                let contraction = Vec2::X * (-direction * trailing_side * stroke * 0.10);
+                particle.position += contraction;
+                particle.previous += contraction;
+            }
+        }
     }
 
     /// Stops membrane points at an out-of-play safety boundary without adding

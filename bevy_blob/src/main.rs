@@ -270,9 +270,13 @@ fn simulate_blob(
             area.contains_x(center.x).then(|| {
                 let surface_y = area.surface_y(center.x, time.elapsed_secs());
                 let bottom_y = area.position.y - area.size.y * 0.5;
-                active_blob
-                    .body
-                    .apply_wastewater_forces(surface_y, bottom_y, time.delta_secs())
+                active_blob.body.apply_wastewater_forces_with_spine_drag(
+                    surface_y,
+                    bottom_y,
+                    time.delta_secs(),
+                    shield_extension,
+                    movement,
+                )
             })?
         });
         if let Some(contact) = water_contact {

@@ -34,6 +34,86 @@ mod tests {
     }
 
     #[test]
+    fn submerged_motion_gently_rolls_and_flattens_the_blob() {
+        let mut blob = Blob::new(Vec2::new(0.0, -28.0), 50.0);
+        blob.add_velocity(Vec2::new(3.0, 0.0));
+        for _ in 0..12 {
+            blob.apply_wastewater_forces_with_spine_drag(
+                12.0,
+                -120.0,
+                1.0 / 120.0,
+                1.0,
+                1.0,
+            )
+                .expect("the blob remains immersed");
+        }
+
+        let center = blob.center();
+        let width = blob
+            .particles
+            .iter()
+            .map(|particle| particle.position.x)
+            .fold(f32::NEG_INFINITY, f32::max)
+            - blob
+                .particles
+                .iter()
+                .map(|particle| particle.position.x)
+                .fold(f32::INFINITY, f32::min);
+        let height = blob
+            .particles
+            .iter()
+            .map(|particle| particle.position.y)
+            .fold(f32::NEG_INFINITY, f32::max)
+            - blob
+                .particles
+                .iter()
+                .map(|particle| particle.position.y)
+                .fold(f32::INFINITY, f32::min);
+        let angular_motion = blob
+            .particles
+            .iter()
+            .map(|particle| {
+                let offset = particle.position - center;
+                let local_velocity = particle.position - particle.previous - blob.velocity();
+                offset.perp_dot(local_velocity) / offset.length_squared().max(1.0)
+            })
+            .sum::<f32>();
+
+        assert!(width > height, "water should prevent a perfect circle");
+        assert!(angular_motion.abs() > 0.001, "water motion should induce a gentle roll");
+    }
+
+    #[test]
+    fn extended_spines_increase_water_rotation() {
+        let mut bare = Blob::new(Vec2::new(0.0, -28.0), 50.0);
+        let mut shielded = bare.clone();
+        bare.add_velocity(Vec2::new(3.0, 0.0));
+        shielded.add_velocity(Vec2::new(3.0, 0.0));
+        for _ in 0..8 {
+            bare.apply_wastewater_forces_with_spine_drag(12.0, -120.0, 1.0 / 120.0, 0.0, 0.0)
+                .expect("bare blob is immersed");
+            shielded
+                .apply_wastewater_forces_with_spine_drag(12.0, -120.0, 1.0 / 120.0, 1.0, 1.0)
+                .expect("shielded blob is immersed");
+        }
+
+        let angular_motion = |blob: &Blob| {
+            let center = blob.center();
+            let velocity = blob.velocity();
+            blob.particles
+                .iter()
+                .map(|particle| {
+                    let offset = particle.position - center;
+                    let local_velocity = particle.position - particle.previous - velocity;
+                    offset.perp_dot(local_velocity) / offset.length_squared().max(1.0)
+                })
+                .sum::<f32>()
+                .abs()
+        };
+        assert!(angular_motion(&shielded) > angular_motion(&bare));
+    }
+
+    #[test]
     fn safety_bounds_stop_a_blob_without_a_rebound() {
         let mut blob = Blob::new(Vec2::new(40.0, 0.0), 20.0);
         blob.add_velocity(Vec2::new(5.0, 0.0));
