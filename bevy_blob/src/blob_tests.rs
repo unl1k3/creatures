@@ -14,6 +14,43 @@ mod tests {
     }
 
     #[test]
+    fn submerged_blob_receives_buoyancy_and_only_splashes_on_entry() {
+        let mut blob = Blob::new(Vec2::new(0.0, -10.0), 50.0);
+        let first = blob
+            .apply_wastewater_forces(0.0, -120.0, 1.0 / 120.0)
+            .expect("the lower membrane is in water");
+
+        assert!(first.entered);
+        assert!(first.submerged_fraction > 0.1);
+        assert!(blob.velocity().y > 0.0);
+        assert!(
+            blob.velocity().y < 0.2,
+            "buoyancy must be an acceleration, not a bounce impulse"
+        );
+        let second = blob
+            .apply_wastewater_forces(0.0, -120.0, 1.0 / 120.0)
+            .expect("the blob remains in water");
+        assert!(!second.entered);
+    }
+
+    #[test]
+    fn safety_bounds_stop_a_blob_without_a_rebound() {
+        let mut blob = Blob::new(Vec2::new(40.0, 0.0), 20.0);
+        blob.add_velocity(Vec2::new(5.0, 0.0));
+
+        assert!(blob.contain_within_safety_bounds(Vec2::new(-50.0, -50.0), Vec2::new(49.0, 50.0)));
+        assert!(blob.particles.iter().all(|particle| {
+            particle.position.x <= 49.0
+                && particle.position.x >= -50.0
+        }));
+        assert!(blob
+            .particles
+            .iter()
+            .filter(|particle| particle.position.x >= 48.999)
+            .all(|particle| particle.previous.x == particle.position.x));
+    }
+
+    #[test]
     fn corpse_progressively_loses_membrane_tonicity() {
         let mut blob = Blob::new(Vec2::ZERO, 50.0);
         let dt = 1.0 / 120.0;

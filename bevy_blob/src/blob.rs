@@ -29,6 +29,15 @@ pub struct Particle {
     pub previous: Vec2,
 }
 
+/// Summary of a blob's contact with one wastewater volume during a fixed step.
+#[derive(Clone, Copy, Debug)]
+pub struct WastewaterContact {
+    pub surface_y: f32,
+    pub submerged_fraction: f32,
+    pub entered: bool,
+    pub entry_speed: f32,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Platform {
     pub center: Vec2,
@@ -58,6 +67,7 @@ pub struct Blob {
     idle_phase: f32,
     idle_amount: f32,
     tonicity: f32,
+    water_submerged: bool,
 }
 
 impl Blob {
@@ -102,6 +112,7 @@ impl Blob {
             idle_phase: 0.0,
             idle_amount: 0.0,
             tonicity: 1.0,
+            water_submerged: false,
         }
     }
 
@@ -222,6 +233,69 @@ impl Blob {
             let velocity = particle.position - particle.previous;
             particle.previous = particle.position - velocity * retention;
         }
+    }
+
+    /// Applies a light-body buoyancy model to the deformable membrane.
+    ///
+    /// The water is not a solid collider: a partly immersed blob remains
+    /// controllable and can bob with the surface, while the uniform drag keeps
+    /// the solver stable instead of pinning individual membrane particles.
+    pub fn apply_wastewater_forces(
+        &mut self,
+        surface_y: f32,
+        bottom_y: f32,
+        dt: f32,
+    ) -> Option<WastewaterContact> {
+        let submerged_fraction = self
+            .particles
+            .iter()
+            .map(|particle| {
+                if particle.position.y <= bottom_y || particle.position.y >= surface_y {
+                    0.0
+                } else {
+                    ((surface_y - particle.position.y) / (self.rest_radius * 1.35)).clamp(0.0, 1.0)
+                }
+            })
+            .sum::<f32>()
+            / self.particles.len() as f32;
+        if submerged_fraction <= 0.005 {
+            self.water_submerged = false;
+            return None;
+        }
+
+        let entry_speed = (-self.velocity().y / dt.max(0.000_001)).max(0.0);
+        // The blob is slightly lighter than wastewater, settling with roughly
+        // half its membrane immersed. Damping the entire membrane prevents an
+        // impact from folding the contour under the waterline.
+        let retention = (-8.5 * submerged_fraction.sqrt() * dt).exp();
+        self.damp_velocity(retention);
+        // Verlet stores velocity as displacement per fixed step, so a force
+        // must be converted with dt². Using dt here turns buoyancy into a
+        // trampoline-like impulse at the first touch of the surface.
+        self.add_velocity(Vec2::Y * GRAVITY * 2.15 * submerged_fraction.powf(0.82) * dt * dt);
+        let entered = !self.water_submerged;
+        self.water_submerged = true;
+        Some(WastewaterContact {
+            surface_y,
+            submerged_fraction,
+            entered,
+            entry_speed,
+        })
+    }
+
+    /// Stops membrane points at an out-of-play safety boundary without adding
+    /// restitution. Playable barriers are still handled by authored colliders.
+    pub fn contain_within_safety_bounds(&mut self, min: Vec2, max: Vec2) -> bool {
+        let mut corrected = false;
+        for particle in &mut self.particles {
+            let clamped = particle.position.clamp(min, max);
+            if clamped != particle.position {
+                particle.position = clamped;
+                particle.previous = clamped;
+                corrected = true;
+            }
+        }
+        corrected
     }
 
     pub fn apply_contact_patch(

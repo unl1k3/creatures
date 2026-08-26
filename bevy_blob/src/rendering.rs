@@ -91,6 +91,18 @@ pub(super) fn sync_ink_preview(
             },
             Transform::from_translation(level.center().extend(-20.0)),
         ));
+        commands.spawn((
+            InkPreviewShape {
+                scenario: scenario.0,
+            },
+            Sprite {
+                image: asset_server
+                    .load("levels/sewer_01/ink_sample/foreground-v6-integrated-alpha.png"),
+                custom_size: Some(level.size()),
+                ..default()
+            },
+            Transform::from_translation(level.center().extend(2.0)),
+        ));
     }
 
     let ink = game_palette::color(game_palette::INK);

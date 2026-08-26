@@ -2,7 +2,8 @@ use super::*;
 use crate::blob::Particle;
 use crate::level_format::{
     DropEmitterDefinition, ExpulsionPointDefinition, HazardDefinition, LightDefinition,
-    NutrientDefinition, ParsedLevel, VisualLayer, WastewaterAreaDefinition, parse_level,
+    NutrientDefinition, ParsedLevel, SafetyBoundsDefinition, VisualLayer, WastewaterAreaDefinition,
+    parse_level,
 };
 use avian2d::prelude::{
     Collider, CollisionLayers, PhysicsLayer, RigidBody, ShapeCastConfig, SpatialQuery,
@@ -36,6 +37,7 @@ pub(super) struct Level {
     _name: String,
     size: Vec2,
     center: Vec2,
+    pub(super) safety_bounds: Option<SafetyBoundsDefinition>,
     pub(super) platforms: Vec<Platform>,
     pub(super) fixtures: Vec<Vec<Vec2>>,
     pub(super) spawn_position: Vec2,
@@ -189,6 +191,7 @@ impl Level {
             _name: parsed.name,
             size: parsed.size,
             center: parsed.center,
+            safety_bounds: parsed.safety_bounds,
             platforms: parsed.platforms,
             fixtures: parsed.fixtures,
             spawn_position: parsed.spawn,
@@ -222,6 +225,7 @@ impl Level {
             _name: "Test level".into(),
             size: Vec2::splat(1000.0),
             center: Vec2::ZERO,
+            safety_bounds: None,
             platforms,
             fixtures,
             spawn_position: Vec2::ZERO,
@@ -244,6 +248,7 @@ impl Level {
                     _name: "Supports lab".into(),
                     size: Vec2::new(760.0, 900.0),
                     center: Vec2::ZERO,
+                    safety_bounds: None,
                     platforms: vec![
                         platform(0.0, -370.0, 760.0, 38.0),
                         platform(-245.0, -265.0, 70.0, 170.0),
@@ -278,6 +283,7 @@ impl Level {
                     _name: "Curves lab".into(),
                     size: Vec2::new(1000.0, 900.0),
                     center: Vec2::ZERO,
+                    safety_bounds: None,
                     platforms: vec![
                         platform(0.0, -390.0, 760.0, 38.0),
                         platform(350.0, 0.0, 105.0, 24.0),
@@ -324,6 +330,7 @@ impl Level {
                     _name: "Low passage lab".into(),
                     size: Vec2::new(760.0, 900.0),
                     center: Vec2::ZERO,
+                    safety_bounds: None,
                     platforms: vec![
                         platform(0.0, -390.0, 760.0, 38.0),
                         platform(-210.0, -285.0, 28.0, 190.0),
@@ -356,6 +363,7 @@ impl Level {
                     _name: "Impact lab".into(),
                     size: Vec2::new(900.0, 1100.0),
                     center: Vec2::ZERO,
+                    safety_bounds: None,
                     platforms: vec![
                         platform(0.0, -390.0, 760.0, 38.0),
                         platform(-185.0, -245.0, 125.0, 24.0),
@@ -397,6 +405,7 @@ impl Level {
                     _name: "Split bridge lab".into(),
                     size: Vec2::new(760.0, 900.0),
                     center: Vec2::ZERO,
+                    safety_bounds: None,
                     platforms: vec![
                         platform(0.0, -390.0, 760.0, 38.0),
                         platform(270.0, -40.0, 105.0, 24.0),

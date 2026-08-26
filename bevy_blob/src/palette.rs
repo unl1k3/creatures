@@ -23,7 +23,8 @@ pub(crate) const BLOB_FAMILIES: [[f32; 3]; 6] = [
     [0.28, 0.88, 0.24],
     [0.18, 0.42, 1.00],
 ];
-pub(crate) const DEAD_BLOB: [f32; 4] = [0.24, 0.28, 0.30, 0.88];
+/// Inert, desaturated colour shared by a dead blob's body and membrane.
+pub(crate) const DEAD_BLOB: [f32; 4] = [0.72, 0.74, 0.75, 0.90];
 pub(crate) const MEMBRANE_SHIELD_BASE: [f32; 4] = [0.22, 0.72, 0.82, 0.82];
 
 pub(crate) const NUTRIENT_BODY: [f32; 4] = [0.82, 0.22, 0.16, 0.98];
@@ -31,6 +32,11 @@ pub(crate) const NUTRIENT_CORE: [f32; 4] = [1.0, 0.48, 0.28, 0.98];
 pub(crate) const NUTRIENT_EDGE: [f32; 4] = [0.065, 0.040, 0.035, 1.0];
 pub(crate) const NUTRIENT_ENERGY: [f32; 4] = [1.0, 0.80, 0.16, 1.0];
 pub(crate) const NUTRIENT_HIGHLIGHT: [f32; 4] = [1.0, 0.86, 0.30, 1.0];
+// A nutrient killed by wastewater stays present as inert organic matter.
+pub(crate) const DEAD_NUTRIENT_BODY: [f32; 4] = [0.22, 0.28, 0.12, 0.98];
+pub(crate) const DEAD_NUTRIENT_CORE: [f32; 4] = [0.31, 0.37, 0.16, 0.98];
+pub(crate) const DEAD_NUTRIENT_EDGE: [f32; 4] = [0.045, 0.052, 0.030, 1.0];
+pub(crate) const DEAD_NUTRIENT_ENERGY: [f32; 4] = [0.34, 0.42, 0.15, 0.78];
 pub(crate) const NUTRIENT_ENGULFED_BODY: [f32; 4] = [0.70, 0.16, 0.12, 0.98];
 pub(crate) const NUTRIENT_ENGULFED_CORE: [f32; 4] = [0.92, 0.35, 0.19, 0.98];
 pub(crate) const NUTRIENT_ENGULFED_EDGE: [f32; 4] = [0.060, 0.038, 0.032, 1.0];

@@ -27,8 +27,8 @@ use camera::selected_camera_target;
 use camera::{GameCamera, follow_camera};
 use environment::{
     AvianContactDiagnostics, Level, LevelDebugOverlay, RouteProgress, TestScenario,
-    advance_route_progress, resolve_avian_environment, sample_avian_contacts, setup_environment,
-    simulate_level_hazards, switch_test_scenario, toggle_level_debug,
+    WastewaterEffects, advance_route_progress, resolve_avian_environment, sample_avian_contacts,
+    setup_environment, simulate_level_hazards, switch_test_scenario, toggle_level_debug,
 };
 use hud::{arrange_auxiliary_windows, setup_legend, toggle_legend, update_metrics};
 #[cfg(test)]
@@ -49,7 +49,9 @@ use std::{
     collections::HashMap,
     time::{SystemTime, UNIX_EPOCH},
 };
-use vitality::{DeathCause, LifeState, Vitality, VitalityWorld, simulate_vitality};
+use vitality::{
+    DeathCause, LifeState, Vitality, VitalityWorld, WASTEWATER_DAMAGE_PER_SECOND, simulate_vitality,
+};
 
 const BLOB_START: Vec2 = Vec2::new(0.0, -280.0);
 const INITIAL_RADIUS: f32 = REFERENCE_RADIUS * DEFAULT_CREATURE_SCALE;
@@ -130,6 +132,7 @@ fn main() {
                 simulate_shields,
                 simulate_blob,
                 resolve_avian_environment,
+                enforce_blob_safety_bounds,
                 simulate_level_hazards,
                 simulate_vitality,
                 simulate_nutrition,
@@ -206,6 +209,7 @@ fn simulate_blob(
     nutrition: Res<NutritionWorld>,
     mut vitality: ResMut<VitalityWorld>,
     mut blobs: ResMut<BlobWorld>,
+    mut wastewater_effects: ResMut<WastewaterEffects>,
 ) {
     advance_rejoin_timeout(&mut blobs, time.delta_secs());
 
@@ -261,6 +265,32 @@ fn simulate_blob(
             alive,
             true,
         );
+        let water_contact = level.wastewater_areas.iter().copied().find_map(|area| {
+            let center = active_blob.body.center();
+            area.contains_x(center.x).then(|| {
+                let surface_y = area.surface_y(center.x, time.elapsed_secs());
+                let bottom_y = area.position.y - area.size.y * 0.5;
+                active_blob
+                    .body
+                    .apply_wastewater_forces(surface_y, bottom_y, time.delta_secs())
+            })?
+        });
+        if let Some(contact) = water_contact {
+            if alive {
+                vitality.damage(
+                    active_blob.id,
+                    WASTEWATER_DAMAGE_PER_SECOND * contact.submerged_fraction * time.delta_secs(),
+                );
+            }
+            if contact.entered {
+                let impact_strength = (contact.entry_speed / 430.0).clamp(0.45, 1.45);
+                wastewater_effects.emit(
+                    Vec2::new(active_blob.body.center().x, contact.surface_y),
+                    active_blob.body.rest_radius * (0.46 + contact.submerged_fraction * 0.42),
+                    impact_strength,
+                );
+            }
+        }
     }
     if let Some((children, parent)) =
         update_rejoining(&mut blobs, &level.platforms, &level.fixtures)
@@ -268,6 +298,21 @@ fn simulate_blob(
         vitality.merge(children, parent);
     }
     resolve_blob_collisions_with_vitality(&mut blobs.active, &vitality);
+}
+
+fn enforce_blob_safety_bounds(level: Res<Level>, mut blobs: ResMut<BlobWorld>) {
+    let Some(bounds) = level.safety_bounds else {
+        return;
+    };
+    for active_blob in &mut blobs.active {
+        if active_blob
+            .body
+            .contain_within_safety_bounds(bounds.min, bounds.max)
+        {
+            active_blob.body.cancel_jump_charge();
+            active_blob.body.stabilize_after_external_projection();
+        }
+    }
 }
 
 fn reset_world_at(blobs: &mut BlobWorld, position: Vec2) {

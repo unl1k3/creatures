@@ -6,6 +6,8 @@ const MOVEMENT_DRAIN: f32 = 0.0035;
 const CHARGE_DRAIN: f32 = 0.006;
 const SHIELD_DRAIN: f32 = 0.010;
 const STARVATION_DAMAGE: f32 = 0.018;
+/// Toxic wastewater damages exposed living matter at a shared rate.
+pub(super) const WASTEWATER_DAMAGE_PER_SECOND: f32 = 0.28;
 const PAINFUL_IMPACT_SPEED: f32 = 720.0;
 const LETHAL_IMPACT_SPEED: f32 = 1_180.0;
 

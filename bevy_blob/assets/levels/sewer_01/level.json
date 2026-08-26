@@ -3,6 +3,10 @@
   "name": "Sewer entrance",
   "size": { "x": 1800, "y": 1500 },
   "center": { "x": 0, "y": 182 },
+  "safety_bounds": {
+    "min": { "x": -900, "y": -568 },
+    "max": { "x": 900, "y": 932 }
+  },
   "spawn": { "x": 0, "y": -280 },
   "colliders": [
     { "shape": "rectangle", "id": "floor", "position": { "x": 0, "y": -370 }, "size": { "x": 660, "y": 38 } },

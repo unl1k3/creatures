@@ -2,6 +2,7 @@ use super::*;
 use crate::environment::WastewaterEffects;
 use crate::level_format::NutrientDefinition;
 use crate::palette;
+use crate::vitality::WASTEWATER_DAMAGE_PER_SECOND;
 use bevy::{asset::RenderAssetUsages, mesh::Indices, render::render_resource::PrimitiveTopology};
 
 const ENGULF_DURATION: f32 = 1.25;
@@ -66,8 +67,15 @@ struct Nutrient {
     position: Vec2,
     radius: f32,
     original_radius: f32,
+    health: f32,
     state: NutrientState,
     was_submerged: bool,
+}
+
+impl Nutrient {
+    fn is_edible(&self) -> bool {
+        self.health > 0.001 && matches!(self.state, NutrientState::Available { .. })
+    }
 }
 
 #[derive(Resource, Default)]
@@ -94,6 +102,7 @@ impl NutritionWorld {
                 position: definition.position,
                 radius: definition.radius,
                 original_radius: definition.radius,
+                health: 1.0,
                 state: NutrientState::Available {
                     velocity: Vec2::ZERO,
                 },
@@ -242,7 +251,7 @@ pub(super) fn start_phagocytosis(
     let nearest_direction = nutrition
         .nutrients
         .iter()
-        .filter(|nutrient| matches!(nutrient.state, NutrientState::Available { .. }))
+        .filter(|nutrient| nutrient.is_edible())
         .min_by(|a, b| {
             center
                 .distance_squared(a.position)
@@ -255,7 +264,7 @@ pub(super) fn start_phagocytosis(
         .iter()
         .enumerate()
         .filter(|(_, nutrient)| {
-            matches!(nutrient.state, NutrientState::Available { .. })
+            nutrient.is_edible()
                 && nutrient.radius <= blob.body.rest_radius * 0.48
                 && phagocytosis_path_clear(
                     center,
@@ -439,7 +448,7 @@ pub(super) fn simulate_nutrition(
             .iter()
             .enumerate()
             .filter(|(_, nutrient)| {
-                matches!(nutrient.state, NutrientState::Available { .. })
+                nutrient.is_edible()
                     && nutrient.radius <= blob.body.rest_radius * 0.48
                     && probe.tip.distance(nutrient.position) <= nutrient.radius + 4.2
                     && phagocytosis_path_clear(
@@ -736,6 +745,7 @@ pub(super) fn simulate_nutrition(
     // displace a small waste object into a nearby platform. Enforce the level
     // boundary once more so no later operation can leave it embedded.
     resolve_all_free_nutrients_environment(&mut nutrition.nutrients, &level);
+    contain_free_nutrients_within_safety_bounds(&mut nutrition.nutrients, &level);
     resolve_blobs_from_supported_waste(&mut blobs, &nutrition.nutrients, &level);
     if let Some(probe) = interrupted_probe {
         nutrition.probe = Some(probe);
@@ -809,6 +819,28 @@ fn resolve_all_free_nutrients_environment(nutrients: &mut [Nutrient], level: &Le
             _ => continue,
         };
         resolve_free_object_environment(position, contact_radius, velocity, level);
+    }
+}
+
+fn contain_free_nutrients_within_safety_bounds(nutrients: &mut [Nutrient], level: &Level) {
+    let Some(bounds) = level.safety_bounds else {
+        return;
+    };
+    for nutrient in nutrients {
+        let radius = free_nutrient_contact_radius(nutrient);
+        let Some(velocity) = free_nutrient_velocity(&mut nutrient.state) else {
+            continue;
+        };
+        let minimum = bounds.min + Vec2::splat(radius);
+        let maximum = bounds.max - Vec2::splat(radius);
+        let clamped = nutrient.position.clamp(minimum, maximum);
+        if clamped.x != nutrient.position.x {
+            velocity.x = 0.0;
+        }
+        if clamped.y != nutrient.position.y {
+            velocity.y = 0.0;
+        }
+        nutrient.position = clamped;
     }
 }
 
@@ -1265,6 +1297,9 @@ fn apply_nutrient_water_interaction(
             strength,
         );
     }
+    if surface.is_some() {
+        nutrient.health = (nutrient.health - WASTEWATER_DAMAGE_PER_SECOND * dt).max(0.0);
+    }
     nutrient.was_submerged = surface.is_some();
 }
 
@@ -1414,6 +1449,7 @@ fn append_hidden_nutrient_mesh(
         position: Vec2::ZERO,
         radius: 0.0,
         original_radius: 0.0,
+        health: 0.0,
         state: NutrientState::Waste {
             velocity: Vec2::ZERO,
         },
@@ -1544,13 +1580,21 @@ fn append_nodule(
 
 fn nutrient_palette(nutrient: &Nutrient) -> ([f32; 4], [f32; 4], [f32; 4], [f32; 4], f32) {
     match nutrient.state {
-        NutrientState::Available { .. } => (
-            palette::NUTRIENT_BODY,
-            palette::NUTRIENT_CORE,
-            palette::NUTRIENT_EDGE,
-            palette::NUTRIENT_ENERGY,
-            1.0,
-        ),
+        NutrientState::Available { .. } => {
+            let health = nutrient.health.clamp(0.0, 1.0);
+            let decay = 1.0 - health;
+            (
+                mix_rgba(palette::DEAD_NUTRIENT_BODY, palette::NUTRIENT_BODY, health),
+                mix_rgba(palette::DEAD_NUTRIENT_CORE, palette::NUTRIENT_CORE, health),
+                mix_rgba(palette::DEAD_NUTRIENT_EDGE, palette::NUTRIENT_EDGE, health),
+                mix_rgba(
+                    palette::DEAD_NUTRIENT_ENERGY,
+                    palette::NUTRIENT_ENERGY,
+                    health,
+                ),
+                health * (1.0 - decay * 0.35),
+            )
+        }
         NutrientState::Engulfing {
             contact_elapsed, ..
         } => {
@@ -1659,6 +1703,7 @@ mod tests {
             position: Vec2::new(0.0, surface + 8.0),
             radius: 10.0,
             original_radius: 10.0,
+            health: 1.0,
             state: NutrientState::Available {
                 velocity: Vec2::new(0.0, -160.0),
             },
@@ -1689,12 +1734,52 @@ mod tests {
     }
 
     #[test]
+    fn wastewater_depletes_an_available_nutrient_and_stops_its_activity() {
+        let mut level = Level::from_test_geometry(Vec::new(), Vec::new());
+        level.wastewater_areas.push(WastewaterAreaDefinition {
+            position: Vec2::new(0.0, -100.0),
+            size: Vec2::new(500.0, 100.0),
+            color: palette::DEFAULT_WASTEWATER,
+            wave_height: 0.0,
+            wave_speed: 0.4,
+            depth: -0.12,
+            bubbles: None,
+        });
+        let mut nutrient = Nutrient {
+            position: Vec2::new(0.0, -100.0),
+            radius: 10.0,
+            original_radius: 10.0,
+            health: 1.0,
+            state: NutrientState::Available {
+                velocity: Vec2::ZERO,
+            },
+            was_submerged: false,
+        };
+        let mut velocity = Vec2::ZERO;
+        let mut effects = WastewaterEffects::default();
+
+        apply_nutrient_water_interaction(
+            &mut nutrient,
+            &mut velocity,
+            4.0,
+            0.0,
+            &level,
+            &mut effects,
+        );
+
+        assert_eq!(nutrient.health, 0.0);
+        assert!(!nutrient.is_edible());
+        assert_eq!(nutrient_palette(&nutrient).4, 0.0);
+    }
+
+    #[test]
     fn free_nutrients_separate_and_exchange_normal_velocity() {
         let mut nutrients = [
             Nutrient {
                 position: Vec2::ZERO,
                 radius: 10.0,
                 original_radius: 10.0,
+                health: 1.0,
                 state: NutrientState::Available {
                     velocity: Vec2::new(20.0, 0.0),
                 },
@@ -1704,6 +1789,7 @@ mod tests {
                 position: Vec2::new(12.0, 0.0),
                 radius: 8.0,
                 original_radius: 8.0,
+                health: 1.0,
                 state: NutrientState::Available {
                     velocity: Vec2::new(-5.0, 0.0),
                 },
@@ -1733,6 +1819,7 @@ mod tests {
                 position: Vec2::ZERO,
                 radius,
                 original_radius: 24.0,
+                health: 1.0,
                 state: NutrientState::Waste {
                     velocity: Vec2::ZERO,
                 },
@@ -1742,6 +1829,7 @@ mod tests {
                 position: Vec2::new(visible_radius * 2.0 + 0.1, 0.0),
                 radius,
                 original_radius: 24.0,
+                health: 1.0,
                 state: NutrientState::Waste {
                     velocity: Vec2::ZERO,
                 },
@@ -1762,6 +1850,7 @@ mod tests {
             position: Vec2::new(12.0, -8.0),
             radius: 14.0,
             original_radius: 14.0,
+            health: 1.0,
             state: NutrientState::Available {
                 velocity: Vec2::ZERO,
             },
@@ -1784,6 +1873,7 @@ mod tests {
             position: Vec2::ZERO,
             radius: 10.0,
             original_radius: 10.0,
+            health: 1.0,
             state: NutrientState::Available {
                 velocity: Vec2::ZERO,
             },
@@ -1809,6 +1899,7 @@ mod tests {
             position: Vec2::ZERO,
             radius: 10.0,
             original_radius: 10.0,
+            health: 1.0,
             state: NutrientState::Available {
                 velocity: Vec2::ZERO,
             },
@@ -1849,6 +1940,7 @@ mod tests {
             position: Vec2::ZERO,
             radius: 10.0,
             original_radius: 10.0,
+            health: 1.0,
             state: NutrientState::Digesting {
                 blob_id: 7,
                 elapsed: 0.0,
@@ -1965,6 +2057,7 @@ mod tests {
             position: Vec2::new(0.0, visual_top + radius),
             radius: radius / NUTRIENT_STRUCTURE_CONTACT_SCALE,
             original_radius: 10.0,
+            health: 1.0,
             state: NutrientState::Waste {
                 velocity: Vec2::ZERO,
             },

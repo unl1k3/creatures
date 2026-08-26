@@ -5,6 +5,9 @@ pub(super) fn blob_vital_color(
     selected: bool,
     vitality: Vitality,
 ) -> Color {
+    if !vitality.is_alive() {
+        return crate::palette::color(crate::palette::DEAD_BLOB);
+    }
     let base = blob_fill_color(parent_id, selected);
     let fade = 0.52 + vitality.energy * 0.48;
     let linear = base.to_srgba();

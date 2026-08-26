@@ -10,6 +10,7 @@ pub(super) struct ParsedLevel {
     pub(super) name: String,
     pub(super) size: Vec2,
     pub(super) center: Vec2,
+    pub(super) safety_bounds: Option<SafetyBoundsDefinition>,
     pub(super) spawn: Vec2,
     pub(super) platforms: Vec<Platform>,
     pub(super) fixtures: Vec<Vec<Vec2>>,
@@ -22,6 +23,13 @@ pub(super) struct ParsedLevel {
     pub(super) decorations: Vec<VisualLayer>,
     pub(super) drop_emitters: Vec<DropEmitterDefinition>,
     pub(super) wastewater_areas: Vec<WastewaterAreaDefinition>,
+}
+
+/// Last-resort containment, intentionally separate from playable colliders.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SafetyBoundsDefinition {
+    pub(super) min: Vec2,
+    pub(super) max: Vec2,
 }
 
 #[derive(Clone, Debug)]
@@ -131,6 +139,8 @@ struct LevelDocument {
     size: Point,
     #[serde(default)]
     center: Point,
+    #[serde(default)]
+    safety_bounds: Option<SafetyBoundsDocument>,
     spawn: Point,
     #[serde(default)]
     colliders: Vec<ColliderDocument>,
@@ -159,6 +169,13 @@ struct LevelDocument {
 struct Point {
     x: f32,
     y: f32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SafetyBoundsDocument {
+    min: Point,
+    max: Point,
 }
 
 impl From<Point> for Vec2 {
@@ -275,6 +292,19 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
     let size = positive_size("level size", document.size)?;
     let center = finite_point("level center", document.center)?;
     let spawn = finite_point("spawn", document.spawn)?;
+    let safety_bounds = document
+        .safety_bounds
+        .map(|bounds| {
+            let min = finite_point("safety bounds min", bounds.min)?;
+            let max = finite_point("safety bounds max", bounds.max)?;
+            if min.x >= max.x || min.y >= max.y {
+                return Err(LevelFormatError(
+                    "safety bounds min must be strictly below max on both axes".into(),
+                ));
+            }
+            Ok(SafetyBoundsDefinition { min, max })
+        })
+        .transpose()?;
     let mut platforms = Vec::new();
     let mut fixtures = Vec::new();
     for collider in document.colliders {
@@ -482,6 +512,7 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
         name: document.name,
         size,
         center,
+        safety_bounds,
         spawn,
         platforms,
         fixtures,
