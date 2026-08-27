@@ -490,6 +490,7 @@ pub(super) fn simulate_nutrition(
     for nutrient in &mut nutrition.nutrients {
         match nutrient.state {
             NutrientState::Available { mut velocity } => {
+                let safe_position = nutrient.position;
                 integrate_free_object(
                     &mut nutrient.position,
                     nutrient.radius,
@@ -520,6 +521,14 @@ pub(super) fn simulate_nutrition(
                     elapsed,
                     &level,
                     &mut wastewater_effects,
+                );
+                keep_free_nutrient_in_safe_ring(
+                    nutrient,
+                    safe_position,
+                    nutrient.radius * NUTRIENT_STRUCTURE_CONTACT_SCALE,
+                    &mut velocity,
+                    &blobs,
+                    &level,
                 );
                 nutrient.state = NutrientState::Available { velocity };
             }
@@ -694,10 +703,28 @@ pub(super) fn simulate_nutrition(
                 nutrient.radius = nutrient.original_radius * 0.42;
                 velocity *= (-INTERNAL_WASTE_DRAG * dt).exp();
                 velocity.y -= OBJECT_GRAVITY * 0.10 * dt;
+                let previous_position = nutrient.position;
                 nutrient.position += velocity * dt;
                 let outside =
                     circle_outside_blob_membrane(nutrient.position, nutrient.radius, &blob.body);
                 nutrient.state = if outside {
+                    let contact_radius = nutrient.radius * NUTRIENT_STRUCTURE_CONTACT_SCALE;
+                    // An expelled residue becomes a free object at this exact
+                    // instant. Resolve the exit path immediately so it cannot
+                    // cross a nearby wall between the two states.
+                    resolve_free_object_platform_sweep(
+                        previous_position,
+                        &mut nutrient.position,
+                        contact_radius,
+                        &mut velocity,
+                        &level,
+                    );
+                    resolve_free_object_environment(
+                        &mut nutrient.position,
+                        contact_radius,
+                        &mut velocity,
+                        &level,
+                    );
                     NutrientState::Waste { velocity }
                 } else {
                     NutrientState::Expelling {
@@ -708,6 +735,7 @@ pub(super) fn simulate_nutrition(
                 };
             }
             NutrientState::Waste { mut velocity } => {
+                let safe_position = nutrient.position;
                 let contact_radius = nutrient.radius * NUTRIENT_STRUCTURE_CONTACT_SCALE;
                 integrate_free_object(
                     &mut nutrient.position,
@@ -736,6 +764,14 @@ pub(super) fn simulate_nutrition(
                     &level,
                     &mut wastewater_effects,
                 );
+                keep_free_nutrient_in_safe_ring(
+                    nutrient,
+                    safe_position,
+                    contact_radius,
+                    &mut velocity,
+                    &blobs,
+                    &level,
+                );
                 nutrient.state = NutrientState::Waste { velocity };
             }
         }
@@ -743,7 +779,13 @@ pub(super) fn simulate_nutrition(
     resolve_free_nutrient_collisions(&mut nutrition.nutrients);
     // Nutrient-to-nutrient separation is the last interaction and can itself
     // displace a small waste object into a nearby platform. Enforce the level
-    // boundary once more so no later operation can leave it embedded.
+    // boundary and the blob membrane once more so no later operation can
+    // leave it embedded. This is deliberately an exact membrane correction,
+    // not a visual safety margin.
+    for _ in 0..2 {
+        resolve_all_free_nutrients_environment(&mut nutrition.nutrients, &level);
+        resolve_all_free_nutrients_from_blobs(&mut nutrition.nutrients, &blobs);
+    }
     resolve_all_free_nutrients_environment(&mut nutrition.nutrients, &level);
     contain_free_nutrients_within_safety_bounds(&mut nutrition.nutrients, &level);
     resolve_blobs_from_supported_waste(&mut blobs, &nutrition.nutrients, &level);
@@ -822,6 +864,24 @@ fn resolve_all_free_nutrients_environment(nutrients: &mut [Nutrient], level: &Le
     }
 }
 
+/// Resolves any final displacement from nutrient-to-nutrient or world contact
+/// against the actual polygonal blob membrane.
+fn resolve_all_free_nutrients_from_blobs(nutrients: &mut [Nutrient], blobs: &BlobWorld) {
+    for nutrient in nutrients {
+        let contact_radius = free_nutrient_contact_radius(nutrient);
+        let Some(velocity) = free_nutrient_velocity(&mut nutrient.state) else {
+            continue;
+        };
+
+        // A correction can expose a second nearby blob, hence the bounded
+        // passes. It remains deterministic and avoids a nutrient tunnelling
+        // through one blob while being pushed away from another.
+        for _ in 0..3 {
+            push_free_object_from_blobs(&mut nutrient.position, contact_radius, velocity, blobs);
+        }
+    }
+}
+
 fn contain_free_nutrients_within_safety_bounds(nutrients: &mut [Nutrient], level: &Level) {
     let Some(bounds) = level.safety_bounds else {
         return;
@@ -842,6 +902,51 @@ fn contain_free_nutrients_within_safety_bounds(nutrients: &mut [Nutrient], level
         }
         nutrient.position = clamped;
     }
+}
+
+/// Uses an inexpensive ring of invisible samples as a final safety envelope.
+/// The analytic circle collision remains the primary solver; this only catches
+/// state-transition and blob-push edge cases before they become visible.
+fn keep_free_nutrient_in_safe_ring(
+    nutrient: &mut Nutrient,
+    safe_position: Vec2,
+    contact_radius: f32,
+    velocity: &mut Vec2,
+    blobs: &BlobWorld,
+    level: &Level,
+) {
+    if !nutrient_safety_ring_hits(nutrient.position, contact_radius, blobs, level) {
+        return;
+    }
+    nutrient.position = safe_position;
+    nutrient.was_submerged = false;
+    *velocity *= 0.0;
+}
+
+fn nutrient_safety_ring_hits(
+    center: Vec2,
+    contact_radius: f32,
+    blobs: &BlobWorld,
+    level: &Level,
+) -> bool {
+    const SAMPLE_COUNT: usize = 12;
+    let ring_radius = contact_radius * 0.82;
+    (0..SAMPLE_COUNT).any(|index| {
+        let angle = index as f32 / SAMPLE_COUNT as f32 * std::f32::consts::TAU;
+        let point = center + Vec2::from_angle(angle) * ring_radius;
+        level.platforms.iter().any(|platform| {
+            let half_size = platform.half_size + Vec2::splat(NUTRIENT_STRUCTURE_VISUAL_OFFSET);
+            let delta = point - platform.center;
+            delta.x.abs() < half_size.x && delta.y.abs() < half_size.y
+        }) || level
+            .fixtures
+            .iter()
+            .any(|vertices| point_inside_convex(point, vertices))
+            || blobs
+                .active
+                .iter()
+                .any(|blob| point_inside_blob_membrane(point, &blob.body))
+    })
 }
 
 fn resolve_free_nutrient_collisions(nutrients: &mut [Nutrient]) {
@@ -1233,9 +1338,73 @@ fn integrate_free_object(
     let steps = (travel / (radius * 0.35).max(1.5)).ceil().clamp(1.0, 64.0) as usize;
     let step_dt = dt / steps as f32;
     for _ in 0..steps {
+        let previous = *position;
         *position += *velocity * step_dt;
+        resolve_free_object_platform_sweep(previous, position, contact_radius, velocity, level);
         resolve_free_object_environment(position, contact_radius, velocity, level);
     }
+}
+
+/// Stops a free nutrient on the entry face of every rectangular collider.
+/// This continuous test is a final safeguard for high-speed expulsions and
+/// tiny split fragments: an end-position overlap alone could miss a thin wall.
+fn resolve_free_object_platform_sweep(
+    previous: Vec2,
+    position: &mut Vec2,
+    contact_radius: f32,
+    velocity: &mut Vec2,
+    level: &Level,
+) {
+    let padding = contact_radius + NUTRIENT_STRUCTURE_VISUAL_OFFSET;
+    let hit = level
+        .platforms
+        .iter()
+        .filter_map(|platform| {
+            let min = platform.center - platform.half_size - Vec2::splat(padding);
+            let max = platform.center + platform.half_size + Vec2::splat(padding);
+            swept_point_aabb_entry(previous, *position, min, max)
+        })
+        .min_by(|first, second| first.0.total_cmp(&second.0));
+    let Some((time, normal)) = hit else {
+        return;
+    };
+    *position = previous.lerp(*position, time) + normal * 0.001;
+    resolve_object_velocity(velocity, normal);
+}
+
+fn swept_point_aabb_entry(start: Vec2, end: Vec2, min: Vec2, max: Vec2) -> Option<(f32, Vec2)> {
+    let direction = end - start;
+    let mut near = 0.0_f32;
+    let mut far = 1.0_f32;
+    let mut entry_normal = Vec2::ZERO;
+    for (origin, delta, min_axis, max_axis, negative_normal, positive_normal) in [
+        (start.x, direction.x, min.x, max.x, Vec2::NEG_X, Vec2::X),
+        (start.y, direction.y, min.y, max.y, Vec2::NEG_Y, Vec2::Y),
+    ] {
+        if delta.abs() < 0.000_01 {
+            if origin < min_axis || origin > max_axis {
+                return None;
+            }
+            continue;
+        }
+        let first = (min_axis - origin) / delta;
+        let second = (max_axis - origin) / delta;
+        let axis_near = first.min(second);
+        let axis_far = first.max(second);
+        if axis_near > near {
+            near = axis_near;
+            entry_normal = if first < second {
+                negative_normal
+            } else {
+                positive_normal
+            };
+        }
+        far = far.min(axis_far);
+        if near > far {
+            return None;
+        }
+    }
+    (far >= 0.0 && near <= 1.0).then_some((near.clamp(0.0, 1.0), entry_normal))
 }
 
 fn resolve_free_object_environment(
