@@ -45,15 +45,7 @@ pub(super) fn blob_family_rgb(parent_id: Option<u64>) -> (f32, f32, f32) {
     // The root blob owns the base colour. Every split uses the parent's stable
     // id to select a different sibling-family colour: both children match one
     // another, including the first pair, but remain distinct from their parent.
-    let index = match parent_id {
-        None => 0,
-        Some(id) => {
-            // Reserve entry zero for the root family so a descendant can
-            // never accidentally reuse the parent's initial cyan.
-            let descendant_colors = FAMILY_COLORS.len() - 1;
-            (id as usize).wrapping_mul(3) % descendant_colors + 1
-        }
-    };
+    let index = crate::palette::blob_family_index(parent_id);
     let [red, green, blue] = FAMILY_COLORS[index];
     (red, green, blue)
 }

@@ -60,6 +60,7 @@ impl WastewaterBubbleState {
 
 #[derive(Component)]
 pub(crate) struct WastewaterSurface {
+    area_index: usize,
     definition: WastewaterAreaDefinition,
     mesh: Handle<Mesh>,
     phase_offset: f32,
@@ -132,6 +133,7 @@ pub(crate) fn simulate_wastewater(
                 let phase_offset = index as f32 * 1.73;
                 let rear_mesh = meshes.add(create_wastewater_mesh(
                     definition,
+                    index,
                     time.elapsed_secs() + phase_offset,
                     false,
                 ));
@@ -141,6 +143,7 @@ pub(crate) fn simulate_wastewater(
                 let material = materials.add(ColorMaterial::default());
                 commands.spawn((
                     WastewaterSurface {
+                        area_index: index,
                         definition,
                         mesh: rear_mesh.clone(),
                         phase_offset,
@@ -151,11 +154,13 @@ pub(crate) fn simulate_wastewater(
                 ));
                 let front_mesh = meshes.add(create_wastewater_mesh(
                     definition,
+                    index,
                     time.elapsed_secs() + phase_offset,
                     true,
                 ));
                 commands.spawn((
                     WastewaterSurface {
+                        area_index: index,
                         definition,
                         mesh: front_mesh.clone(),
                         phase_offset,
@@ -182,6 +187,7 @@ pub(crate) fn simulate_wastewater(
             update_wastewater_positions(
                 &mut mesh,
                 surface.definition,
+                surface.area_index,
                 time.elapsed_secs() + surface.phase_offset,
                 &effects,
             );
@@ -203,7 +209,11 @@ pub(crate) fn simulate_wastewater_impacts(
         // Keep droplets in the readable range established for bubble bursts.
         // Object size and impact energy affect the wave, not particle size.
         let splash_radius = (impact.source_radius * 0.55).clamp(4.5, 7.5);
-        let color = wastewater_color_at(&level, impact.position);
+        let color = level
+            .wastewater_areas
+            .get(impact.area_index)
+            .map(|area| area.color)
+            .unwrap_or(palette::DEFAULT_WASTEWATER_RUNTIME);
         let material = wastewater_effect_material(color, &mut effect_materials, &mut materials);
         spawn_bubble_burst(
             &mut commands,
@@ -264,7 +274,7 @@ pub(crate) fn simulate_wastewater_bubbles(
 
         if transform.translation.y + radius >= surface_y {
             let impact = Vec2::new(transform.translation.x, surface_y);
-            let variation = effects.emit_ripple(impact, radius * 0.72, 0.45);
+            let variation = effects.emit_ripple(bubble.area_index, impact, radius * 0.72, 0.45);
             let material = wastewater_effect_material(
                 bubble.area.color,
                 &mut effect_materials,
@@ -374,21 +384,6 @@ fn spawn_bubble_burst(
             },
         ));
     }
-}
-
-fn wastewater_color_at(level: &Level, position: Vec2) -> [f32; 4] {
-    level
-        .wastewater_areas
-        .iter()
-        .filter(|area| area.contains_x(position.x))
-        .min_by(|first, second| {
-            (first.surface_y(position.x, 0.0) - position.y)
-                .abs()
-                .total_cmp(&(second.surface_y(position.x, 0.0) - position.y).abs())
-        })
-        .or_else(|| level.wastewater_areas.first())
-        .map(|area| area.color)
-        .unwrap_or(palette::DEFAULT_WASTEWATER_RUNTIME)
 }
 
 fn wastewater_effect_material(
@@ -618,6 +613,7 @@ const WASTEWATER_ROWS: usize = 4;
 
 fn create_wastewater_mesh(
     definition: WastewaterAreaDefinition,
+    area_index: usize,
     elapsed: f32,
     occlusion_layer: bool,
 ) -> Mesh {
@@ -627,7 +623,7 @@ fn create_wastewater_mesh(
     );
     mesh.insert_attribute(
         Mesh::ATTRIBUTE_POSITION,
-        wastewater_positions(definition, elapsed, None),
+        wastewater_positions(definition, area_index, elapsed, None),
     );
     mesh.insert_attribute(
         Mesh::ATTRIBUTE_COLOR,
@@ -659,17 +655,19 @@ fn create_wastewater_mesh(
 fn update_wastewater_positions(
     mesh: &mut Mesh,
     definition: WastewaterAreaDefinition,
+    area_index: usize,
     elapsed: f32,
     effects: &WastewaterEffects,
 ) {
     mesh.insert_attribute(
         Mesh::ATTRIBUTE_POSITION,
-        wastewater_positions(definition, elapsed, Some(effects)),
+        wastewater_positions(definition, area_index, elapsed, Some(effects)),
     );
 }
 
 fn wastewater_positions(
     definition: WastewaterAreaDefinition,
+    area_index: usize,
     elapsed: f32,
     effects: Option<&WastewaterEffects>,
 ) -> Vec<[f32; 3]> {
@@ -681,7 +679,7 @@ fn wastewater_positions(
             let x = -half_size.x + definition.size.x * fraction;
             let world_x = definition.position.x + x;
             let surface = definition.wave_offset(x, elapsed)
-                + effects.map_or(0.0, |effects| effects.surface_offset(world_x));
+                + effects.map_or(0.0, |effects| effects.surface_offset(area_index, world_x));
             let y = match row {
                 // A thin, uneven scum rim breaks the hard rectangular edge
                 // and visually seats the animated water in the basin.
@@ -812,6 +810,7 @@ mod tests {
             wave_speed: 0.3,
             depth: -0.12,
             bubbles: None,
+            immune_family: None,
         });
 
         assert_eq!(

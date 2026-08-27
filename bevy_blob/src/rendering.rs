@@ -191,7 +191,9 @@ fn spawn_ink_platform(
     commands.spawn((
         InkPreviewShape { scenario },
         Sprite::from_color(ink, size),
-        Transform::from_translation(visual_center.extend(-0.20)),
+        // Ink-preview structures must sit above the static foreground artwork
+        // (z=2), otherwise the illustration hides the playable geometry.
+        Transform::from_translation(visual_center.extend(2.20)),
     ));
 
     // A continuous cap marks the exact walkable edge. Light printed slabs below
@@ -204,7 +206,7 @@ fn spawn_ink_platform(
             Vec2::new(size.x, cap_height),
         ),
         Transform::from_translation(
-            (visual_center + Vec2::Y * (visual_half_size.y - cap_height * 0.5)).extend(-0.13),
+            (visual_center + Vec2::Y * (visual_half_size.y - cap_height * 0.5)).extend(2.27),
         ),
     ));
 
@@ -213,10 +215,12 @@ fn spawn_ink_platform(
     let body_height = (size.y - cap_height - 2.0).max(2.0);
     for block in 0..block_count {
         let variation = ink_hash(index, block);
+        // A paper-like interior keeps the structures legible against the
+        // ivory background; ink borders and sparse strokes provide texture.
         let block_color = game_palette::mix(
-            game_palette::STONE_DARK,
+            game_palette::IVORY,
             game_palette::STONE_LIGHT,
-            variation,
+            0.18 + variation * 0.18,
         );
         let position = visual_center
             + Vec2::new(
@@ -229,7 +233,7 @@ fn spawn_ink_platform(
                 game_palette::color(block_color),
                 Vec2::new((block_width - 2.2).max(3.0), body_height),
             ),
-            Transform::from_translation(position.extend(-0.11)),
+            Transform::from_translation(position.extend(2.25)),
         ));
 
         if block_width > 24.0 && body_height > 7.0 {
@@ -245,7 +249,7 @@ fn spawn_ink_platform(
                     game_palette::color(game_palette::PAPER_STROKE),
                     Vec2::new(stroke_length, 1.1),
                 ),
-                Transform::from_translation((position + stroke_offset).extend(-0.105))
+                Transform::from_translation((position + stroke_offset).extend(2.255))
                     .with_rotation(Quat::from_rotation_z(angle)),
             ));
         }

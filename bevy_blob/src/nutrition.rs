@@ -1287,11 +1287,12 @@ fn apply_nutrient_water_interaction(
         elapsed,
         level,
     );
-    if let Some(surface_y) = surface
+    if let Some((area_index, surface_y)) = surface
         && !nutrient.was_submerged
     {
         let strength = (entry_speed / 180.0).clamp(0.35, 1.35);
         effects.emit(
+            area_index,
             Vec2::new(nutrient.position.x, surface_y),
             nutrient.radius,
             strength,
@@ -1310,8 +1311,8 @@ fn apply_wastewater_buoyancy(
     dt: f32,
     elapsed: f32,
     level: &Level,
-) -> Option<f32> {
-    for area in &level.wastewater_areas {
+) -> Option<(usize, f32)> {
+    for (area_index, area) in level.wastewater_areas.iter().enumerate() {
         if !area.contains_x(position.x) {
             continue;
         }
@@ -1334,7 +1335,7 @@ fn apply_wastewater_buoyancy(
         let drag = 1.0 - (-12.0 * submerged.sqrt() * dt).exp();
         velocity.x += (water_horizontal_speed - velocity.x) * drag * 0.72;
         velocity.y += (water_vertical_speed - velocity.y) * drag;
-        return Some(surface_y);
+        return Some((area_index, surface_y));
     }
     None
 }
@@ -1669,6 +1670,7 @@ mod tests {
             wave_speed: 0.4,
             depth: -0.12,
             bubbles: None,
+            immune_family: None,
         });
         let mut position = Vec2::new(0.0, 20.0);
         let mut velocity = Vec2::ZERO;
@@ -1697,6 +1699,7 @@ mod tests {
             wave_speed: 0.4,
             depth: -0.12,
             bubbles: None,
+            immune_family: None,
         });
         let surface = level.wastewater_areas[0].surface_y(0.0, 0.0);
         let mut nutrient = Nutrient {
@@ -1744,6 +1747,7 @@ mod tests {
             wave_speed: 0.4,
             depth: -0.12,
             bubbles: None,
+            immune_family: None,
         });
         let mut nutrient = Nutrient {
             position: Vec2::new(0.0, -100.0),

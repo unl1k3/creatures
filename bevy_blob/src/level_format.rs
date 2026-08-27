@@ -59,6 +59,7 @@ pub(super) struct WastewaterAreaDefinition {
     pub(super) wave_speed: f32,
     pub(super) depth: f32,
     pub(super) bubbles: Option<BubbleSettingsDefinition>,
+    pub(super) immune_family: Option<usize>,
 }
 
 impl WastewaterAreaDefinition {
@@ -230,6 +231,8 @@ struct WastewaterAreaDocument {
     depth: f32,
     #[serde(default)]
     bubbles: Option<BubbleSettingsDocument>,
+    #[serde(default)]
+    immune_family: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -408,6 +411,13 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
                     "wastewater area {index} color channels must be between 0 and 1"
                 )));
             }
+            if let Some(family) = area.immune_family
+                && family >= crate::palette::BLOB_FAMILIES.len()
+            {
+                return Err(LevelFormatError(format!(
+                    "wastewater area {index} immune_family must reference a blob family"
+                )));
+            }
             Ok(WastewaterAreaDefinition {
                 position: finite_point(
                     &format!("wastewater area {index} position"),
@@ -428,6 +438,7 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
                     .bubbles
                     .map(|bubbles| parse_bubble_settings(index, bubbles))
                     .transpose()?,
+                immune_family: area.immune_family,
             })
         })
         .collect::<Result<Vec<_>, LevelFormatError>>()?;
@@ -662,6 +673,7 @@ mod tests {
                     "wave_height": 4,
                     "wave_speed": 0.35,
                     "depth": -4,
+                    "immune_family": 1,
                     "bubbles": {
                         "interval": [0.7, 2.4],
                         "radius": [2, 7],
@@ -686,6 +698,7 @@ mod tests {
             12
         );
         assert_eq!(level.drop_emitters[0].gravity, 420.0);
+        assert_eq!(level.wastewater_areas[0].immune_family, Some(1));
     }
 
     #[test]

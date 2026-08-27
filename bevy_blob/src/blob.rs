@@ -19,17 +19,21 @@ const CHARGE_DURATION: f32 = 0.70;
 const JUMP_MIN_SPEED: f32 = 300.0;
 const JUMP_MAX_SPEED: f32 = 960.0;
 const GROUND_ROLL_RATE: f32 = 5.2;
-const IDLE_ROCK_RATE: f32 = 0.018;
 const MAX_PARTICLE_HORIZONTAL_SPEED: f32 = 760.0;
 const INTERNAL_DAMPING_AIR: f32 = 0.955;
 const WATER_ROTATION_RESPONSE: f32 = 0.18;
 const WATER_ROTATION_RATE: f32 = 0.0024;
 const WATER_SPINE_DRAG_MULTIPLIER: f32 = 2.4;
 const WATER_FLATTENING: f32 = 0.08;
-const WATER_BARE_DRAG_RATE: f32 = 72.0;
+// Without deployed spines the liquid is deliberately difficult to traverse:
+// the blob can bob, but it cannot meaningfully swim through toxic wastewater.
+const WATER_BARE_DRAG_RATE: f32 = 58.0;
 const WATER_SPINED_DRAG_RATE: f32 = 14.0;
 const WATER_SWIM_THRUST: f32 = 860.0;
 const WATER_SWIM_ROTATION: f32 = 0.0045;
+const WATER_ENTRY_FRACTION: f32 = 0.08;
+const WATER_EXIT_FRACTION: f32 = 0.015;
+const WATER_EXIT_GRACE: f32 = 0.24;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Particle {
@@ -76,6 +80,14 @@ pub struct Blob {
     idle_amount: f32,
     tonicity: f32,
     water_submerged: bool,
+    water_exit_elapsed: f32,
+    spider_cling: Option<SpiderCling>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SpiderCling {
+    wall_direction: f32,
+    wall_top: f32,
 }
 
 impl Blob {
@@ -121,6 +133,8 @@ impl Blob {
             idle_amount: 0.0,
             tonicity: 1.0,
             water_submerged: false,
+            water_exit_elapsed: 0.0,
+            spider_cling: None,
         }
     }
 
@@ -243,6 +257,15 @@ impl Blob {
         }
     }
 
+    /// Enables high tangential friction while at least one deployed spine is
+    /// hooked into a vertical wall. `None` restores ordinary gravity at once.
+    pub fn set_spider_cling(&mut self, wall: Option<(f32, f32)>) {
+        self.spider_cling = wall.map(|(direction, wall_top)| SpiderCling {
+            wall_direction: direction.signum(),
+            wall_top,
+        });
+    }
+
     /// Applies a light-body buoyancy model to the deformable membrane.
     ///
     /// The water is not a solid collider: a partly immersed blob remains
@@ -281,10 +304,14 @@ impl Blob {
             })
             .sum::<f32>()
             / self.particles.len() as f32;
-        if submerged_fraction <= 0.005 {
-            self.water_submerged = false;
+        if submerged_fraction <= WATER_EXIT_FRACTION {
+            self.water_exit_elapsed += dt;
+            if self.water_exit_elapsed >= WATER_EXIT_GRACE {
+                self.water_submerged = false;
+            }
             return None;
         }
+        self.water_exit_elapsed = 0.0;
 
         let entry_speed = (-self.velocity().y / dt.max(0.000_001)).max(0.0);
         // The blob is slightly lighter than wastewater, settling with roughly
@@ -308,8 +335,10 @@ impl Blob {
         // must be converted with dt². Using dt here turns buoyancy into a
         // trampoline-like impulse at the first touch of the surface.
         self.add_velocity(Vec2::Y * GRAVITY * 2.15 * submerged_fraction.powf(0.82) * dt * dt);
-        let entered = !self.water_submerged;
-        self.water_submerged = true;
+        let entered = !self.water_submerged && submerged_fraction >= WATER_ENTRY_FRACTION;
+        if submerged_fraction >= WATER_ENTRY_FRACTION {
+            self.water_submerged = true;
+        }
         Some(WastewaterContact {
             surface_y,
             submerged_fraction,
@@ -552,7 +581,11 @@ impl Blob {
             (target_tonicity - self.tonicity) * (tonicity_response * dt).clamp(0.0, 1.0);
         // One unit is one localized breath followed by a resting pause.
         self.idle_phase += dt / 2.6;
-        let wants_idle = animate_idle && self.grounded && horizontal == 0.0 && !charging;
+        let wants_idle = animate_idle
+            && (self.grounded || self.spider_cling.is_some())
+            && horizontal == 0.0
+            && !charging;
+        let idle_anchor_x = wants_idle.then(|| self.center().x);
         let idle_target = if wants_idle { 1.0 } else { 0.0 };
         let idle_response = if wants_idle { 1.8 } else { 7.0 };
         self.idle_amount += (idle_target - self.idle_amount) * (idle_response * dt).clamp(0.0, 1.0);
@@ -596,29 +629,37 @@ impl Blob {
             })
             .sum::<f32>()
             / self.particles.len() as f32;
-        let idle_rock_rate = if wants_idle {
-            let side = idle_lobe_center(self.idle_phase.floor() as usize)
-                .cos()
-                .signum();
-            -side * idle_breath_pulse(self.idle_phase, self.idle_amount) * IDLE_ROCK_RATE
-        } else {
-            0.0
-        };
+        let spider_cling = self.spider_cling;
+        // Breathing changes only the membrane shape. It must not introduce a
+        // net torque, otherwise irregular split fragments slowly crawl.
+        let idle_rock_rate = 0.0;
         let compression_anchor = self
             .particles
             .iter()
             .map(|particle| particle.position.dot(jump_normal))
             .fold(f32::INFINITY, f32::min);
-        let acceleration = if self.grounded {
+        let has_support = self.grounded || spider_cling.is_some();
+        let acceleration = if has_support {
             GROUND_ACCELERATION
         } else {
             AIR_ACCELERATION
         } * vigor;
-        let maximum_speed = if self.grounded {
+        let maximum_speed = if has_support {
             MAX_GROUND_SPEED
         } else {
             MAX_AIR_SPEED
         } * vigor;
+        let rim_progress = spider_cling.map_or(0.0, |cling| {
+            ((center.y - (cling.wall_top - self.rest_radius * 0.82)) / (self.rest_radius * 0.82))
+                .clamp(0.0, 1.0)
+        });
+        let gravity_direction = spider_cling
+            .map(|cling| {
+                (Vec2::X * cling.wall_direction)
+                    .lerp(Vec2::NEG_Y, rim_progress)
+                    .normalize_or(Vec2::NEG_Y)
+            })
+            .unwrap_or(Vec2::NEG_Y);
         let jump_size_factor = jump_size_factor(self.rest_radius);
         for particle in &mut self.particles {
             let mut velocity = particle.position - particle.previous;
@@ -628,11 +669,26 @@ impl Blob {
                 velocity = center_velocity + (velocity - center_velocity) * 0.40;
             }
 
-            // Steer the centre of mass. In air every particle receives the same
-            // correction so input cannot inject torque into the membrane.
-            let target_velocity_x = horizontal * maximum_speed * dt;
+            // A hooked wall is a rotated floor: gravity presses into its
+            // normal and input drives the membrane along its tangent.
             let steering = acceleration * dt * dt;
-            velocity.x += (target_velocity_x - center_velocity.x).clamp(-steering, steering);
+            if let Some(cling) = spider_cling {
+                let tangential_input = if horizontal.abs() <= 0.01 {
+                    1.0
+                } else {
+                    horizontal * cling.wall_direction
+                };
+                let target_velocity_y = tangential_input * maximum_speed * dt;
+                velocity.y += (target_velocity_y - center_velocity.y).clamp(-steering, steering);
+                // At the corner, turn the rolling direction out onto the top
+                // surface. This is a short edge grip, not a jump impulse.
+                let target_velocity_x = cling.wall_direction * maximum_speed * dt * rim_progress;
+                velocity.x += (target_velocity_x - center_velocity.x).clamp(-steering, steering)
+                    * rim_progress;
+            } else {
+                let target_velocity_x = horizontal * maximum_speed * dt;
+                velocity.x += (target_velocity_x - center_velocity.x).clamp(-steering, steering);
+            }
 
             if self.grounded {
                 let offset = particle.position - center;
@@ -647,6 +703,23 @@ impl Blob {
                 let lower_weight =
                     ((center.y - particle.position.y) / self.rest_radius).clamp(0.0, 1.0);
                 velocity.x += horizontal * steering * lower_weight * 0.65;
+            } else if spider_cling.is_some() {
+                let offset = particle.position - center;
+                let tangential_input = if horizontal.abs() <= 0.01 {
+                    1.0
+                } else {
+                    horizontal * spider_cling.expect("wall adhesion").wall_direction
+                };
+                // Wall contact mirrors the ground-contact orientation: use
+                // the opposite sign so deployed spines advance into the wall
+                // instead of visually rolling away from their grip.
+                let target_angular_displacement = -tangential_input
+                    * spider_cling.expect("wall adhesion").wall_direction
+                    * GROUND_ROLL_RATE
+                    * dt;
+                let angular_correction =
+                    (target_angular_displacement - angular_displacement) * 0.34;
+                velocity += offset.perp() * angular_correction;
             } else {
                 // Dampen only motion relative to the centre. Translation is
                 // preserved while post-impact wobble gradually loses energy.
@@ -666,7 +739,7 @@ impl Blob {
             );
 
             particle.previous = particle.position;
-            particle.position += velocity + Vec2::NEG_Y * GRAVITY * dt * dt;
+            particle.position += velocity + gravity_direction * GRAVITY * dt * dt;
 
             if charging && self.jump_armed {
                 let compression = 3.8 * dt * (0.35 + self.charge * 0.65);
@@ -744,6 +817,12 @@ impl Blob {
         if self.repair_self_intersection() {
             self.solve_collisions(platforms);
             self.solve_fixture_collisions(fixtures);
+        }
+        if let Some(anchor_x) = idle_anchor_x {
+            // Contact projection after a local breath can otherwise retain a
+            // tiny lateral correction. A resting creature may deform, but it
+            // must not slowly walk across the platform by itself.
+            self.translate(Vec2::X * (anchor_x - self.center().x));
         }
         self.last_impact_speed /= dt.max(0.000_001);
     }
@@ -1111,18 +1190,6 @@ fn idle_lobe_center(cycle: usize) -> f32 {
     // side differ, so the result remains organic instead of becoming a
     // regular left-right pendulum.
     [0.38, 2.22, 0.92, 2.76][cycle % 4]
-}
-
-fn idle_breath_pulse(phase: f32, amount: f32) -> f32 {
-    const ACTIVE_PART: f32 = 0.68;
-    let local_time = phase.fract();
-    if local_time >= ACTIVE_PART {
-        return 0.0;
-    }
-    (local_time / ACTIVE_PART * std::f32::consts::PI)
-        .sin()
-        .powi(2)
-        * amount
 }
 
 /// Stable signed variation tied to membrane material rather than simulation

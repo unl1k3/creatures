@@ -157,6 +157,139 @@ pub(super) fn shield_spine_fans(
         .collect()
 }
 
+/// Returns the highest spine that is pressing against the requested side of a
+/// platform. It is a gameplay query, separate from rendering, so a drawn spine
+/// never becomes a collider by itself.
+pub(super) fn spider_climb_anchor_direction(
+    blob_id: u64,
+    blob: &Blob,
+    extension: f32,
+    platforms: &[Platform],
+    fixtures: &[Vec<Vec2>],
+) -> Option<SpineAnchor> {
+    if extension <= 0.05 {
+        return None;
+    }
+
+    let contour = blob
+        .particles
+        .iter()
+        .map(|particle| particle.position)
+        .collect::<Vec<_>>();
+    let perimeter = contour
+        .iter()
+        .copied()
+        .zip(contour.iter().copied().cycle().skip(1))
+        .take(contour.len())
+        .map(|(start, end)| start.distance(end))
+        .sum::<f32>();
+    let center = blob.center();
+    let clearance = (0.8 * blob.size_scale()).max(0.35);
+
+    spine_layout(blob_id, shield_spine_count(blob.rest_radius))
+        .into_iter()
+        .filter_map(|spec| {
+            let base =
+                sample_closed_contour(&contour, spec.contour_fraction * perimeter, perimeter);
+            // A longer reach than the visual tip makes a contact stable as the
+            // membrane flexes against the wall, without changing its look.
+            let reach = blob.rest_radius
+                * (spec.length_factor + 0.12)
+                * extension
+                * spine_size_multiplier(blob.rest_radius);
+            let desired_tip = base + (base - center).normalize_or(Vec2::Y) * reach;
+            let (tip, platform_contacted) =
+                clip_spine_tip_with_contact(base, desired_tip, platforms, clearance);
+            let direction = (tip.x - center.x).signum();
+            if direction == 0.0 {
+                return None;
+            }
+            let platform_anchor = vertical_wall_top(tip, center, direction, platforms)
+                .filter(|_| platform_contacted)
+                .map(|wall_top| (tip, wall_top, direction));
+            let fixture_anchor =
+                first_fixture_contact(base, desired_tip, fixtures).and_then(|(contact, point)| {
+                    let direction = (point.x - center.x).signum();
+                    (contact > 0.0 && direction != 0.0).then_some((point, point.y, direction))
+                });
+            platform_anchor
+                .into_iter()
+                .chain(fixture_anchor)
+                .max_by(|first, second| first.0.y.total_cmp(&second.0.y))
+                .map(|(tip, wall_top, direction)| (base, tip, wall_top, direction))
+        })
+        .max_by(|first, second| first.1.y.total_cmp(&second.1.y))
+        .map(|(_, _, wall_top, direction)| SpineAnchor {
+            direction,
+            wall_top,
+        })
+}
+
+fn first_fixture_contact(start: Vec2, end: Vec2, fixtures: &[Vec<Vec2>]) -> Option<(f32, Vec2)> {
+    fixtures
+        .iter()
+        .flat_map(|fixture| {
+            fixture
+                .iter()
+                .copied()
+                .zip(fixture.iter().copied().cycle().skip(1))
+                .take(fixture.len())
+        })
+        .filter_map(|(edge_start, edge_end)| segment_intersection(start, end, edge_start, edge_end))
+        .min_by(|first, second| first.0.total_cmp(&second.0))
+}
+
+fn segment_intersection(
+    start: Vec2,
+    end: Vec2,
+    edge_start: Vec2,
+    edge_end: Vec2,
+) -> Option<(f32, Vec2)> {
+    let ray = end - start;
+    let edge = edge_end - edge_start;
+    let denominator = ray.perp_dot(edge);
+    if denominator.abs() <= 0.000_01 {
+        return None;
+    }
+    let offset = edge_start - start;
+    let ray_fraction = offset.perp_dot(edge) / denominator;
+    let edge_fraction = offset.perp_dot(ray) / denominator;
+    ((0.0..=1.0).contains(&ray_fraction) && (0.0..=1.0).contains(&edge_fraction))
+        .then_some((ray_fraction, start.lerp(end, ray_fraction)))
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SpineAnchor {
+    pub(super) direction: f32,
+    pub(super) wall_top: f32,
+}
+
+/// Ignores a spine that has merely reached the top or underside of a platform.
+/// A climbing grip must touch one of its vertical faces at the blob's height.
+fn vertical_wall_top(
+    tip: Vec2,
+    blob_center: Vec2,
+    direction: f32,
+    platforms: &[Platform],
+) -> Option<f32> {
+    const FACE_TOLERANCE: f32 = 2.0;
+    platforms.iter().find_map(|platform| {
+        let min = platform.center - platform.half_size;
+        let max = platform.center + platform.half_size;
+        let touches_requested_face = if direction > 0.0 {
+            (tip.x - min.x).abs() <= FACE_TOLERANCE
+        } else {
+            (tip.x - max.x).abs() <= FACE_TOLERANCE
+        };
+        (touches_requested_face
+            && tip.y >= min.y - FACE_TOLERANCE
+            && tip.y <= max.y + FACE_TOLERANCE
+            && blob_center.y >= min.y
+            && blob_center.y <= max.y)
+            .then_some(max.y)
+    })
+}
+
 fn spine_size_multiplier(radius: f32) -> f32 {
     1.12 * (INITIAL_RADIUS / radius.max(MIN_SHIELD_RADIUS))
         .sqrt()
@@ -235,20 +368,32 @@ fn spine_random(blob_id: u64, index: u64, channel: u64) -> f32 {
 }
 
 fn clip_spine_tip(base: Vec2, desired_tip: Vec2, platforms: &[Platform], clearance: f32) -> Vec2 {
+    clip_spine_tip_with_contact(base, desired_tip, platforms, clearance).0
+}
+
+fn clip_spine_tip_with_contact(
+    base: Vec2,
+    desired_tip: Vec2,
+    platforms: &[Platform],
+    clearance: f32,
+) -> (Vec2, bool) {
     let direction = desired_tip - base;
     let length = direction.length();
     if length <= 0.0001 {
-        return base;
+        return (base, false);
     }
     let first_contact = platforms
         .iter()
         .filter_map(|platform| segment_aabb_entry(base, desired_tip, platform))
         .reduce(f32::min);
     let Some(first_contact) = first_contact else {
-        return desired_tip;
+        return (desired_tip, false);
     };
     let clearance_fraction = clearance / length;
-    base + direction * (first_contact - clearance_fraction).clamp(0.0, 1.0)
+    (
+        base + direction * (first_contact - clearance_fraction).clamp(0.0, 1.0),
+        true,
+    )
 }
 
 fn segment_aabb_entry(start: Vec2, end: Vec2, platform: &Platform) -> Option<f32> {

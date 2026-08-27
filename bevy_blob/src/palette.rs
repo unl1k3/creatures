@@ -11,7 +11,6 @@ pub(crate) const NIGHT: [f32; 4] = [0.025, 0.035, 0.075, 1.0];
 pub(crate) const INK: [f32; 4] = [0.035, 0.045, 0.055, 1.0];
 pub(crate) const DEEP_INK: [f32; 4] = [0.015, 0.020, 0.024, 1.0];
 pub(crate) const PAPER_STROKE: [f32; 4] = [0.055, 0.060, 0.058, 0.58];
-pub(crate) const STONE_DARK: [f32; 4] = [0.46, 0.44, 0.36, 1.0];
 pub(crate) const STONE_LIGHT: [f32; 4] = [0.58, 0.54, 0.44, 1.0];
 
 pub(crate) const BLOB_FAMILIES: [[f32; 3]; 6] = [
@@ -23,9 +22,24 @@ pub(crate) const BLOB_FAMILIES: [[f32; 3]; 6] = [
     [0.28, 0.88, 0.24],
     [0.18, 0.42, 1.00],
 ];
+
+/// Stable gameplay family index. Entry zero belongs to the original blob;
+/// each split parent selects one of the descendant entries for both children.
+pub(crate) fn blob_family_index(parent_id: Option<u64>) -> usize {
+    match parent_id {
+        None => 0,
+        Some(id) => {
+            let descendant_colors = BLOB_FAMILIES.len() - 1;
+            (id as usize).wrapping_mul(3) % descendant_colors + 1
+        }
+    }
+}
 /// Inert, desaturated colour shared by a dead blob's body and membrane.
 pub(crate) const DEAD_BLOB: [f32; 4] = [0.72, 0.74, 0.75, 0.90];
-pub(crate) const MEMBRANE_SHIELD_BASE: [f32; 4] = [0.22, 0.72, 0.82, 0.82];
+/// Defensive spines use coral so an active shield is readable against the
+/// cyan body and toxic-green sewer palette.
+pub(crate) const MEMBRANE_SHIELD_BASE: [f32; 4] = [0.62, 0.10, 0.10, 0.90];
+pub(crate) const MEMBRANE_SHIELD_TIP: [f32; 4] = [1.00, 0.32, 0.22, 0.98];
 
 pub(crate) const NUTRIENT_BODY: [f32; 4] = [0.82, 0.22, 0.16, 0.98];
 pub(crate) const NUTRIENT_CORE: [f32; 4] = [1.0, 0.48, 0.28, 0.98];
@@ -95,6 +109,14 @@ pub(crate) fn color(value: [f32; 4]) -> Color {
 pub(crate) fn with_alpha(mut value: [f32; 4], alpha: f32) -> Color {
     value[3] = alpha;
     color(value)
+}
+
+pub(crate) fn scale_rgb(mut value: [f32; 4], factor: f32) -> [f32; 4] {
+    let factor = factor.max(0.0);
+    value[0] = (value[0] * factor).min(1.0);
+    value[1] = (value[1] * factor).min(1.0);
+    value[2] = (value[2] * factor).min(1.0);
+    value
 }
 
 pub(crate) fn mix(first: [f32; 4], second: [f32; 4], amount: f32) -> [f32; 4] {

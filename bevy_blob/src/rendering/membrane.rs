@@ -109,7 +109,7 @@ pub(super) fn update_blob_outline_mesh(
             ]);
             colors.extend_from_slice(&[
                 crate::palette::MEMBRANE_SHIELD_BASE,
-                [0.52 * brightness, 0.96 * brightness, brightness, 0.96],
+                crate::palette::scale_rgb(crate::palette::MEMBRANE_SHIELD_TIP, brightness),
                 crate::palette::MEMBRANE_SHIELD_BASE,
             ]);
             indices.extend_from_slice(&[first, first + 1, first + 2]);

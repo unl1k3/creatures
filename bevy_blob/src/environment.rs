@@ -68,6 +68,7 @@ pub(super) struct RouteProgress {
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct WastewaterImpact {
+    pub(super) area_index: usize,
     pub(super) position: Vec2,
     pub(super) source_radius: f32,
     pub(super) variation: f32,
@@ -75,6 +76,7 @@ pub(super) struct WastewaterImpact {
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct WastewaterRipple {
+    pub(super) area_index: usize,
     pub(super) center_x: f32,
     pub(super) age: f32,
     pub(super) duration: f32,
@@ -89,25 +91,44 @@ pub(super) struct WastewaterEffects {
 }
 
 impl WastewaterEffects {
-    pub(super) fn emit(&mut self, position: Vec2, source_radius: f32, strength: f32) {
+    pub(super) fn emit(
+        &mut self,
+        area_index: usize,
+        position: Vec2,
+        source_radius: f32,
+        strength: f32,
+    ) {
         let variation = self.next_variation();
         let strength = strength.clamp(0.2, 1.8);
         self.pending.push(WastewaterImpact {
+            area_index,
             position,
             source_radius,
             variation,
         });
-        self.push_ripple(position.x, source_radius, strength);
+        self.push_ripple(area_index, position.x, source_radius, strength);
     }
 
-    pub(super) fn emit_ripple(&mut self, position: Vec2, source_radius: f32, strength: f32) -> f32 {
+    pub(super) fn emit_ripple(
+        &mut self,
+        area_index: usize,
+        position: Vec2,
+        source_radius: f32,
+        strength: f32,
+    ) -> f32 {
         let variation = self.next_variation();
-        self.push_ripple(position.x, source_radius, strength.clamp(0.2, 1.8));
+        self.push_ripple(
+            area_index,
+            position.x,
+            source_radius,
+            strength.clamp(0.2, 1.8),
+        );
         variation
     }
 
-    fn push_ripple(&mut self, center_x: f32, source_radius: f32, strength: f32) {
+    fn push_ripple(&mut self, area_index: usize, center_x: f32, source_radius: f32, strength: f32) {
         self.ripples.push(WastewaterRipple {
+            area_index,
             center_x,
             age: 0.0,
             duration: 1.45,
@@ -131,9 +152,10 @@ impl WastewaterEffects {
         self.ripples.retain(|ripple| ripple.age < ripple.duration);
     }
 
-    pub(super) fn surface_offset(&self, world_x: f32) -> f32 {
+    pub(super) fn surface_offset(&self, area_index: usize, world_x: f32) -> f32 {
         self.ripples
             .iter()
+            .filter(|ripple| ripple.area_index == area_index)
             .map(|ripple| {
                 let distance = (world_x - ripple.center_x).abs();
                 let front = ripple.age * 105.0;
@@ -1216,18 +1238,22 @@ mod tests {
         app.add_systems(Startup, setup_environment);
         app.update();
 
-        let expected = Level::prototype().platforms;
+        let expected = Level::prototype();
         let mut query = app
             .world_mut()
             .query::<(&EnvironmentCollider, &RigidBody, &Transform)>();
         let colliders = query.iter(app.world()).collect::<Vec<_>>();
-        assert_eq!(colliders.len(), expected.len());
-        for (_, body, transform) in colliders {
+        let platform_colliders = colliders
+            .into_iter()
+            .filter(|(environment, _, _)| environment.platform_index.is_some())
+            .collect::<Vec<_>>();
+        assert_eq!(platform_colliders.len(), expected.platforms.len());
+        for (environment, body, transform) in platform_colliders {
             assert_eq!(*body, RigidBody::Static);
-            assert!(
-                expected
-                    .iter()
-                    .any(|platform| transform.translation.truncate() == platform.center)
+            let platform_index = environment.platform_index.expect("platform collider");
+            assert_eq!(
+                transform.translation.truncate(),
+                expected.platforms[platform_index].center
             );
         }
         let pilot_count = app
@@ -1235,7 +1261,7 @@ mod tests {
             .query_filtered::<Entity, With<AvianMigratedSurface>>()
             .iter(app.world())
             .count();
-        assert_eq!(pilot_count, 4);
+        assert_eq!(pilot_count, 6);
     }
 
     #[test]

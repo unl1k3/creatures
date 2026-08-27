@@ -44,7 +44,7 @@ use rendering::{
     simulate_wastewater, simulate_wastewater_bubbles, simulate_wastewater_impacts,
     sync_blob_meshes, sync_ink_preview, sync_route_markers, toggle_ink_style,
 };
-use shield::{ShieldWorld, simulate_shields};
+use shield::{ShieldWorld, simulate_shields, spider_climb_anchor_direction};
 use std::{
     collections::HashMap,
     time::{SystemTime, UNIX_EPOCH},
@@ -250,6 +250,16 @@ fn simulate_blob(
         } else {
             0.0
         };
+        let spider_anchor = spider_climb_anchor_direction(
+            active_blob.id,
+            &active_blob.body,
+            shield_extension,
+            &level.platforms,
+            &level.fixtures,
+        );
+        active_blob
+            .body
+            .set_spider_cling(spider_anchor.map(|anchor| (anchor.direction, anchor.wall_top)));
         active_blob.body.step_with_vigor(
             time.delta_secs(),
             movement,
@@ -265,22 +275,34 @@ fn simulate_blob(
             alive,
             true,
         );
-        let water_contact = level.wastewater_areas.iter().copied().find_map(|area| {
-            let center = active_blob.body.center();
-            area.contains_x(center.x).then(|| {
-                let surface_y = area.surface_y(center.x, time.elapsed_secs());
-                let bottom_y = area.position.y - area.size.y * 0.5;
-                active_blob.body.apply_wastewater_forces_with_spine_drag(
-                    surface_y,
-                    bottom_y,
-                    time.delta_secs(),
-                    shield_extension,
-                    movement,
-                )
-            })?
-        });
-        if let Some(contact) = water_contact {
-            if alive {
+        let water_contact =
+            level
+                .wastewater_areas
+                .iter()
+                .copied()
+                .enumerate()
+                .find_map(|(area_index, area)| {
+                    let center = active_blob.body.center();
+                    area.contains_x(center.x).then(|| {
+                        let surface_y = area.surface_y(center.x, time.elapsed_secs());
+                        let bottom_y = area.position.y - area.size.y * 0.5;
+                        active_blob
+                            .body
+                            .apply_wastewater_forces_with_spine_drag(
+                                surface_y,
+                                bottom_y,
+                                time.delta_secs(),
+                                shield_extension,
+                                movement,
+                            )
+                            .map(|contact| (area_index, area, contact))
+                    })?
+                });
+        if let Some((area_index, area, contact)) = water_contact {
+            let immune = area.immune_family.is_some_and(|family| {
+                crate::palette::blob_family_index(active_blob.parent_id) == family
+            });
+            if alive && !immune {
                 vitality.damage(
                     active_blob.id,
                     WASTEWATER_DAMAGE_PER_SECOND * contact.submerged_fraction * time.delta_secs(),
@@ -289,6 +311,7 @@ fn simulate_blob(
             if contact.entered {
                 let impact_strength = (contact.entry_speed / 430.0).clamp(0.45, 1.45);
                 wastewater_effects.emit(
+                    area_index,
                     Vec2::new(active_blob.body.center().x, contact.surface_y),
                     active_blob.body.rest_radius * (0.46 + contact.submerged_fraction * 0.42),
                     impact_strength,
