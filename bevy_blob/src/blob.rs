@@ -372,13 +372,19 @@ impl Blob {
             / self.particles.len() as f32;
         let extension = spine_extension.clamp(0.0, 1.0);
         let spine_drag = 1.0 + extension * WATER_SPINE_DRAG_MULTIPLIER;
-        let target_rotation = -center_velocity.x * WATER_ROTATION_RATE * spine_drag;
+        let swimming = extension > 0.05 && swim_direction.abs() > 0.01;
+        let direction = swim_direction.signum();
+        // With spines deployed, the player chooses the roll direction. Using
+        // residual horizontal velocity here made a blob that had reached a
+        // wall keep rolling toward it after the input was reversed.
+        let target_rotation = if swimming {
+            -direction * WATER_SWIM_ROTATION * (0.35 + extension * 0.65)
+        } else {
+            -center_velocity.x * WATER_ROTATION_RATE * spine_drag
+        };
         let rotation_correction =
             (target_rotation - angular_displacement) * WATER_ROTATION_RESPONSE * submerged_fraction;
         let flattening = WATER_FLATTENING * submerged_fraction;
-
-        let swimming = extension > 0.05 && swim_direction.abs() > 0.01;
-        let direction = swim_direction.signum();
         // A short repeated contraction of the trailing immersed side is the
         // blob's motor. The attached spines act as passive paddles against it.
         let stroke =
@@ -670,19 +676,17 @@ impl Blob {
             }
 
             // A hooked wall is a rotated floor: gravity presses into its
-            // normal and input drives the membrane along its tangent.
+            // normal, while input keeps its direct player-selected direction.
             let steering = acceleration * dt * dt;
-            if let Some(cling) = spider_cling {
-                let tangential_input = if horizontal.abs() <= 0.01 {
-                    1.0
-                } else {
-                    horizontal * cling.wall_direction
-                };
-                let target_velocity_y = tangential_input * maximum_speed * dt;
+            if spider_cling.is_some() {
+                // Either horizontal input works the hooked spines upward.
+                // The signed input remains reserved for roll direction below.
+                let climb_intent = horizontal.abs();
+                let target_velocity_y = climb_intent * maximum_speed * dt;
                 velocity.y += (target_velocity_y - center_velocity.y).clamp(-steering, steering);
                 // At the corner, turn the rolling direction out onto the top
                 // surface. This is a short edge grip, not a jump impulse.
-                let target_velocity_x = cling.wall_direction * maximum_speed * dt * rim_progress;
+                let target_velocity_x = horizontal * maximum_speed * dt * rim_progress;
                 velocity.x += (target_velocity_x - center_velocity.x).clamp(-steering, steering)
                     * rim_progress;
             } else {
@@ -705,18 +709,10 @@ impl Blob {
                 velocity.x += horizontal * steering * lower_weight * 0.65;
             } else if spider_cling.is_some() {
                 let offset = particle.position - center;
-                let tangential_input = if horizontal.abs() <= 0.01 {
-                    1.0
-                } else {
-                    horizontal * spider_cling.expect("wall adhesion").wall_direction
-                };
-                // Wall contact mirrors the ground-contact orientation: use
-                // the opposite sign so deployed spines advance into the wall
-                // instead of visually rolling away from their grip.
-                let target_angular_displacement = -tangential_input
-                    * spider_cling.expect("wall adhesion").wall_direction
-                    * GROUND_ROLL_RATE
-                    * dt;
+                let tangential_input = horizontal;
+                // The input owns the rotation direction. The wall only
+                // provides adhesion; it must not reverse A/D on either side.
+                let target_angular_displacement = -tangential_input * GROUND_ROLL_RATE * dt;
                 let angular_correction =
                     (target_angular_displacement - angular_displacement) * 0.34;
                 velocity += offset.perp() * angular_correction;

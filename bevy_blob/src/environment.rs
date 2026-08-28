@@ -32,6 +32,9 @@ pub(super) struct AvianMigratedSurface;
 #[derive(Component)]
 pub(super) struct LevelArtwork;
 
+#[derive(Component)]
+pub(super) struct ForegroundArtwork;
+
 #[derive(Resource)]
 pub(super) struct Level {
     _name: String,
@@ -542,9 +545,21 @@ fn spawn_level_artwork(commands: &mut Commands, asset_server: Option<&AssetServe
     let Some(asset_server) = asset_server else {
         return;
     };
-    for layer in level.visual_layers.iter().chain(&level.decorations) {
+    for layer in &level.visual_layers {
         commands.spawn((
             LevelArtwork,
+            Sprite {
+                image: asset_server.load(layer.image.clone()),
+                custom_size: Some(layer.size),
+                ..default()
+            },
+            Transform::from_translation(layer.position.extend(layer.depth)),
+        ));
+    }
+    for layer in &level.decorations {
+        commands.spawn((
+            LevelArtwork,
+            ForegroundArtwork,
             Sprite {
                 image: asset_server.load(layer.image.clone()),
                 custom_size: Some(layer.size),

@@ -1,8 +1,9 @@
 use super::*;
-use crate::environment::WastewaterEffects;
+use crate::environment::{GameLayer, WastewaterEffects};
 use crate::level_format::NutrientDefinition;
 use crate::palette;
-use crate::vitality::WASTEWATER_DAMAGE_PER_SECOND;
+use avian2d::dynamics::ccd::SweptCcd;
+use avian2d::prelude::{Collider, CollisionLayers, GravityScale, LinearVelocity, RigidBody};
 use bevy::{asset::RenderAssetUsages, mesh::Indices, render::render_resource::PrimitiveTopology};
 
 const ENGULF_DURATION: f32 = 1.25;
@@ -11,9 +12,10 @@ const EXPULSION_DURATION: f32 = 1.2;
 const INTERNAL_WASTE_DRAG: f32 = 2.2;
 // The procedural nutrient is an organic capsule whose nominal vertical extent
 // is 88% of its logical radius. The same contact profile is used against every
-// level collider to avoid an invisible gap around the rendered mesh.
+// level collider to avoid an invisible gap around the rendered mesh. The
+// small skin also covers Avian's resting-contact tolerance.
 const NUTRIENT_STRUCTURE_CONTACT_SCALE: f32 = 0.88;
-const NUTRIENT_STRUCTURE_VISUAL_OFFSET: f32 = 5.0 * DEFAULT_CREATURE_SCALE;
+const NUTRIENT_CONTACT_SKIN: f32 = 0.9;
 const ENERGY_YIELD: f32 = 0.46;
 const OBJECT_GRAVITY: f32 = 900.0;
 const PHAGOCYTOSIS_REACH: f32 = 44.0;
@@ -72,6 +74,11 @@ struct Nutrient {
     was_submerged: bool,
 }
 
+#[derive(Component)]
+pub(super) struct NutrientPhysics {
+    pub(super) index: usize,
+}
+
 impl Nutrient {
     fn is_edible(&self) -> bool {
         self.health > 0.001 && matches!(self.state, NutrientState::Available { .. })
@@ -94,6 +101,18 @@ pub(super) struct NutrientRenderAssets {
 }
 
 impl NutritionWorld {
+    pub(super) fn is_free_index(&self, index: usize) -> bool {
+        self.nutrients.get(index).is_some_and(|nutrient| {
+            matches!(
+                nutrient.state,
+                NutrientState::Available { .. } | NutrientState::Waste { .. }
+            )
+        })
+    }
+
+    pub(super) fn collision_radius(&self, index: usize) -> Option<f32> {
+        self.nutrients.get(index).map(free_nutrient_contact_radius)
+    }
     pub(super) fn reset_from_definitions(&mut self, definitions: &[NutrientDefinition]) {
         self.probe = None;
         self.nutrients = definitions
@@ -384,6 +403,23 @@ pub(super) fn setup_nutrition(
     let mut nutrient_mesh = empty_nutrient_mesh();
     update_nutrient_mesh(&mut nutrient_mesh, &nutrition.nutrients, slots, 0.0);
     commands.insert_resource(nutrition);
+    for (index, definition) in level.nutrients.iter().enumerate() {
+        commands.spawn((
+            NutrientPhysics { index },
+            RigidBody::Dynamic,
+            Collider::circle(nutrient_contact_radius(definition.radius)),
+            GravityScale(1.0),
+            CollisionLayers::new(
+                [GameLayer::Projectile],
+                [GameLayer::Environment, GameLayer::Projectile],
+            ),
+            LinearVelocity::ZERO,
+            // Expulsion can create short, high-speed trajectories. Swept CCD
+            // prevents the free nutrient from tunnelling through thin walls.
+            SweptCcd::default(),
+            Transform::from_xyz(definition.position.x, definition.position.y, 0.0),
+        ));
+    }
     let mesh = meshes.add(nutrient_mesh);
     commands.spawn((
         Mesh2d(mesh.clone()),
@@ -397,15 +433,66 @@ pub(super) fn setup_nutrition(
 pub(super) fn simulate_nutrition(
     time: Res<Time<Fixed>>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    mut blobs: ResMut<BlobWorld>,
+    blobs: Res<BlobWorld>,
     level: Res<Level>,
     mut vitality: ResMut<VitalityWorld>,
     mut nutrition: ResMut<NutritionWorld>,
     mut wastewater_effects: ResMut<WastewaterEffects>,
+    mut physics_nutrients: Query<(
+        &NutrientPhysics,
+        &mut Transform,
+        &mut LinearVelocity,
+        &mut Collider,
+    )>,
 ) {
     let dt = time.delta_secs();
     let elapsed = time.elapsed_secs();
     let rolling_command = movement_command(&keyboard);
+    // Avian owns free nutrient motion and its collision against the static
+    // level. The biological state machine reads that result below.
+    for (physics, transform, mut velocity, _) in &mut physics_nutrients {
+        let Some(nutrient) = nutrition.nutrients.get_mut(physics.index) else {
+            continue;
+        };
+        if matches!(
+            nutrient.state,
+            NutrientState::Available { .. } | NutrientState::Waste { .. }
+        ) {
+            nutrient.position = transform.translation.truncate();
+            match &mut nutrient.state {
+                NutrientState::Available { velocity: stored }
+                | NutrientState::Waste { velocity: stored } => *stored = velocity.0,
+                _ => {}
+            }
+            let entry_speed = (-velocity.0.y).max(0.0);
+            let surface = apply_avian_nutrient_water_forces(
+                nutrient.position,
+                free_nutrient_contact_radius(nutrient),
+                &mut velocity,
+                dt,
+                elapsed,
+                &level,
+            );
+            if let Some((area_index, surface_y)) = surface {
+                if !nutrient.was_submerged {
+                    wastewater_effects.emit(
+                        area_index,
+                        Vec2::new(nutrient.position.x, surface_y),
+                        nutrient.radius,
+                        (entry_speed / 180.0).clamp(0.35, 1.25),
+                    );
+                }
+                nutrient.was_submerged = true;
+            } else {
+                nutrient.was_submerged = false;
+            }
+            match &mut nutrient.state {
+                NutrientState::Available { velocity: stored }
+                | NutrientState::Waste { velocity: stored } => *stored = velocity.0,
+                _ => {}
+            }
+        }
+    }
     if let Some(mut probe) = nutrition.probe {
         if let Some(blob) = living_host(&blobs, &vitality, probe.blob_id) {
             probe.age += dt;
@@ -489,47 +576,7 @@ pub(super) fn simulate_nutrition(
     let mut interrupted_probe = None;
     for nutrient in &mut nutrition.nutrients {
         match nutrient.state {
-            NutrientState::Available { mut velocity } => {
-                let safe_position = nutrient.position;
-                integrate_free_object(
-                    &mut nutrient.position,
-                    nutrient.radius,
-                    &mut velocity,
-                    dt,
-                    &level,
-                );
-                push_free_object_from_blobs(
-                    &mut nutrient.position,
-                    nutrient.radius * NUTRIENT_STRUCTURE_CONTACT_SCALE,
-                    &mut velocity,
-                    &blobs,
-                );
-                // Blob contact is resolved after free-object integration and
-                // can push a small residue into its support. Level geometry
-                // has final authority, so restore a valid position before the
-                // frame ends.
-                resolve_free_object_environment(
-                    &mut nutrient.position,
-                    nutrient.radius * NUTRIENT_STRUCTURE_CONTACT_SCALE,
-                    &mut velocity,
-                    &level,
-                );
-                apply_nutrient_water_interaction(
-                    nutrient,
-                    &mut velocity,
-                    dt,
-                    elapsed,
-                    &level,
-                    &mut wastewater_effects,
-                );
-                keep_free_nutrient_in_safe_ring(
-                    nutrient,
-                    safe_position,
-                    nutrient.radius * NUTRIENT_STRUCTURE_CONTACT_SCALE,
-                    &mut velocity,
-                    &blobs,
-                    &level,
-                );
+            NutrientState::Available { velocity } => {
                 nutrient.state = NutrientState::Available { velocity };
             }
             NutrientState::Engulfing {
@@ -703,28 +750,11 @@ pub(super) fn simulate_nutrition(
                 nutrient.radius = nutrient.original_radius * 0.42;
                 velocity *= (-INTERNAL_WASTE_DRAG * dt).exp();
                 velocity.y -= OBJECT_GRAVITY * 0.10 * dt;
-                let previous_position = nutrient.position;
                 nutrient.position += velocity * dt;
                 let outside =
                     circle_outside_blob_membrane(nutrient.position, nutrient.radius, &blob.body);
                 nutrient.state = if outside {
-                    let contact_radius = nutrient.radius * NUTRIENT_STRUCTURE_CONTACT_SCALE;
-                    // An expelled residue becomes a free object at this exact
-                    // instant. Resolve the exit path immediately so it cannot
-                    // cross a nearby wall between the two states.
-                    resolve_free_object_platform_sweep(
-                        previous_position,
-                        &mut nutrient.position,
-                        contact_radius,
-                        &mut velocity,
-                        &level,
-                    );
-                    resolve_free_object_environment(
-                        &mut nutrient.position,
-                        contact_radius,
-                        &mut velocity,
-                        &level,
-                    );
+                    // From this instant the residue is a free Avian body.
                     NutrientState::Waste { velocity }
                 } else {
                     NutrientState::Expelling {
@@ -734,278 +764,85 @@ pub(super) fn simulate_nutrition(
                     }
                 };
             }
-            NutrientState::Waste { mut velocity } => {
-                let safe_position = nutrient.position;
-                let contact_radius = nutrient.radius * NUTRIENT_STRUCTURE_CONTACT_SCALE;
-                integrate_free_object(
-                    &mut nutrient.position,
-                    nutrient.radius,
-                    &mut velocity,
-                    dt,
-                    &level,
-                );
-                push_free_object_from_blobs(
-                    &mut nutrient.position,
-                    contact_radius,
-                    &mut velocity,
-                    &blobs,
-                );
-                resolve_free_object_environment(
-                    &mut nutrient.position,
-                    contact_radius,
-                    &mut velocity,
-                    &level,
-                );
-                apply_nutrient_water_interaction(
-                    nutrient,
-                    &mut velocity,
-                    dt,
-                    elapsed,
-                    &level,
-                    &mut wastewater_effects,
-                );
-                keep_free_nutrient_in_safe_ring(
-                    nutrient,
-                    safe_position,
-                    contact_radius,
-                    &mut velocity,
-                    &blobs,
-                    &level,
-                );
+            NutrientState::Waste { velocity } => {
                 nutrient.state = NutrientState::Waste { velocity };
             }
         }
     }
-    resolve_free_nutrient_collisions(&mut nutrition.nutrients);
-    // Nutrient-to-nutrient separation is the last interaction and can itself
-    // displace a small waste object into a nearby platform. Enforce the level
-    // boundary and the blob membrane once more so no later operation can
-    // leave it embedded. This is deliberately an exact membrane correction,
-    // not a visual safety margin.
-    for _ in 0..2 {
-        resolve_all_free_nutrients_environment(&mut nutrition.nutrients, &level);
-        resolve_all_free_nutrients_from_blobs(&mut nutrition.nutrients, &blobs);
+    // Free nutrients are now resolved by Avian together with the level.
+    for (physics, mut transform, mut velocity, mut collider) in &mut physics_nutrients {
+        let Some(nutrient) = nutrition.nutrients.get(physics.index) else {
+            continue;
+        };
+        match nutrient.state {
+            NutrientState::Engulfing { .. } | NutrientState::Digesting { .. } => {
+                // Once captured, the nutrient is carried by the blob's internal
+                // state machine rather than by the free-body simulation.
+                transform.translation = nutrient.position.extend(0.0);
+                velocity.0 = Vec2::ZERO;
+            }
+            NutrientState::Expelling {
+                velocity: outgoing, ..
+            } => {
+                transform.translation = nutrient.position.extend(0.0);
+                velocity.0 = outgoing;
+            }
+            NutrientState::Waste { velocity: outgoing } => {
+                // The first free-body frame begins at the point where the
+                // residue left the membrane. Subsequent frames are owned by
+                // Avian and must not be overwritten here.
+                if transform
+                    .translation
+                    .truncate()
+                    .distance_squared(nutrient.position)
+                    > 0.01
+                {
+                    transform.translation = nutrient.position.extend(0.0);
+                    velocity.0 = outgoing;
+                }
+                *collider = Collider::circle(free_nutrient_contact_radius(nutrient));
+            }
+            NutrientState::Available { .. } => {}
+        }
     }
-    resolve_all_free_nutrients_environment(&mut nutrition.nutrients, &level);
-    contain_free_nutrients_within_safety_bounds(&mut nutrition.nutrients, &level);
-    resolve_blobs_from_supported_waste(&mut blobs, &nutrition.nutrients, &level);
     if let Some(probe) = interrupted_probe {
         nutrition.probe = Some(probe);
     }
 }
 
-fn resolve_blobs_from_supported_waste(
-    blobs: &mut BlobWorld,
-    nutrients: &[Nutrient],
+/// Wastewater is a volume, not a solid collider. Avian owns the nutrient's
+/// position while this force supplies buoyancy and viscous drag inside it.
+fn apply_avian_nutrient_water_forces(
+    position: Vec2,
+    radius: f32,
+    velocity: &mut LinearVelocity,
+    dt: f32,
+    elapsed: f32,
     level: &Level,
-) {
-    for nutrient in nutrients {
-        if !matches!(nutrient.state, NutrientState::Waste { .. }) {
+) -> Option<(usize, f32)> {
+    for (area_index, area) in level.wastewater_areas.iter().enumerate() {
+        if !area.contains_x(position.x) {
             continue;
         }
-        let radius = free_nutrient_contact_radius(nutrient);
-        if !free_object_touches_environment(nutrient.position, radius, level) {
+        let surface = area.surface_y(position.x, elapsed);
+        let bottom = area.position.y - area.size.y * 0.5;
+        if position.y + radius < bottom || position.y - radius > surface {
             continue;
         }
-        for active_blob in &mut blobs.active {
-            // A supported residue cannot be displaced into its support. In
-            // that constrained case the reaction is applied to the blob,
-            // making the residue behave like a small scenario object.
-            for _ in 0..2 {
-                let Some((penetration, nutrient_escape_normal)) =
-                    circle_blob_penetration(nutrient.position, radius, &active_blob.body)
-                else {
-                    break;
-                };
-                let support_normal = -nutrient_escape_normal;
-                active_blob
-                    .body
-                    .translate(support_normal * (penetration + 0.05));
-                let inward_speed = active_blob.body.velocity().dot(support_normal);
-                if inward_speed < 0.0 {
-                    active_blob
-                        .body
-                        .add_velocity(-support_normal * inward_speed);
-                }
-            }
-        }
+        let submerged = ((surface - (position.y - radius)) / (radius * 2.0)).clamp(0.0, 1.0);
+        velocity.0.y += 1_150.0 * submerged * 1.28 * dt;
+        velocity.0 *= (-5.8 * submerged * dt).exp();
+        return Some((area_index, surface));
     }
-}
-
-fn free_object_touches_environment(position: Vec2, radius: f32, level: &Level) -> bool {
-    const CONTACT_TOLERANCE: f32 = 0.6;
-    level.platforms.iter().any(|platform| {
-        circle_aabb_penetration(
-            position,
-            radius + CONTACT_TOLERANCE,
-            platform.center,
-            platform.half_size + Vec2::splat(NUTRIENT_STRUCTURE_VISUAL_OFFSET),
-        )
-        .is_some()
-    }) || level.fixtures.iter().any(|vertices| {
-        circle_convex_penetration(
-            position,
-            radius + NUTRIENT_STRUCTURE_VISUAL_OFFSET + CONTACT_TOLERANCE,
-            vertices,
-        )
-        .is_some()
-    })
-}
-
-fn resolve_all_free_nutrients_environment(nutrients: &mut [Nutrient], level: &Level) {
-    for nutrient in nutrients {
-        let contact_radius = free_nutrient_contact_radius(nutrient);
-        let position = &mut nutrient.position;
-        let velocity = match &mut nutrient.state {
-            NutrientState::Available { velocity } | NutrientState::Waste { velocity } => velocity,
-            _ => continue,
-        };
-        resolve_free_object_environment(position, contact_radius, velocity, level);
-    }
-}
-
-/// Resolves any final displacement from nutrient-to-nutrient or world contact
-/// against the actual polygonal blob membrane.
-fn resolve_all_free_nutrients_from_blobs(nutrients: &mut [Nutrient], blobs: &BlobWorld) {
-    for nutrient in nutrients {
-        let contact_radius = free_nutrient_contact_radius(nutrient);
-        let Some(velocity) = free_nutrient_velocity(&mut nutrient.state) else {
-            continue;
-        };
-
-        // A correction can expose a second nearby blob, hence the bounded
-        // passes. It remains deterministic and avoids a nutrient tunnelling
-        // through one blob while being pushed away from another.
-        for _ in 0..3 {
-            push_free_object_from_blobs(&mut nutrient.position, contact_radius, velocity, blobs);
-        }
-    }
-}
-
-fn contain_free_nutrients_within_safety_bounds(nutrients: &mut [Nutrient], level: &Level) {
-    let Some(bounds) = level.safety_bounds else {
-        return;
-    };
-    for nutrient in nutrients {
-        let radius = free_nutrient_contact_radius(nutrient);
-        let Some(velocity) = free_nutrient_velocity(&mut nutrient.state) else {
-            continue;
-        };
-        let minimum = bounds.min + Vec2::splat(radius);
-        let maximum = bounds.max - Vec2::splat(radius);
-        let clamped = nutrient.position.clamp(minimum, maximum);
-        if clamped.x != nutrient.position.x {
-            velocity.x = 0.0;
-        }
-        if clamped.y != nutrient.position.y {
-            velocity.y = 0.0;
-        }
-        nutrient.position = clamped;
-    }
-}
-
-/// Uses an inexpensive ring of invisible samples as a final safety envelope.
-/// The analytic circle collision remains the primary solver; this only catches
-/// state-transition and blob-push edge cases before they become visible.
-fn keep_free_nutrient_in_safe_ring(
-    nutrient: &mut Nutrient,
-    safe_position: Vec2,
-    contact_radius: f32,
-    velocity: &mut Vec2,
-    blobs: &BlobWorld,
-    level: &Level,
-) {
-    if !nutrient_safety_ring_hits(nutrient.position, contact_radius, blobs, level) {
-        return;
-    }
-    nutrient.position = safe_position;
-    nutrient.was_submerged = false;
-    *velocity *= 0.0;
-}
-
-fn nutrient_safety_ring_hits(
-    center: Vec2,
-    contact_radius: f32,
-    blobs: &BlobWorld,
-    level: &Level,
-) -> bool {
-    const SAMPLE_COUNT: usize = 12;
-    let ring_radius = contact_radius * 0.82;
-    (0..SAMPLE_COUNT).any(|index| {
-        let angle = index as f32 / SAMPLE_COUNT as f32 * std::f32::consts::TAU;
-        let point = center + Vec2::from_angle(angle) * ring_radius;
-        level.platforms.iter().any(|platform| {
-            let half_size = platform.half_size + Vec2::splat(NUTRIENT_STRUCTURE_VISUAL_OFFSET);
-            let delta = point - platform.center;
-            delta.x.abs() < half_size.x && delta.y.abs() < half_size.y
-        }) || level
-            .fixtures
-            .iter()
-            .any(|vertices| point_inside_convex(point, vertices))
-            || blobs
-                .active
-                .iter()
-                .any(|blob| point_inside_blob_membrane(point, &blob.body))
-    })
-}
-
-fn resolve_free_nutrient_collisions(nutrients: &mut [Nutrient]) {
-    for first_index in 0..nutrients.len() {
-        let (before_second, from_second) = nutrients.split_at_mut(first_index + 1);
-        let first = &mut before_second[first_index];
-        let first_contact_radius = free_nutrient_contact_radius(first);
-        let Some(first_velocity) = free_nutrient_velocity(&mut first.state) else {
-            continue;
-        };
-        for (offset, second) in from_second.iter_mut().enumerate() {
-            let second_contact_radius = free_nutrient_contact_radius(second);
-            let Some(second_velocity) = free_nutrient_velocity(&mut second.state) else {
-                continue;
-            };
-            let delta = second.position - first.position;
-            let minimum_distance = first_contact_radius + second_contact_radius;
-            if delta.length_squared() >= minimum_distance * minimum_distance {
-                continue;
-            }
-            let fallback = if (first_index + offset) & 1 == 0 {
-                Vec2::X
-            } else {
-                Vec2::Y
-            };
-            let normal = delta.normalize_or(fallback);
-            let distance = delta.length();
-            let first_mass = first.radius * first.radius;
-            let second_mass = second.radius * second.radius;
-            let total_mass = (first_mass + second_mass).max(0.001);
-            let overlap = minimum_distance - distance;
-            first.position -= normal * overlap * second_mass / total_mass;
-            second.position += normal * overlap * first_mass / total_mass;
-
-            let relative_speed = (*second_velocity - *first_velocity).dot(normal);
-            if relative_speed < 0.0 {
-                const RESTITUTION: f32 = 0.12;
-                let impulse =
-                    -(1.0 + RESTITUTION) * relative_speed / (1.0 / first_mass + 1.0 / second_mass);
-                *first_velocity -= normal * impulse / first_mass;
-                *second_velocity += normal * impulse / second_mass;
-            }
-        }
-    }
+    None
 }
 
 fn free_nutrient_contact_radius(nutrient: &Nutrient) -> f32 {
-    if matches!(nutrient.state, NutrientState::Waste { .. }) {
-        nutrient.radius * NUTRIENT_STRUCTURE_CONTACT_SCALE
-    } else {
-        nutrient.radius
-    }
+    nutrient_contact_radius(nutrient.radius)
 }
 
-fn free_nutrient_velocity(state: &mut NutrientState) -> Option<&mut Vec2> {
-    match state {
-        NutrientState::Available { velocity } | NutrientState::Waste { velocity } => Some(velocity),
-        _ => None,
-    }
+fn nutrient_contact_radius(radius: f32) -> f32 {
+    radius * NUTRIENT_STRUCTURE_CONTACT_SCALE + NUTRIENT_CONTACT_SKIN
 }
 
 fn movement_command(keyboard: &ButtonInput<KeyCode>) -> bool {
@@ -1258,35 +1095,15 @@ fn host_side(blob_id: u64) -> f32 {
     if blob_id & 1 == 0 { 1.0 } else { -1.0 }
 }
 
-fn push_free_object_from_blobs(
-    position: &mut Vec2,
-    radius: f32,
-    velocity: &mut Vec2,
-    blobs: &BlobWorld,
-) {
-    for blob in &blobs.active {
-        let Some((penetration, normal)) = circle_blob_penetration(*position, radius, &blob.body)
-        else {
-            continue;
-        };
-        *position += normal * penetration;
-
-        // Remove only inward relative motion. This keeps a resting residue in
-        // visible contact with a deforming membrane without repeatedly kicking
-        // it away from the blob.
-        let membrane_velocity = blob.body.velocity() * 28.0;
-        let inward_speed = (*velocity - membrane_velocity).dot(normal);
-        if inward_speed < 0.0 {
-            *velocity -= normal * inward_speed;
-        }
-    }
-}
-
 /// Exact circle-versus-membrane correction used by expelled nutrients.
 ///
 /// The old rest-radius approximation created a large invisible collision halo,
 /// particularly around squashed or stretched blobs.
-fn circle_blob_penetration(center: Vec2, radius: f32, blob: &Blob) -> Option<(f32, Vec2)> {
+pub(super) fn circle_blob_penetration(
+    center: Vec2,
+    radius: f32,
+    blob: &Blob,
+) -> Option<(f32, Vec2)> {
     let mut nearest_point = blob.center();
     let mut nearest_distance_squared = f32::INFINITY;
     for (first, second) in blob
@@ -1322,199 +1139,6 @@ fn circle_blob_penetration(center: Vec2, radius: f32, blob: &Blob) -> Option<(f3
 fn make_waste(nutrient: &mut Nutrient, velocity: Vec2) {
     nutrient.radius = nutrient.original_radius * 0.42;
     nutrient.state = NutrientState::Waste { velocity };
-}
-
-fn integrate_free_object(
-    position: &mut Vec2,
-    radius: f32,
-    velocity: &mut Vec2,
-    dt: f32,
-    level: &Level,
-) {
-    let contact_radius = radius * NUTRIENT_STRUCTURE_CONTACT_SCALE;
-    velocity.y -= OBJECT_GRAVITY * dt;
-    *velocity *= 0.995;
-    let travel = velocity.length() * dt;
-    let steps = (travel / (radius * 0.35).max(1.5)).ceil().clamp(1.0, 64.0) as usize;
-    let step_dt = dt / steps as f32;
-    for _ in 0..steps {
-        let previous = *position;
-        *position += *velocity * step_dt;
-        resolve_free_object_platform_sweep(previous, position, contact_radius, velocity, level);
-        resolve_free_object_environment(position, contact_radius, velocity, level);
-    }
-}
-
-/// Stops a free nutrient on the entry face of every rectangular collider.
-/// This continuous test is a final safeguard for high-speed expulsions and
-/// tiny split fragments: an end-position overlap alone could miss a thin wall.
-fn resolve_free_object_platform_sweep(
-    previous: Vec2,
-    position: &mut Vec2,
-    contact_radius: f32,
-    velocity: &mut Vec2,
-    level: &Level,
-) {
-    let padding = contact_radius + NUTRIENT_STRUCTURE_VISUAL_OFFSET;
-    let hit = level
-        .platforms
-        .iter()
-        .filter_map(|platform| {
-            let min = platform.center - platform.half_size - Vec2::splat(padding);
-            let max = platform.center + platform.half_size + Vec2::splat(padding);
-            swept_point_aabb_entry(previous, *position, min, max)
-        })
-        .min_by(|first, second| first.0.total_cmp(&second.0));
-    let Some((time, normal)) = hit else {
-        return;
-    };
-    *position = previous.lerp(*position, time) + normal * 0.001;
-    resolve_object_velocity(velocity, normal);
-}
-
-fn swept_point_aabb_entry(start: Vec2, end: Vec2, min: Vec2, max: Vec2) -> Option<(f32, Vec2)> {
-    let direction = end - start;
-    let mut near = 0.0_f32;
-    let mut far = 1.0_f32;
-    let mut entry_normal = Vec2::ZERO;
-    for (origin, delta, min_axis, max_axis, negative_normal, positive_normal) in [
-        (start.x, direction.x, min.x, max.x, Vec2::NEG_X, Vec2::X),
-        (start.y, direction.y, min.y, max.y, Vec2::NEG_Y, Vec2::Y),
-    ] {
-        if delta.abs() < 0.000_01 {
-            if origin < min_axis || origin > max_axis {
-                return None;
-            }
-            continue;
-        }
-        let first = (min_axis - origin) / delta;
-        let second = (max_axis - origin) / delta;
-        let axis_near = first.min(second);
-        let axis_far = first.max(second);
-        if axis_near > near {
-            near = axis_near;
-            entry_normal = if first < second {
-                negative_normal
-            } else {
-                positive_normal
-            };
-        }
-        far = far.min(axis_far);
-        if near > far {
-            return None;
-        }
-    }
-    (far >= 0.0 && near <= 1.0).then_some((near.clamp(0.0, 1.0), entry_normal))
-}
-
-fn resolve_free_object_environment(
-    position: &mut Vec2,
-    contact_radius: f32,
-    velocity: &mut Vec2,
-    level: &Level,
-) {
-    // Ink platforms are expanded by this skin in every direction so their
-    // visible contour matches blob contact. Nutrients use the same contour.
-    for platform in &level.platforms {
-        if let Some((depth, normal)) = circle_aabb_penetration(
-            *position,
-            contact_radius,
-            platform.center,
-            platform.half_size + Vec2::splat(NUTRIENT_STRUCTURE_VISUAL_OFFSET),
-        ) {
-            *position += normal * depth;
-            resolve_object_velocity(velocity, normal);
-        }
-    }
-    for vertices in &level.fixtures {
-        // Polygon artwork is expanded outward by the same visual offset.
-        if let Some((depth, normal)) = circle_convex_penetration(
-            *position,
-            contact_radius + NUTRIENT_STRUCTURE_VISUAL_OFFSET,
-            vertices,
-        ) {
-            *position += normal * depth;
-            resolve_object_velocity(velocity, normal);
-        }
-    }
-}
-
-fn apply_nutrient_water_interaction(
-    nutrient: &mut Nutrient,
-    velocity: &mut Vec2,
-    dt: f32,
-    elapsed: f32,
-    level: &Level,
-    effects: &mut WastewaterEffects,
-) {
-    let entry_speed = (-velocity.y).max(0.0);
-    let surface = apply_wastewater_buoyancy(
-        &mut nutrient.position,
-        nutrient.radius,
-        velocity,
-        dt,
-        elapsed,
-        level,
-    );
-    if let Some((area_index, surface_y)) = surface
-        && !nutrient.was_submerged
-    {
-        let strength = (entry_speed / 180.0).clamp(0.35, 1.35);
-        effects.emit(
-            area_index,
-            Vec2::new(nutrient.position.x, surface_y),
-            nutrient.radius,
-            strength,
-        );
-    }
-    if surface.is_some() {
-        nutrient.health = (nutrient.health - WASTEWATER_DAMAGE_PER_SECOND * dt).max(0.0);
-    }
-    nutrient.was_submerged = surface.is_some();
-}
-
-fn apply_wastewater_buoyancy(
-    position: &mut Vec2,
-    radius: f32,
-    velocity: &mut Vec2,
-    dt: f32,
-    elapsed: f32,
-    level: &Level,
-) -> Option<(usize, f32)> {
-    for (area_index, area) in level.wastewater_areas.iter().enumerate() {
-        if !area.contains_x(position.x) {
-            continue;
-        }
-        let surface_y = area.surface_y(position.x, elapsed);
-        let bottom_y = area.position.y - area.size.y * 0.5;
-        if position.y - radius >= surface_y || position.y + radius <= bottom_y {
-            continue;
-        }
-
-        let submerged = ((surface_y - (position.y - radius)) / (radius * 2.0)).clamp(0.0, 1.0);
-        let previous_surface = area.surface_y(position.x, (elapsed - dt).max(0.0));
-        let water_vertical_speed = (surface_y - previous_surface) / dt.max(0.000_001);
-        let water_horizontal_speed =
-            (position.x * 0.009 + elapsed * area.wave_speed * 0.7).sin() * 7.0;
-
-        // A density ratio above two leaves roughly one third of the capsule
-        // immersed. Drag makes it follow the wave without locking it to a
-        // prescribed height.
-        velocity.y += OBJECT_GRAVITY * 2.35 * submerged.powf(0.82) * dt;
-        let drag = 1.0 - (-12.0 * submerged.sqrt() * dt).exp();
-        velocity.x += (water_horizontal_speed - velocity.x) * drag * 0.72;
-        velocity.y += (water_vertical_speed - velocity.y) * drag;
-        return Some((area_index, surface_y));
-    }
-    None
-}
-
-fn resolve_object_velocity(velocity: &mut Vec2, normal: Vec2) {
-    let normal_speed = velocity.dot(normal);
-    if normal_speed < 0.0 {
-        *velocity -= normal * normal_speed * 1.08;
-        *velocity *= 0.82;
-    }
 }
 
 fn circle_aabb_penetration(
@@ -1654,6 +1278,17 @@ fn append_nutrient_mesh(
     let pulse_phase = pulse_cycle.fract();
     let pulse = (pulse_phase * std::f32::consts::PI).sin().powi(2) * activity;
     let lobe_angle = (pulse_cycle.floor() * 2.17 + seed * 1.31).rem_euclid(std::f32::consts::TAU);
+    // The procedural mesh has no entity transform of its own. Derive a
+    // stable rolling phase from the Avian-driven world position so the visual
+    // capsule turns as it travels instead of merely translating.
+    let rolling_phase = match nutrient.state {
+        // Internal nutrients are anchored to the blob: translating with it
+        // must not make their visible pattern look like it is rolling.
+        NutrientState::Engulfing { .. } | NutrientState::Digesting { .. } => 0.0,
+        NutrientState::Available { .. }
+        | NutrientState::Expelling { .. }
+        | NutrientState::Waste { .. } => -nutrient.position.x * 0.052 + nutrient.position.y * 0.009,
+    };
     let pulsed_body = mix_rgba(body, energy, pulse * 0.15);
     let pulsed_center = mix_rgba(center, energy, pulse * 0.23);
     let first = positions.len() as u32;
@@ -1670,7 +1305,7 @@ fn append_nutrient_mesh(
             * nutrient.radius
             * irregularity
             * (1.0 + pulse * lobe * 0.20);
-        outline.push(nutrient.position + local);
+        outline.push(nutrient.position + Vec2::from_angle(rolling_phase).rotate(local));
     }
     for point in &outline {
         let inner = nutrient.position + (*point - nutrient.position) * 0.78;
@@ -1695,8 +1330,11 @@ fn append_nutrient_mesh(
     for nodule in 0..4 {
         let angle = seed * (0.71 + nodule as f32 * 0.13) + nodule as f32 * 1.67;
         let distance = nutrient.radius * (0.22 + nodule as f32 * 0.055);
-        let nodule_center =
-            nutrient.position + Vec2::new(angle.cos() * distance, angle.sin() * distance * 0.72);
+        let nodule_center = nutrient.position
+            + Vec2::from_angle(rolling_phase).rotate(Vec2::new(
+                angle.cos() * distance,
+                angle.sin() * distance * 0.72,
+            ));
         let radius = nutrient.radius
             * (0.075 + nodule as f32 * 0.012)
             * (1.0 + (elapsed * 2.2 + angle).sin() * 0.10 * activity + pulse * 0.24);
@@ -1826,196 +1464,7 @@ fn with_opacity(mut color: [f32; 4], opacity: f32) -> [f32; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::level_format::{NutrientDefinition, WastewaterAreaDefinition};
-
-    #[test]
-    fn nutrient_settles_near_the_animated_water_surface() {
-        let mut level = Level::from_test_geometry(Vec::new(), Vec::new());
-        level.wastewater_areas.push(WastewaterAreaDefinition {
-            position: Vec2::new(0.0, -100.0),
-            size: Vec2::new(500.0, 100.0),
-            color: palette::DEFAULT_WASTEWATER,
-            wave_height: 4.0,
-            wave_speed: 0.4,
-            depth: -0.12,
-            bubbles: None,
-            immune_family: None,
-        });
-        let mut position = Vec2::new(0.0, 20.0);
-        let mut velocity = Vec2::ZERO;
-        let radius = 10.0;
-        let dt = 1.0 / 120.0;
-        for step in 0..1_200 {
-            let elapsed = step as f32 * dt;
-            integrate_free_object(&mut position, radius, &mut velocity, dt, &level);
-            apply_wastewater_buoyancy(&mut position, radius, &mut velocity, dt, elapsed, &level);
-        }
-
-        let surface = level.wastewater_areas[0].surface_y(position.x, 1_200.0 * dt);
-        assert!(position.y > surface - radius * 0.8);
-        assert!(position.y < surface + radius * 1.1);
-        assert!(velocity.length() < 35.0);
-    }
-
-    #[test]
-    fn nutrient_emits_one_effect_when_crossing_the_surface() {
-        let mut level = Level::from_test_geometry(Vec::new(), Vec::new());
-        level.wastewater_areas.push(WastewaterAreaDefinition {
-            position: Vec2::new(0.0, -100.0),
-            size: Vec2::new(500.0, 100.0),
-            color: palette::DEFAULT_WASTEWATER,
-            wave_height: 4.0,
-            wave_speed: 0.4,
-            depth: -0.12,
-            bubbles: None,
-            immune_family: None,
-        });
-        let surface = level.wastewater_areas[0].surface_y(0.0, 0.0);
-        let mut nutrient = Nutrient {
-            position: Vec2::new(0.0, surface + 8.0),
-            radius: 10.0,
-            original_radius: 10.0,
-            health: 1.0,
-            state: NutrientState::Available {
-                velocity: Vec2::new(0.0, -160.0),
-            },
-            was_submerged: false,
-        };
-        let mut velocity = Vec2::new(0.0, -160.0);
-        let mut effects = WastewaterEffects::default();
-
-        apply_nutrient_water_interaction(
-            &mut nutrient,
-            &mut velocity,
-            1.0 / 120.0,
-            0.0,
-            &level,
-            &mut effects,
-        );
-        apply_nutrient_water_interaction(
-            &mut nutrient,
-            &mut velocity,
-            1.0 / 120.0,
-            1.0 / 120.0,
-            &level,
-            &mut effects,
-        );
-
-        assert_eq!(effects.pending.len(), 1);
-        assert_eq!(effects.ripples.len(), 1);
-    }
-
-    #[test]
-    fn wastewater_depletes_an_available_nutrient_and_stops_its_activity() {
-        let mut level = Level::from_test_geometry(Vec::new(), Vec::new());
-        level.wastewater_areas.push(WastewaterAreaDefinition {
-            position: Vec2::new(0.0, -100.0),
-            size: Vec2::new(500.0, 100.0),
-            color: palette::DEFAULT_WASTEWATER,
-            wave_height: 0.0,
-            wave_speed: 0.4,
-            depth: -0.12,
-            bubbles: None,
-            immune_family: None,
-        });
-        let mut nutrient = Nutrient {
-            position: Vec2::new(0.0, -100.0),
-            radius: 10.0,
-            original_radius: 10.0,
-            health: 1.0,
-            state: NutrientState::Available {
-                velocity: Vec2::ZERO,
-            },
-            was_submerged: false,
-        };
-        let mut velocity = Vec2::ZERO;
-        let mut effects = WastewaterEffects::default();
-
-        apply_nutrient_water_interaction(
-            &mut nutrient,
-            &mut velocity,
-            4.0,
-            0.0,
-            &level,
-            &mut effects,
-        );
-
-        assert_eq!(nutrient.health, 0.0);
-        assert!(!nutrient.is_edible());
-        assert_eq!(nutrient_palette(&nutrient).4, 0.0);
-    }
-
-    #[test]
-    fn free_nutrients_separate_and_exchange_normal_velocity() {
-        let mut nutrients = [
-            Nutrient {
-                position: Vec2::ZERO,
-                radius: 10.0,
-                original_radius: 10.0,
-                health: 1.0,
-                state: NutrientState::Available {
-                    velocity: Vec2::new(20.0, 0.0),
-                },
-                was_submerged: false,
-            },
-            Nutrient {
-                position: Vec2::new(12.0, 0.0),
-                radius: 8.0,
-                original_radius: 8.0,
-                health: 1.0,
-                state: NutrientState::Available {
-                    velocity: Vec2::new(-5.0, 0.0),
-                },
-                was_submerged: false,
-            },
-        ];
-
-        resolve_free_nutrient_collisions(&mut nutrients);
-
-        assert!(nutrients[0].position.distance(nutrients[1].position) >= 18.0 - 0.001);
-        let NutrientState::Available { velocity: first } = nutrients[0].state else {
-            unreachable!();
-        };
-        let NutrientState::Available { velocity: second } = nutrients[1].state else {
-            unreachable!();
-        };
-        assert!(first.x < 20.0);
-        assert!(second.x > -5.0);
-    }
-
-    #[test]
-    fn digested_nutrients_use_their_visible_contact_radius() {
-        let radius = 10.0;
-        let visible_radius = radius * NUTRIENT_STRUCTURE_CONTACT_SCALE;
-        let mut nutrients = [
-            Nutrient {
-                position: Vec2::ZERO,
-                radius,
-                original_radius: 24.0,
-                health: 1.0,
-                state: NutrientState::Waste {
-                    velocity: Vec2::ZERO,
-                },
-                was_submerged: false,
-            },
-            Nutrient {
-                position: Vec2::new(visible_radius * 2.0 + 0.1, 0.0),
-                radius,
-                original_radius: 24.0,
-                health: 1.0,
-                state: NutrientState::Waste {
-                    velocity: Vec2::ZERO,
-                },
-                was_submerged: false,
-            },
-        ];
-        let positions_before = [nutrients[0].position, nutrients[1].position];
-
-        resolve_free_nutrient_collisions(&mut nutrients);
-
-        assert_eq!(nutrients[0].position, positions_before[0]);
-        assert_eq!(nutrients[1].position, positions_before[1]);
-    }
+    use crate::level_format::NutrientDefinition;
 
     #[test]
     fn nutrient_render_is_a_filled_capsule_with_energy_nodules() {
@@ -2151,112 +1600,6 @@ mod tests {
         let (depth, normal) = circle_convex_penetration(Vec2::ZERO, 5.0, &fixture).unwrap();
         let projected = normal * depth;
         assert!(circle_convex_penetration(projected, 5.0, &fixture).is_none());
-    }
-
-    #[test]
-    fn nutrient_structure_contact_matches_its_visible_capsule_height() {
-        let radius = 10.0;
-        let contact_radius = radius * NUTRIENT_STRUCTURE_CONTACT_SCALE;
-        let platform_center = Vec2::ZERO;
-        let platform_half_size = Vec2::new(30.0, 5.0);
-        let touching_center = Vec2::new(0.0, platform_half_size.y + contact_radius);
-
-        assert!(
-            circle_aabb_penetration(
-                touching_center + Vec2::Y * 0.01,
-                contact_radius,
-                platform_center,
-                platform_half_size,
-            )
-            .is_none()
-        );
-        assert!(
-            circle_aabb_penetration(
-                touching_center - Vec2::Y * 0.01,
-                contact_radius,
-                platform_center,
-                platform_half_size,
-            )
-            .is_some()
-        );
-
-        let trapezoid = [
-            Vec2::new(-30.0, -5.0),
-            Vec2::new(30.0, -5.0),
-            Vec2::new(20.0, 5.0),
-            Vec2::new(-20.0, 5.0),
-        ];
-        assert!(circle_convex_penetration(touching_center, contact_radius, &trapezoid).is_none());
-        assert!(
-            circle_convex_penetration(
-                touching_center - Vec2::Y * 0.01,
-                contact_radius,
-                &trapezoid,
-            )
-            .is_some()
-        );
-    }
-
-    #[test]
-    fn final_environment_pass_prevents_waste_from_being_pushed_below_a_platform() {
-        let platform = Platform {
-            center: Vec2::ZERO,
-            half_size: Vec2::new(40.0, 5.0),
-        };
-        let level = Level::from_test_geometry(vec![platform], Vec::new());
-        let contact_radius = 4.0;
-        let visual_top =
-            platform.center.y + NUTRIENT_STRUCTURE_VISUAL_OFFSET + platform.half_size.y;
-        let mut position = Vec2::new(0.0, visual_top + contact_radius - 2.0);
-        let mut velocity = Vec2::new(0.0, -30.0);
-
-        resolve_free_object_environment(&mut position, contact_radius, &mut velocity, &level);
-
-        assert!(position.y - contact_radius >= visual_top - 0.001);
-        assert!(velocity.y >= -0.001);
-    }
-
-    #[test]
-    fn supported_waste_pushes_back_on_a_blob_when_it_cannot_escape() {
-        let platform = Platform {
-            center: Vec2::ZERO,
-            half_size: Vec2::new(40.0, 5.0),
-        };
-        let level = Level::from_test_geometry(vec![platform], Vec::new());
-        let radius = 4.0;
-        let visual_top =
-            platform.center.y + NUTRIENT_STRUCTURE_VISUAL_OFFSET + platform.half_size.y;
-        let nutrient = Nutrient {
-            position: Vec2::new(0.0, visual_top + radius),
-            radius: radius / NUTRIENT_STRUCTURE_CONTACT_SCALE,
-            original_radius: 10.0,
-            health: 1.0,
-            state: NutrientState::Waste {
-                velocity: Vec2::ZERO,
-            },
-            was_submerged: false,
-        };
-        let mut world = BlobWorld {
-            active: vec![ActiveBlob {
-                id: 0,
-                parent_id: None,
-                body: Blob::new(Vec2::new(0.0, visual_top + radius + 22.0), 20.0),
-            }],
-            selected: 0,
-            rejoin_parent: None,
-            rejoin_elapsed: 0.0,
-            parent_links: HashMap::new(),
-            next_id: 1,
-        };
-        assert!(
-            circle_blob_penetration(nutrient.position, radius, &world.active[0].body).is_some()
-        );
-
-        resolve_blobs_from_supported_waste(&mut world, &[nutrient], &level);
-
-        assert!(
-            circle_blob_penetration(nutrient.position, radius, &world.active[0].body).is_none()
-        );
     }
 
     #[test]

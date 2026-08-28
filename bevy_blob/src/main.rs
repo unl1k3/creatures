@@ -13,8 +13,9 @@ mod vitality;
 
 use acid::{AcidWorld, draw_acid, fire_acid, simulate_acid};
 use avian2d::collision::collider::contact_query::contact_manifolds;
+use avian2d::prelude::LinearVelocity;
 use avian2d::prelude::PhysicsPlugins;
-use avian2d::prelude::{Collider, ContactManifold};
+use avian2d::prelude::{Collider, ContactManifold, Gravity};
 use bevy::{
     app::AppExit,
     diagnostic::FrameTimeDiagnosticsPlugin,
@@ -35,14 +36,15 @@ use hud::{arrange_auxiliary_windows, setup_legend, toggle_legend, update_metrics
 use input::next_selection;
 use input::{cycle_selection, exit_on_escape, handle_blob_actions};
 use nutrition::{
-    NutritionWorld, draw_nutrition, setup_nutrition, simulate_nutrition, start_phagocytosis,
+    NutrientPhysics, NutritionWorld, circle_blob_penetration, draw_nutrition, setup_nutrition,
+    simulate_nutrition, start_phagocytosis,
 };
 #[cfg(test)]
 use rendering::blob_family_color;
 use rendering::{
     InkStylePreview, draw_world, setup_ambient_drop_assets, simulate_ambient_drops,
     simulate_wastewater, simulate_wastewater_bubbles, simulate_wastewater_impacts,
-    sync_blob_meshes, sync_ink_preview, sync_route_markers, toggle_ink_style,
+    sync_blob_meshes, sync_ink_preview, sync_route_markers, toggle_foreground, toggle_ink_style,
 };
 use shield::{ShieldWorld, simulate_shields, spider_climb_anchor_direction};
 use std::{
@@ -114,6 +116,7 @@ fn main() {
             ..default()
         }))
         .add_plugins(PhysicsPlugins::default().with_length_unit(100.0))
+        .insert_resource(Gravity(Vec2::new(0.0, -1_150.0)))
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_systems(
             Startup,
@@ -173,6 +176,7 @@ fn main() {
             )
                 .chain(),
         )
+        .add_systems(Update, toggle_foreground)
         .run();
 }
 
@@ -210,6 +214,7 @@ fn simulate_blob(
     mut vitality: ResMut<VitalityWorld>,
     mut blobs: ResMut<BlobWorld>,
     mut wastewater_effects: ResMut<WastewaterEffects>,
+    mut nutrient_bodies: Query<(&NutrientPhysics, &mut Transform, &mut LinearVelocity)>,
 ) {
     advance_rejoin_timeout(&mut blobs, time.delta_secs());
 
@@ -275,6 +280,28 @@ fn simulate_blob(
             alive,
             true,
         );
+        for (nutrient, mut transform, mut velocity) in &mut nutrient_bodies {
+            if !nutrition.is_free_index(nutrient.index) {
+                continue;
+            }
+            let center = transform.translation.truncate();
+            let Some(radius) = nutrition.collision_radius(nutrient.index) else {
+                continue;
+            };
+            let Some((depth, normal)) = circle_blob_penetration(center, radius, &active_blob.body)
+            else {
+                continue;
+            };
+            // The nutrient is owned by Avian: release it from the membrane by
+            // moving its physics body, then give the soft body a small equal
+            // reaction without translating the whole blob rigidly.
+            transform.translation += (normal * (depth + 0.15)).extend(0.0);
+            let inward = velocity.0.dot(normal);
+            if inward < 0.0 {
+                velocity.0 -= normal * inward;
+            }
+            active_blob.body.add_velocity(-normal * depth * 0.10);
+        }
         let water_contact =
             level
                 .wastewater_areas

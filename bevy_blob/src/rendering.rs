@@ -1,5 +1,5 @@
 use super::*;
-use crate::environment::LevelArtwork;
+use crate::environment::{ForegroundArtwork, LevelArtwork};
 use crate::level_format::LightDefinition;
 use crate::palette as game_palette;
 use crate::shield::shield_spine_fans;
@@ -23,6 +23,9 @@ pub(super) struct InkPreviewShape {
     scenario: u8,
 }
 
+#[derive(Component)]
+pub(super) struct InkForeground;
+
 pub(super) fn toggle_ink_style(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut ink_style: ResMut<InkStylePreview>,
@@ -43,6 +46,23 @@ pub(super) fn toggle_ink_style(
             Visibility::Hidden
         } else {
             Visibility::Inherited
+        };
+    }
+}
+
+/// G toggles only decorative foreground artwork, useful while testing
+/// collisions without obscuring the playable scene.
+pub(super) fn toggle_foreground(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut foreground: Query<&mut Visibility, Or<(With<ForegroundArtwork>, With<InkForeground>)>>,
+) {
+    if !keyboard.just_pressed(KeyCode::KeyG) {
+        return;
+    }
+    for mut visibility in &mut foreground {
+        *visibility = match *visibility {
+            Visibility::Hidden => Visibility::Inherited,
+            _ => Visibility::Hidden,
         };
     }
 }
@@ -95,6 +115,7 @@ pub(super) fn sync_ink_preview(
             InkPreviewShape {
                 scenario: scenario.0,
             },
+            InkForeground,
             Sprite {
                 image: asset_server
                     .load("levels/sewer_01/ink_sample/foreground-v6-integrated-alpha.png"),
