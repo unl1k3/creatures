@@ -1,0 +1,8 @@
+{"version":1,"name":"Supports lab","size":{"x":760,"y":900},"center":{"x":0,"y":0},"spawn":{"x":-320,"y":-285},"colliders":[
+{"shape":"rectangle","id":"floor","position":{"x":0,"y":-370},"size":{"x":760,"y":38}},
+{"shape":"rectangle","id":"pedestal_a","position":{"x":-245,"y":-265},"size":{"x":70,"y":170}},
+{"shape":"rectangle","id":"pedestal_b","position":{"x":-105,"y":-315},"size":{"x":105,"y":70}},
+{"shape":"rectangle","id":"pedestal_c","position":{"x":10,"y":-270},"size":{"x":105,"y":160}},
+{"shape":"rectangle","id":"pedestal_d","position":{"x":170,"y":-225},"size":{"x":105,"y":250}},
+{"shape":"rectangle","id":"exit","position":{"x":295,"y":55},"size":{"x":120,"y":28}}],
+"route":[{"x":-320,"y":-285},{"x":-245,"y":-140},{"x":-105,"y":-240},{"x":10,"y":-150},{"x":170,"y":-60},{"x":295,"y":110}]}

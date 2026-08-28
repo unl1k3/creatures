@@ -25,7 +25,10 @@
     { "shape": "rectangle", "id": "coral_basin_right", "position": { "x": 472, "y": -276 }, "size": { "x": 18, "y": 150 } },
     { "shape": "rectangle", "id": "main_basin_left", "position": { "x": -864, "y": -438 }, "size": { "x": 72, "y": 260 } },
     { "shape": "rectangle", "id": "main_basin_right", "position": { "x": 864, "y": -438 }, "size": { "x": 72, "y": 260 } },
-    { "shape": "rectangle", "id": "practice_wall_left", "position": { "x": -914, "y": 182 }, "size": { "x": 28, "y": 1500 } },
+    { "shape": "rectangle", "id": "boundary_left", "position": { "x": -914, "y": 182 }, "size": { "x": 28, "y": 1500 } },
+    { "shape": "rectangle", "id": "boundary_right", "position": { "x": 914, "y": 182 }, "size": { "x": 28, "y": 1500 } },
+    { "shape": "rectangle", "id": "boundary_top", "position": { "x": 0, "y": 946 }, "size": { "x": 1800, "y": 28 } },
+    { "shape": "rectangle", "id": "boundary_bottom", "position": { "x": 0, "y": -582 }, "size": { "x": 1800, "y": 28 } },
     { "shape": "polygon", "id": "coral_basin_left_cap", "points": [
       { "x": 279, "y": -201 }, { "x": 280, "y": -198 },
       { "x": 282, "y": -195 }, { "x": 285, "y": -193 },
@@ -71,7 +74,10 @@
     { "image": "levels/sewer_01/platform.png", "position": { "x": 472, "y": -276 }, "size": { "x": 18, "y": 150 }, "depth": -1 },
     { "image": "levels/sewer_01/platform.png", "position": { "x": -864, "y": -438 }, "size": { "x": 72, "y": 260 }, "depth": -1 },
     { "image": "levels/sewer_01/platform.png", "position": { "x": 864, "y": -438 }, "size": { "x": 72, "y": 260 }, "depth": -1 },
-    { "image": "levels/sewer_01/platform.png", "position": { "x": -914, "y": 182 }, "size": { "x": 28, "y": 1500 }, "depth": -1 }
+    { "image": "levels/sewer_01/platform.png", "position": { "x": -914, "y": 182 }, "size": { "x": 28, "y": 1500 }, "depth": -1 },
+    { "image": "levels/sewer_01/platform.png", "position": { "x": 914, "y": 182 }, "size": { "x": 28, "y": 1500 }, "depth": -1 },
+    { "image": "levels/sewer_01/platform.png", "position": { "x": 0, "y": 946 }, "size": { "x": 1800, "y": 28 }, "depth": -1 },
+    { "image": "levels/sewer_01/platform.png", "position": { "x": 0, "y": -582 }, "size": { "x": 1800, "y": 28 }, "depth": -1 }
   ],
   "drop_emitters": [
     {

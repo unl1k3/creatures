@@ -4,9 +4,36 @@ These layouts are the reference cases for validating living blobs, corpses, and
 irregular support surfaces. Test each one with a large and a small blob and
 observe it for at least ten seconds after contact settles.
 
-The cases are grouped in the running prototype: `F2` is the supports lab, `F3`
-is the curves lab, `F4` combines a U pocket and low passage, `F5` is a distinct
-fall-and-impact course, and `F6` combines the V valley and split bridge.
+The cases are grouped in the running prototype: `2` is the supports lab, `3`
+is the curves lab, `4` combines a U pocket and low passage, `5` is a distinct
+fall-and-impact course, and `6` combines the V valley and split bridge.
+
+The focused regression laboratories are `8` (nutrient versus thin wall),
+`9` (coral basin and spine climbing), and `7` (small fragments on a
+convex shared seam). They are intentionally minimal: use them after every
+change to nutrient physics, water movement, or membrane contact handling.
+
+## Focused Regression Checks
+
+### 8 — Nutrient Wall
+
+- Push the left nutrient hard into the thin vertical wall.
+- It must stop or rebound; it must never appear on the other side.
+- Repeat after digestion and expulsion, when it is a smaller residue.
+
+### 9 — Coral Basin
+
+- Enter the basin with the default blob; it should float and remain controllable.
+- Hold `Q` and alternate `A` / `D`: the selected input determines the roll.
+- With either horizontal input held, the spines must sustain a climb and allow
+  a controlled exit over either rim.
+
+### 0 — Small Fragment Seams
+
+- Split twice, then drop or jump the smallest fragment onto the seam at the top
+  of the two central convex slopes.
+- The membrane must remain outside both solids, without jitter or a permanent
+  point trapped at the shared vertex.
 
 Numbered amber checkpoints identify the intended traversable route. Their size
 increases with the sequence, and each marker disappears when the selected blob

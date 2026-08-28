@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "name": "Nutrient wall regression",
+  "size": { "x": 820, "y": 620 },
+  "center": { "x": 0, "y": 0 },
+  "spawn": { "x": -300, "y": -245 },
+  "colliders": [
+    { "shape": "rectangle", "id": "floor", "position": { "x": 0, "y": -330 }, "size": { "x": 760, "y": 36 } },
+    { "shape": "rectangle", "id": "thin_barrier", "position": { "x": 0, "y": -155 }, "size": { "x": 18, "y": 310 } },
+    { "shape": "rectangle", "id": "right_shelf", "position": { "x": 230, "y": -40 }, "size": { "x": 230, "y": 28 } }
+  ],
+  "route": [
+    { "x": -300, "y": -245 },
+    { "x": -116, "y": -260 },
+    { "x": 0, "y": -155 }
+  ],
+  "nutrients": [
+    { "position": { "x": -116, "y": -260 }, "radius": 15 },
+    { "position": { "x": 165, "y": 10 }, "radius": 12 }
+  ]
+}

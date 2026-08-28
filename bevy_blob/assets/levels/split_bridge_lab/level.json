@@ -1,0 +1,4 @@
+{"version":1,"name":"Split bridge lab","size":{"x":760,"y":900},"center":{"x":0,"y":0},"spawn":{"x":0,"y":-125},"colliders":[
+{"shape":"rectangle","id":"floor","position":{"x":0,"y":-390},"size":{"x":760,"y":38}},{"shape":"rectangle","id":"right_platform","position":{"x":270,"y":-40},"size":{"x":105,"y":24}},{"shape":"rectangle","id":"upper_right","position":{"x":155,"y":115},"size":{"x":130,"y":24}},{"shape":"rectangle","id":"upper_left","position":{"x":-45,"y":115},"size":{"x":130,"y":24}},
+{"shape":"polygon","id":"left_valley","points":[{"x":-150,"y":-300},{"x":0,"y":-300},{"x":0,"y":-180},{"x":-150,"y":-60}]},{"shape":"polygon","id":"right_valley","points":[{"x":0,"y":-300},{"x":150,"y":-300},{"x":150,"y":-60},{"x":0,"y":-180}]}],
+"route":[{"x":0,"y":-125},{"x":145,"y":-15},{"x":270,"y":15},{"x":155,"y":170},{"x":-45,"y":170}]}

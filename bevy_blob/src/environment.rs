@@ -5,6 +5,7 @@ use crate::level_format::{
     NutrientDefinition, ParsedLevel, SafetyBoundsDefinition, VisualLayer, WastewaterAreaDefinition,
     parse_level,
 };
+use crate::nutrition::{NutrientPhysics, NutritionWorld, spawn_nutrient_bodies};
 use avian2d::prelude::{
     Collider, CollisionLayers, PhysicsLayer, RigidBody, ShapeCastConfig, SpatialQuery,
     SpatialQueryFilter,
@@ -267,6 +268,26 @@ impl Level {
     }
 
     pub(super) fn test_scenario(index: u8) -> (Self, Vec2) {
+        let external_level = match index {
+            2 => Some(include_str!("../assets/levels/supports_lab/level.json")),
+            3 => Some(include_str!("../assets/levels/curves_lab/level.json")),
+            4 => Some(include_str!("../assets/levels/low_passage_lab/level.json")),
+            5 => Some(include_str!("../assets/levels/impact_lab/level.json")),
+            6 => Some(include_str!("../assets/levels/split_bridge_lab/level.json")),
+            7 => Some(include_str!(
+                "../assets/levels/regression_fragment_seams/level.json"
+            )),
+            8 => Some(include_str!(
+                "../assets/levels/regression_nutrient_wall/level.json"
+            )),
+            9 => Some(include_str!(
+                "../assets/levels/regression_coral_basin/level.json"
+            )),
+            _ => None,
+        };
+        if let Some(source) = external_level {
+            return Self::from_embedded_regression(source);
+        }
         match index {
             2 => (
                 Self {
@@ -460,6 +481,14 @@ impl Level {
             _ => (Self::prototype(), BLOB_START),
         }
     }
+
+    fn from_embedded_regression(source: &str) -> (Self, Vec2) {
+        let level = Self::from_parsed(
+            parse_level(source).expect("embedded regression level must be valid"),
+        );
+        let spawn = level.spawn_position;
+        (level, spawn)
+    }
 }
 
 fn semicircle_fixture(center: Vec2, radius: f32, depth: f32) -> Vec<Vec2> {
@@ -533,7 +562,7 @@ pub(super) fn toggle_level_debug(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut overlay: ResMut<LevelDebugOverlay>,
 ) {
-    if keyboard.just_pressed(KeyCode::F7) {
+    if keyboard.just_pressed(KeyCode::Digit0) || keyboard.just_pressed(KeyCode::Backquote) {
         overlay.visible = !overlay.visible;
         if overlay.visible {
             overlay.camera_detached = true;
@@ -628,17 +657,21 @@ pub(super) fn switch_test_scenario(
     mut blobs: ResMut<BlobWorld>,
     mut vitality: ResMut<VitalityWorld>,
     mut nutrition: ResMut<NutritionWorld>,
+    nutrient_bodies: Query<Entity, With<NutrientPhysics>>,
 ) {
-    let requested = (1..=6).find(|index| {
-        keyboard.just_pressed(match index {
-            1 => KeyCode::F1,
-            2 => KeyCode::F2,
-            3 => KeyCode::F3,
-            4 => KeyCode::F4,
-            5 => KeyCode::F5,
-            _ => KeyCode::F6,
-        })
-    });
+    let requested = [
+        (1, KeyCode::Digit1),
+        (2, KeyCode::Digit2),
+        (3, KeyCode::Digit3),
+        (4, KeyCode::Digit4),
+        (5, KeyCode::Digit5),
+        (6, KeyCode::Digit6),
+        (7, KeyCode::Digit7),
+        (8, KeyCode::Digit8),
+        (9, KeyCode::Digit9),
+    ]
+    .into_iter()
+    .find_map(|(index, key)| keyboard.just_pressed(key).then_some(index));
     let Some(requested) = requested else {
         return;
     };
@@ -646,6 +679,9 @@ pub(super) fn switch_test_scenario(
         commands.entity(entity).despawn();
     }
     for entity in &artwork {
+        commands.entity(entity).despawn();
+    }
+    for entity in &nutrient_bodies {
         commands.entity(entity).despawn();
     }
     let (new_level, spawn) = Level::test_scenario(requested);
@@ -657,6 +693,7 @@ pub(super) fn switch_test_scenario(
     reset_world_at(&mut blobs, spawn);
     vitality.reset();
     nutrition.reset_from_definitions(&level.nutrients);
+    spawn_nutrient_bodies(&mut commands, &level.nutrients);
 }
 
 pub(super) fn simulate_level_hazards(
@@ -1280,14 +1317,14 @@ mod tests {
     }
 
     #[test]
-    fn f7_toggles_level_debug_overlay() {
+    fn digit_zero_toggles_level_debug_overlay() {
         let mut app = App::new();
         app.init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<LevelDebugOverlay>()
             .add_systems(Update, toggle_level_debug);
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::F7);
+            .press(KeyCode::Digit0);
 
         app.update();
 

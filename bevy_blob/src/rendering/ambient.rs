@@ -113,7 +113,6 @@ pub(crate) fn setup_ambient_drop_assets(
 pub(crate) fn simulate_wastewater(
     mut commands: Commands,
     time: Res<Time>,
-    ink_style: Res<InkStylePreview>,
     scenario: Res<TestScenario>,
     level: Res<Level>,
     effects: Res<WastewaterEffects>,
@@ -122,7 +121,9 @@ pub(crate) fn simulate_wastewater(
     mut materials: ResMut<Assets<ColorMaterial>>,
     surfaces: Query<(Entity, &WastewaterSurface)>,
 ) {
-    let visible = ink_style.enabled && matches!(scenario.0, 0 | 1);
+    // Water is gameplay geometry and must remain visible in every laboratory,
+    // not only in the ink-art preview of the main level.
+    let visible = !level.wastewater_areas.is_empty();
     let needs_rebuild = state.scenario != Some(scenario.0) || state.visible != visible;
     if needs_rebuild {
         for (entity, _) in &surfaces {
@@ -229,7 +230,6 @@ pub(crate) fn simulate_wastewater_impacts(
 pub(crate) fn simulate_wastewater_bubbles(
     mut commands: Commands,
     time: Res<Time>,
-    ink_style: Res<InkStylePreview>,
     scenario: Res<TestScenario>,
     level: Res<Level>,
     assets: Res<AmbientDropAssets>,
@@ -240,7 +240,7 @@ pub(crate) fn simulate_wastewater_bubbles(
     mut bubbles: Query<(Entity, &WastewaterBubble, &mut Transform)>,
 ) {
     let dt = time.delta_secs().min(1.0 / 20.0);
-    let visible = ink_style.enabled && matches!(scenario.0, 0 | 1);
+    let visible = !level.wastewater_areas.is_empty();
     if !visible {
         for (entity, _, _) in &mut bubbles {
             commands.entity(entity).despawn();

@@ -264,16 +264,25 @@ bevy_blob/
 Use [PHYSICS_TEST_SCENARIOS.md](PHYSICS_TEST_SCENARIOS.md) as the shared manual
 test plan for irregular supports, blob stacks, and movable corpses.
 
-Press `F1` through `F6` to load the standard level or one of five grouped test
-laboratories. `F1` now crosses both lateral wings of the sewer before continuing
-through its vertical platforms. `F2` combines narrow supports, stairs, corners, and a bridge; `F3`
-combines a shallow ramp, semicircle, and segmented wave; `F4` combines a U-shaped
-pocket with a low horizontal passage; `F5` is a separate fall-and-impact course
+Press `1` through `9` to load the standard level or a laboratory. `0` is
+reserved for the physics overlay.
+`1` now crosses both lateral wings of the sewer before continuing
+through its vertical platforms. `2` combines narrow supports, stairs, corners, and a bridge; `3`
+combines a shallow ramp, semicircle, and segmented wave; `4` combines a U-shaped
+pocket with a low horizontal passage; `5` is a separate fall-and-impact course
 with narrow landings, alternating ledges, a drop shaft, and overhead contacts;
-`F6` contains the V-shaped valley and split bridge. Each switch resets the active
+`6` contains the V-shaped valley and split bridge. Each switch resets the active
 blob.
 All test geometry uses actual static Avian colliders, with the same tessellated
 profiles used for collision detection and rendering.
+
+Three focused regression laboratories protect the most fragile recent systems:
+`8` tests nutrients and residues pushed against a thin vertical wall,
+`9` tests the coral basin (buoyancy, spine-driven movement, reversal,
+and exit), and `7` tests split fragments over the shared seam between
+two convex slopes.
+Changing laboratory also recreates the Avian nutrient bodies from that level's
+definitions, so no physics body can leak from a previous scenario.
 
 Test laboratories use a wider camera scale and a small upward look-ahead so the
 next structure is visible before committing to a jump. Numbered amber markers
@@ -376,7 +385,7 @@ size, and depth. Keep background images below the physics drawing depth and
 foreground images above it. Large levels can use several adjacent images
 instead of a single oversized texture.
 
-Press `F7` to overlay level bounds, collider geometry, route checkpoints, and
+Press `0` (or `` ` ``) to overlay level bounds, collider geometry, route checkpoints, and
 the spawn marker on the artwork. While it is active, use `I/J/K/L` to pan,
 `U/O` to zoom, and `P` to return to the selected blob. This diagnostic view
 also shows light radii, expulsion directions, and hazard volumes without

@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "name": "Coral basin regression",
+  "size": { "x": 700, "y": 700 },
+  "center": { "x": 0, "y": 0 },
+  "spawn": { "x": 0, "y": -165 },
+  "colliders": [
+    { "shape": "rectangle", "id": "basin_floor", "position": { "x": 0, "y": -330 }, "size": { "x": 270, "y": 36 } },
+    { "shape": "rectangle", "id": "basin_left_wall", "position": { "x": -135, "y": -185 }, "size": { "x": 20, "y": 255 } },
+    { "shape": "rectangle", "id": "basin_right_wall", "position": { "x": 135, "y": -185 }, "size": { "x": 20, "y": 255 } },
+    { "shape": "rectangle", "id": "exit_shelf", "position": { "x": 300, "y": -105 }, "size": { "x": 150, "y": 28 } }
+  ],
+  "route": [
+    { "x": 0, "y": -165 },
+    { "x": -125, "y": -65 },
+    { "x": 135, "y": -65 }
+  ],
+  "nutrients": [
+    { "position": { "x": -75, "y": -120 }, "radius": 13 }
+  ],
+  "wastewater_areas": [
+    {
+      "position": { "x": 0, "y": -225 },
+      "size": { "x": 250, "y": 180 },
+      "color": [1.0, 0.30, 0.18, 0.78],
+      "wave_height": 3.0,
+      "wave_speed": 0.72,
+      "depth": -0.12,
+      "immune_family": 0,
+      "bubbles": {
+        "interval": [0.55, 1.2],
+        "radius": [3.0, 7.0],
+        "rise_speed": [16.0, 30.0],
+        "max_active": 8
+      }
+    }
+  ]
+}

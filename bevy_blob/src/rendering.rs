@@ -122,7 +122,10 @@ pub(super) fn sync_ink_preview(
                 custom_size: Some(level.size()),
                 ..default()
             },
-            Transform::from_translation(level.center().extend(2.0)),
+            // Foreground pipes and debris are an occlusion layer: gameplay
+            // structures remain visible through their central opening, while
+            // overlapping portions correctly pass behind this artwork.
+            Transform::from_translation(level.center().extend(2.5)),
         ));
     }
 
@@ -212,8 +215,8 @@ fn spawn_ink_platform(
     commands.spawn((
         InkPreviewShape { scenario },
         Sprite::from_color(ink, size),
-        // Ink-preview structures must sit above the static foreground artwork
-        // (z=2), otherwise the illustration hides the playable geometry.
+        // The foreground artwork is an intentional occlusion layer (z=2.5),
+        // so structures are drawn beneath its pipes and corner debris.
         Transform::from_translation(visual_center.extend(2.20)),
     ));
 
@@ -285,7 +288,7 @@ fn ink_hash(first: usize, second: usize) -> f32 {
     (mixed & 0xffff) as f32 / u16::MAX as f32
 }
 
-// Scenario 0 is the startup instance of F1; pressing F1 explicitly assigns 1.
+// Scenario 0 is the startup instance of level 1; pressing 1 explicitly assigns 1.
 fn supports_ink_background(scenario: u8) -> bool {
     matches!(scenario, 0 | 1)
 }

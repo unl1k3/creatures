@@ -1,0 +1,7 @@
+{"version":1,"name":"Low passage lab","size":{"x":760,"y":900},"center":{"x":0,"y":0},"spawn":{"x":-100,"y":-245},"colliders":[
+{"shape":"rectangle","id":"floor","position":{"x":0,"y":-390},"size":{"x":760,"y":38}},
+{"shape":"rectangle","id":"left_wall","position":{"x":-210,"y":-285},"size":{"x":28,"y":190}},
+{"shape":"rectangle","id":"right_wall","position":{"x":10,"y":-285},"size":{"x":28,"y":190}},
+{"shape":"rectangle","id":"u_floor","position":{"x":-100,"y":-365},"size":{"x":248,"y":28}},
+{"shape":"rectangle","id":"exit","position":{"x":235,"y":-250},"size":{"x":250,"y":28}}],
+"route":[{"x":-100,"y":-245},{"x":-25,"y":-145},{"x":80,"y":-310},{"x":220,"y":-310},{"x":355,"y":-310}]}

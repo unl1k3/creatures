@@ -403,7 +403,21 @@ pub(super) fn setup_nutrition(
     let mut nutrient_mesh = empty_nutrient_mesh();
     update_nutrient_mesh(&mut nutrient_mesh, &nutrition.nutrients, slots, 0.0);
     commands.insert_resource(nutrition);
-    for (index, definition) in level.nutrients.iter().enumerate() {
+    spawn_nutrient_bodies(&mut commands, &level.nutrients);
+    let mesh = meshes.add(nutrient_mesh);
+    commands.spawn((
+        Mesh2d(mesh.clone()),
+        // Vertex alpha shows nutrients through the translucent blob membrane.
+        MeshMaterial2d(materials.add(ColorMaterial::default())),
+        Transform::from_xyz(0.0, 0.0, -0.06),
+    ));
+    commands.insert_resource(NutrientRenderAssets { mesh, slots });
+}
+
+/// Rebuilds the Avian bodies that own free nutrient and residue motion.
+/// Scenario changes call this after replacing the JSON-derived definitions.
+pub(super) fn spawn_nutrient_bodies(commands: &mut Commands, definitions: &[NutrientDefinition]) {
+    for (index, definition) in definitions.iter().enumerate() {
         commands.spawn((
             NutrientPhysics { index },
             RigidBody::Dynamic,
@@ -420,14 +434,6 @@ pub(super) fn setup_nutrition(
             Transform::from_xyz(definition.position.x, definition.position.y, 0.0),
         ));
     }
-    let mesh = meshes.add(nutrient_mesh);
-    commands.spawn((
-        Mesh2d(mesh.clone()),
-        // Vertex alpha shows nutrients through the translucent blob membrane.
-        MeshMaterial2d(materials.add(ColorMaterial::default())),
-        Transform::from_xyz(0.0, 0.0, -0.06),
-    ));
-    commands.insert_resource(NutrientRenderAssets { mesh, slots });
 }
 
 pub(super) fn simulate_nutrition(

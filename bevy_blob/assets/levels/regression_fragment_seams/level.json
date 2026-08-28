@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "name": "Small fragment seams regression",
+  "size": { "x": 900, "y": 720 },
+  "center": { "x": 0, "y": 0 },
+  "spawn": { "x": -215, "y": -220 },
+  "colliders": [
+    { "shape": "rectangle", "id": "floor", "position": { "x": 0, "y": -335 }, "size": { "x": 820, "y": 36 } },
+    { "shape": "rectangle", "id": "left_shelf", "position": { "x": -210, "y": -115 }, "size": { "x": 110, "y": 28 } },
+    { "shape": "rectangle", "id": "right_shelf", "position": { "x": 230, "y": 90 }, "size": { "x": 150, "y": 28 } },
+    {
+      "shape": "polygon",
+      "id": "left_slope",
+      "points": [
+        { "x": -90, "y": -275 }, { "x": 0, "y": -275 },
+        { "x": 0, "y": -150 }, { "x": -90, "y": -220 }
+      ]
+    },
+    {
+      "shape": "polygon",
+      "id": "right_slope",
+      "points": [
+        { "x": 0, "y": -275 }, { "x": 90, "y": -275 },
+        { "x": 90, "y": -220 }, { "x": 0, "y": -150 }
+      ]
+    }
+  ],
+  "route": [
+    { "x": -215, "y": -220 },
+    { "x": 0, "y": -110 },
+    { "x": 230, "y": 145 }
+  ]
+}
