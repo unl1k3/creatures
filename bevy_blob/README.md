@@ -236,8 +236,11 @@ bevy_blob/
 ├── Cargo.lock          Reproducible dependency versions
 ├── README.md           Project documentation
 ├── PHYSICS_TEST_SCENARIOS.md  Difficult-contact layouts and acceptance criteria
-├── assets/             Runtime level definitions and visual artwork
-│   └── levels/sewer_01/level.json  Standard sewer geometry and layer references
+├── assets/             Self-contained level definitions and visual artwork
+│   └── levels/
+│       ├── README.md    Asset-layout convention for playable and regression levels
+│       ├── sewer_01/   Main sewer level: level.json and level-local art/
+│       └── */          Regression levels: level.json and optional level-local art/
 ├── src/                Game source code and automated tests
 │   ├── main.rs         Application setup, world state, simulation, split/merge flow
 │   ├── blob.rs         Soft-body model, constraints, movement, and collisions

@@ -105,7 +105,7 @@ pub(super) fn sync_ink_preview(
                 scenario: scenario.0,
             },
             Sprite {
-                image: asset_server.load("levels/sewer_01/ink_sample/background-v4-basin.png"),
+                image: asset_server.load("levels/sewer_01/art/ink/background.png"),
                 custom_size: Some(level.size()),
                 ..default()
             },
@@ -117,8 +117,7 @@ pub(super) fn sync_ink_preview(
             },
             InkForeground,
             Sprite {
-                image: asset_server
-                    .load("levels/sewer_01/ink_sample/foreground-v6-integrated-alpha.png"),
+                image: asset_server.load("levels/sewer_01/art/ink/foreground.png"),
                 custom_size: Some(level.size()),
                 ..default()
             },
