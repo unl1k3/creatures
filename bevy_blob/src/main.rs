@@ -29,8 +29,8 @@ use camera::{GameCamera, follow_camera};
 use environment::{
     AvianContactDiagnostics, Level, LevelDebugOverlay, RouteProgress, TestScenario,
     WastewaterEffects, advance_route_progress, draw_level_chains, resolve_avian_environment,
-    resolve_blob_chain_contacts, sample_avian_contacts, setup_environment, simulate_level_hazards,
-    switch_test_scenario, toggle_level_debug,
+    resolve_blob_chain_contacts, sample_avian_contacts, setup_environment,
+    simulate_counterbalances, simulate_level_hazards, switch_test_scenario, toggle_level_debug,
 };
 use hud::{arrange_auxiliary_windows, setup_legend, toggle_legend, update_metrics};
 #[cfg(test)]
@@ -45,7 +45,8 @@ use rendering::blob_family_color;
 use rendering::{
     InkStylePreview, draw_world, setup_ambient_drop_assets, simulate_ambient_drops,
     simulate_wastewater, simulate_wastewater_bubbles, simulate_wastewater_impacts,
-    sync_blob_meshes, sync_ink_preview, sync_route_markers, toggle_foreground, toggle_ink_style,
+    sync_blob_meshes, sync_counterbalance_visuals, sync_ink_preview, sync_route_markers,
+    toggle_foreground, toggle_ink_style,
 };
 use shield::{ShieldWorld, simulate_shields, spider_climb_anchor_direction};
 use std::{
@@ -135,6 +136,7 @@ fn main() {
             (
                 simulate_shields,
                 simulate_blob,
+                simulate_counterbalances,
                 resolve_blob_chain_contacts,
                 resolve_avian_environment,
                 enforce_blob_safety_bounds,
@@ -178,7 +180,14 @@ fn main() {
             )
                 .chain(),
         )
-        .add_systems(Update, (toggle_foreground, draw_level_chains))
+        .add_systems(
+            Update,
+            (
+                toggle_foreground,
+                draw_level_chains,
+                sync_counterbalance_visuals,
+            ),
+        )
         .run();
 }
 

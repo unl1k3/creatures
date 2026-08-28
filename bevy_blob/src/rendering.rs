@@ -44,6 +44,25 @@ pub(super) struct InkPreviewShape {
 #[derive(Component)]
 pub(super) struct InkForeground;
 
+/// Tags both visual layers of a platform that is moved by a counterbalance.
+#[derive(Component)]
+pub(super) struct CounterbalanceVisual {
+    platform_index: usize,
+}
+
+pub(super) fn sync_counterbalance_visuals(
+    level: Res<Level>,
+    mut visuals: Query<(&CounterbalanceVisual, &mut Transform)>,
+) {
+    for (visual, mut transform) in &mut visuals {
+        let Some(platform) = level.platforms.get(visual.platform_index) else {
+            continue;
+        };
+        transform.translation.x = platform.center.x;
+        transform.translation.y = platform.center.y;
+    }
+}
+
 pub(super) fn toggle_ink_style(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut ink_style: ResMut<InkStylePreview>,
@@ -165,7 +184,7 @@ pub(super) fn sync_ink_preview(
             });
         })
         .load("levels/sewer_01/art/ink/platform-bricks.png");
-    for platform in &level.platforms {
+    for (platform_index, platform) in level.platforms.iter().enumerate() {
         spawn_ink_platform(
             &mut commands,
             &mut meshes,
@@ -174,6 +193,14 @@ pub(super) fn sync_ink_preview(
             platform,
             ink,
             &brick_texture,
+            level
+                .counterbalances
+                .iter()
+                .any(|balance| {
+                    balance.gate_platform == platform_index
+                        || balance.plate_platform == platform_index
+                })
+                .then_some(platform_index),
         );
     }
     let fixture_material = materials.add(ColorMaterial {
@@ -263,6 +290,7 @@ fn spawn_ink_platform(
     platform: &Platform,
     ink: Color,
     brick_texture: &Handle<Image>,
+    counterbalance_platform: Option<usize>,
 ) {
     // Level 1's ordinary horizontal platforms are 28 world units tall. The
     // artwork's 40-pixel tile is calibrated to their visible inner height so
@@ -274,13 +302,16 @@ fn spawn_ink_platform(
     let visual_center = platform.center;
     let visual_half_size = platform.half_size + Vec2::splat(PLATFORM_VISUAL_CONTACT_OFFSET);
     let size = visual_half_size * 2.0;
-    commands.spawn((
+    let mut border = commands.spawn((
         InkPreviewShape { scenario },
         Sprite::from_color(ink, size),
         // The foreground artwork is an intentional occlusion layer (z=2.5),
         // so structures are drawn beneath its pipes and corner debris.
         Transform::from_translation(visual_center.extend(2.20)),
     ));
+    if let Some(platform_index) = counterbalance_platform {
+        border.insert(CounterbalanceVisual { platform_index });
+    }
 
     let inner_size = (size - Vec2::splat(3.2)).max(Vec2::splat(2.0));
     // Repeat the texture in UV space over a mesh that is exactly the size of
@@ -296,12 +327,15 @@ fn spawn_ink_platform(
         uv_transform: Affine2::from_scale_angle_translation(texture_scale, 0.0, texture_origin),
         ..default()
     });
-    commands.spawn((
+    let mut fill = commands.spawn((
         InkPreviewShape { scenario },
         Mesh2d(meshes.add(Rectangle::new(inner_size.x, inner_size.y))),
         MeshMaterial2d(texture_material),
         Transform::from_translation(visual_center.extend(PLATFORM_TEXTURE_DEPTH)),
     ));
+    if let Some(platform_index) = counterbalance_platform {
+        fill.insert(CounterbalanceVisual { platform_index });
+    }
 }
 
 // Scenario 0 is the startup instance of level 1; pressing 1 explicitly assigns 1.
@@ -982,6 +1016,37 @@ fn smoothstep01(value: f32) -> f32 {
     value * value * (3.0 - 2.0 * value)
 }
 
+/// Draws a thin, slightly twisted ink rope instead of a single debug line.
+fn draw_ink_rope(gizmos: &mut Gizmos, start: Vec2, end: Vec2, ink: Color) {
+    let span = end - start;
+    let length = span.length();
+    if length <= f32::EPSILON {
+        return;
+    }
+    let direction = span / length;
+    let normal = Vec2::new(-direction.y, direction.x);
+    let edge = normal * 1.35;
+    gizmos.line_2d(start + edge, end + edge, ink);
+    gizmos.line_2d(start - edge, end - edge, ink);
+
+    // Short alternating ties keep the cable organic while remaining readable
+    // at the small in-game scale.
+    let ties = (length / 18.0).floor() as usize;
+    for index in 1..ties {
+        let center = start + direction * (index as f32 * 18.0);
+        let slant = if index % 2 == 0 {
+            direction
+        } else {
+            -direction
+        };
+        gizmos.line_2d(
+            center - edge - slant * 1.8,
+            center + edge + slant * 1.8,
+            ink,
+        );
+    }
+}
+
 pub(super) fn draw_world(
     mut gizmos: Gizmos,
     blobs: Res<BlobWorld>,
@@ -992,6 +1057,49 @@ pub(super) fn draw_world(
     nutrition: Res<NutritionWorld>,
     ink_style: Res<InkStylePreview>,
 ) {
+    // Counterbalances are rendered as ink mechanisms, not as debug volumes.
+    for balance in &level.counterbalances {
+        if let (Some(plate), Some(gate)) = (
+            level.platforms.get(balance.plate_platform),
+            level.platforms.get(balance.gate_platform),
+        ) {
+            // Fixed pulleys sit above the two moving ends. The cable sections
+            // then make the equal and opposite travel of plate and gate clear.
+            // Higher than the gate's fully open top edge, so the door never
+            // visually crosses a pulley during its upward stroke.
+            let pulley_height = 145.0;
+            let left_pulley = Vec2::new(plate.center.x, pulley_height);
+            let right_pulley = Vec2::new(gate.center.x, pulley_height);
+            let plate_anchor = plate.center + Vec2::Y * plate.half_size.y;
+            let gate_anchor = gate.center + Vec2::Y * gate.half_size.y;
+            let cable = game_palette::color(game_palette::INK);
+            draw_ink_rope(&mut gizmos, plate_anchor, left_pulley, cable);
+            draw_ink_rope(&mut gizmos, left_pulley, right_pulley, cable);
+            draw_ink_rope(&mut gizmos, right_pulley, gate_anchor, cable);
+            for pulley in [left_pulley, right_pulley] {
+                // A small hanging bracket and two imperfect-looking rings
+                // read as hand-drawn hardware over the ivory level artwork.
+                gizmos.line_2d(pulley + Vec2::Y * 10.0, pulley + Vec2::Y * 23.0, cable);
+                gizmos.line_2d(
+                    pulley + Vec2::new(-8.0, 23.0),
+                    pulley + Vec2::new(8.0, 23.0),
+                    cable,
+                );
+                gizmos.circle_2d(pulley, 11.0, cable);
+                gizmos.circle_2d(pulley, 4.0, cable);
+                gizmos.line_2d(
+                    pulley + Vec2::new(-7.0, -7.0),
+                    pulley + Vec2::new(7.0, 7.0),
+                    cable,
+                );
+                gizmos.line_2d(
+                    pulley + Vec2::new(-7.0, 7.0),
+                    pulley + Vec2::new(7.0, -7.0),
+                    cable,
+                );
+            }
+        }
+    }
     // Laboratories without artwork retain their unobtrusive collision view.
     if !ink_style.enabled && !level.has_artwork() && !debug_overlay.visible {
         for platform in &level.platforms {

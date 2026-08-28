@@ -1,9 +1,9 @@
 use super::*;
 use crate::blob::Particle;
 use crate::level_format::{
-    ChainDefinition, DropEmitterDefinition, ExpulsionPointDefinition, HazardDefinition,
-    LightDefinition, NutrientDefinition, ParsedLevel, SafetyBoundsDefinition, VisualLayer,
-    WastewaterAreaDefinition, parse_level,
+    ChainDefinition, CounterbalanceDefinition, DropEmitterDefinition, ExpulsionPointDefinition,
+    HazardDefinition, LightDefinition, NutrientDefinition, ParsedLevel, SafetyBoundsDefinition,
+    VisualLayer, WastewaterAreaDefinition, parse_level,
 };
 use crate::nutrition::{NutrientPhysics, NutritionWorld, spawn_nutrient_bodies};
 use crate::palette as game_palette;
@@ -36,6 +36,19 @@ pub(super) struct EnvironmentCollider {
 
 #[derive(Component, Debug)]
 pub(super) struct AvianMigratedSurface;
+
+/// A static platform that is translated when its linked counterbalance zone
+/// contains enough blob mass.
+#[derive(Component)]
+pub(super) struct CounterbalanceGate {
+    platform_index: usize,
+    closed_center: Vec2,
+}
+#[derive(Component)]
+pub(super) struct CounterbalancePlate {
+    platform_index: usize,
+    closed_center: Vec2,
+}
 
 #[derive(Component)]
 pub(super) struct LevelArtwork;
@@ -77,6 +90,7 @@ pub(super) struct Level {
     pub(super) expulsion_points: Vec<ExpulsionPointDefinition>,
     pub(super) hazards: Vec<HazardDefinition>,
     pub(super) chains: Vec<ChainDefinition>,
+    pub(super) counterbalances: Vec<CounterbalanceDefinition>,
 }
 
 #[derive(Resource, Default)]
@@ -254,6 +268,7 @@ impl Level {
             decorations: parsed.decorations,
             drop_emitters: parsed.drop_emitters,
             wastewater_areas: parsed.wastewater_areas,
+            counterbalances: parsed.counterbalances,
         }
     }
 
@@ -289,6 +304,7 @@ impl Level {
             expulsion_points: Vec::new(),
             hazards: Vec::new(),
             chains: Vec::new(),
+            counterbalances: Vec::new(),
         }
     }
 
@@ -347,6 +363,7 @@ impl Level {
                     expulsion_points: Vec::new(),
                     hazards: Vec::new(),
                     chains: Vec::new(),
+                    counterbalances: Vec::new(),
                 },
                 Vec2::new(-320.0, -285.0),
             ),
@@ -395,6 +412,7 @@ impl Level {
                     expulsion_points: Vec::new(),
                     hazards: Vec::new(),
                     chains: Vec::new(),
+                    counterbalances: Vec::new(),
                 },
                 Vec2::new(36.67, 430.0),
             ),
@@ -429,6 +447,7 @@ impl Level {
                     expulsion_points: Vec::new(),
                     hazards: Vec::new(),
                     chains: Vec::new(),
+                    counterbalances: Vec::new(),
                 },
                 Vec2::new(-100.0, -245.0),
             ),
@@ -472,6 +491,7 @@ impl Level {
                     expulsion_points: Vec::new(),
                     hazards: Vec::new(),
                     chains: Vec::new(),
+                    counterbalances: Vec::new(),
                 },
                 Vec2::new(-300.0, -285.0),
             ),
@@ -505,6 +525,7 @@ impl Level {
                     expulsion_points: Vec::new(),
                     hazards: Vec::new(),
                     chains: Vec::new(),
+                    counterbalances: Vec::new(),
                 },
                 Vec2::new(0.0, -125.0),
             ),
@@ -886,6 +907,26 @@ fn spawn_level_colliders(commands: &mut Commands, level: &Level) {
         if platform_index <= 3 {
             entity.insert(AvianMigratedSurface);
         }
+        if level
+            .counterbalances
+            .iter()
+            .any(|balance| balance.gate_platform == platform_index)
+        {
+            entity.insert(CounterbalanceGate {
+                platform_index,
+                closed_center: platform.center,
+            });
+        }
+        if level
+            .counterbalances
+            .iter()
+            .any(|balance| balance.plate_platform == platform_index)
+        {
+            entity.insert(CounterbalancePlate {
+                platform_index,
+                closed_center: platform.center,
+            });
+        }
     }
     for (fixture_index, vertices) in level.fixtures.iter().enumerate() {
         if let Some(collider) = Collider::convex_hull(vertices.clone()) {
@@ -906,6 +947,72 @@ fn spawn_level_colliders(commands: &mut Commands, level: &Level) {
                     ],
                 ),
             ));
+        }
+    }
+}
+
+/// Opens a linked gate while a sufficiently large blob occupies the recessed
+/// counterbalance zone. Updating both the authored platform and its Avian
+/// collider keeps the soft-body and rigid-body views of the level identical.
+pub(super) fn simulate_counterbalances(
+    time: Res<Time<Fixed>>,
+    blobs: Res<BlobWorld>,
+    mut level: ResMut<Level>,
+    // These are disjoint entity sets. State it explicitly so Bevy can safely
+    // borrow both mutable transforms in the same system.
+    mut gates: Query<(&CounterbalanceGate, &mut Transform), Without<CounterbalancePlate>>,
+    mut plates: Query<(&CounterbalancePlate, &mut Transform), Without<CounterbalanceGate>>,
+) {
+    let balances = level.counterbalances.clone();
+    for balance in balances {
+        let plate_surface = level.platforms[balance.plate_platform];
+        let load = blobs
+            .active
+            .iter()
+            .filter(|blob| {
+                let center = blob.body.center();
+                let radius = blob.body.rest_radius;
+                let plate_top = plate_surface.center.y + plate_surface.half_size.y;
+                let plate_bottom = plate_surface.center.y - plate_surface.half_size.y;
+                // Do not arm the mechanism merely because a blob passes next
+                // to it. Its lower membrane must first reach the plate.
+                (center.x - plate_surface.center.x).abs()
+                    <= plate_surface.half_size.x + radius * 0.3
+                    && center.y - radius <= plate_top + 5.0
+                    && center.y + radius >= plate_bottom - 5.0
+            })
+            .map(|blob| blob.body.rest_radius)
+            .sum::<f32>();
+        let closed = gates
+            .iter()
+            .find(|(gate, _)| gate.platform_index == balance.gate_platform)
+            .map(|(gate, _)| gate.closed_center)
+            .unwrap_or(level.platforms[balance.gate_platform].center);
+        let lift = (load / balance.minimum_radius).clamp(0.0, 1.0);
+        // A single cable transmits the same travel at both ends: the plate
+        // descends exactly as far as the gate rises.
+        let desired = closed + balance.open_offset * lift;
+        // Slow enough for a resting soft body to follow the plate instead of
+        // receiving a sharp correction that looks like a bounce.
+        let blend = 1.0 - (-0.85 * time.delta_secs()).exp();
+        let current = level.platforms[balance.gate_platform].center;
+        let desired = current.lerp(desired, blend);
+        level.platforms[balance.gate_platform].center = desired;
+        for (gate, mut transform) in &mut gates {
+            if gate.platform_index == balance.gate_platform {
+                transform.translation = desired.extend(0.0);
+            }
+        }
+        let plate_index = balance.plate_platform;
+        for (plate, mut transform) in &mut plates {
+            if plate.platform_index == plate_index {
+                let plate_target = plate.closed_center - balance.open_offset * lift;
+                let plate_position = level.platforms[plate_index]
+                    .center
+                    .lerp(plate_target, blend);
+                level.platforms[plate_index].center = plate_position;
+                transform.translation = plate_position.extend(0.0);
+            }
         }
     }
 }

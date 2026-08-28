@@ -24,6 +24,7 @@ pub(super) struct ParsedLevel {
     pub(super) decorations: Vec<VisualLayer>,
     pub(super) drop_emitters: Vec<DropEmitterDefinition>,
     pub(super) wastewater_areas: Vec<WastewaterAreaDefinition>,
+    pub(super) counterbalances: Vec<CounterbalanceDefinition>,
 }
 
 /// Last-resort containment, intentionally separate from playable colliders.
@@ -175,6 +176,25 @@ struct LevelDocument {
     drop_emitters: Vec<DropEmitterDocument>,
     #[serde(default)]
     wastewater_areas: Vec<WastewaterAreaDocument>,
+    #[serde(default)]
+    counterbalances: Vec<CounterbalanceDocument>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CounterbalanceDocument {
+    minimum_radius: f32,
+    plate_platform: usize,
+    gate_platform: usize,
+    open_offset: Point,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct CounterbalanceDefinition {
+    pub(super) minimum_radius: f32,
+    pub(super) plate_platform: usize,
+    pub(super) gate_platform: usize,
+    pub(super) open_offset: Vec2,
 }
 
 #[derive(Clone, Copy, Default, Deserialize)]
@@ -565,6 +585,31 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
             })
         })
         .collect::<Result<Vec<_>, LevelFormatError>>()?;
+    let counterbalances = document
+        .counterbalances
+        .into_iter()
+        .enumerate()
+        .map(|(index, balance)| {
+            if balance.plate_platform >= platforms.len() || balance.gate_platform >= platforms.len()
+            {
+                return Err(LevelFormatError(format!(
+                    "counterbalance {index} platforms must reference rectangle colliders"
+                )));
+            }
+            Ok(CounterbalanceDefinition {
+                minimum_radius: positive_number(
+                    &format!("counterbalance {index} minimum_radius"),
+                    balance.minimum_radius,
+                )?,
+                plate_platform: balance.plate_platform,
+                gate_platform: balance.gate_platform,
+                open_offset: finite_point(
+                    &format!("counterbalance {index} open_offset"),
+                    balance.open_offset,
+                )?,
+            })
+        })
+        .collect::<Result<Vec<_>, LevelFormatError>>()?;
 
     Ok(ParsedLevel {
         name: document.name,
@@ -584,6 +629,7 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
         decorations,
         drop_emitters,
         wastewater_areas,
+        counterbalances,
     })
 }
 
