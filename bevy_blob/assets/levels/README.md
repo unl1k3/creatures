@@ -7,6 +7,20 @@ directory, normally in `art/`.
 `sewer_01/` is the current playable sewer level:
 
 - `level.json` defines collision geometry, gameplay objects, and visual layers.
+- `chains` defines dynamic hanging chains, including their anchor, number of
+  links, radius, and spacing. Each chain has an `id` for future level logic.
+
+Example:
+
+```json
+"chains": [{
+  "id": "service_chain",
+  "anchor": { "x": -120, "y": 240 },
+  "links": 10,
+  "link_radius": 7,
+  "spacing": 15
+}]
+```
 - `art/` contains its standard background and platform artwork.
 - `art/ink/` contains the ink-preview background and foreground overlay.
 

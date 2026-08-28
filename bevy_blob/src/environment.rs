@@ -1,14 +1,21 @@
 use super::*;
 use crate::blob::Particle;
 use crate::level_format::{
-    DropEmitterDefinition, ExpulsionPointDefinition, HazardDefinition, LightDefinition,
-    NutrientDefinition, ParsedLevel, SafetyBoundsDefinition, VisualLayer, WastewaterAreaDefinition,
-    parse_level,
+    ChainDefinition, DropEmitterDefinition, ExpulsionPointDefinition, HazardDefinition,
+    LightDefinition, NutrientDefinition, ParsedLevel, SafetyBoundsDefinition, VisualLayer,
+    WastewaterAreaDefinition, parse_level,
 };
 use crate::nutrition::{NutrientPhysics, NutritionWorld, spawn_nutrient_bodies};
+use crate::palette as game_palette;
 use avian2d::prelude::{
-    Collider, CollisionLayers, PhysicsLayer, RigidBody, ShapeCastConfig, SpatialQuery,
+    AngularDamping, Collider, CollisionLayers, JointCollisionDisabled, LinearDamping,
+    MassPropertiesBundle, PhysicsLayer, RevoluteJoint, RigidBody, ShapeCastConfig, SpatialQuery,
     SpatialQueryFilter,
+};
+use bevy::{
+    asset::RenderAssetUsages,
+    prelude::MeshMaterial2d,
+    render::{mesh::Indices, render_resource::PrimitiveTopology},
 };
 use std::collections::{HashMap, HashSet};
 
@@ -36,6 +43,21 @@ pub(super) struct LevelArtwork;
 #[derive(Component)]
 pub(super) struct ForegroundArtwork;
 
+#[derive(Component)]
+pub(super) struct LevelChain;
+
+#[derive(Component)]
+pub(super) struct ChainAnchor {
+    chain_index: usize,
+}
+
+#[derive(Component)]
+pub(super) struct ChainLink {
+    radius: f32,
+    chain_index: usize,
+    link_index: usize,
+}
+
 #[derive(Resource)]
 pub(super) struct Level {
     _name: String,
@@ -54,6 +76,7 @@ pub(super) struct Level {
     pub(super) lights: Vec<LightDefinition>,
     pub(super) expulsion_points: Vec<ExpulsionPointDefinition>,
     pub(super) hazards: Vec<HazardDefinition>,
+    pub(super) chains: Vec<ChainDefinition>,
 }
 
 #[derive(Resource, Default)]
@@ -227,6 +250,7 @@ impl Level {
             lights: parsed.lights,
             expulsion_points: parsed.expulsion_points,
             hazards: parsed.hazards,
+            chains: parsed.chains,
             decorations: parsed.decorations,
             drop_emitters: parsed.drop_emitters,
             wastewater_areas: parsed.wastewater_areas,
@@ -264,6 +288,7 @@ impl Level {
             lights: Vec::new(),
             expulsion_points: Vec::new(),
             hazards: Vec::new(),
+            chains: Vec::new(),
         }
     }
 
@@ -321,6 +346,7 @@ impl Level {
                     lights: Vec::new(),
                     expulsion_points: Vec::new(),
                     hazards: Vec::new(),
+                    chains: Vec::new(),
                 },
                 Vec2::new(-320.0, -285.0),
             ),
@@ -368,6 +394,7 @@ impl Level {
                     lights: Vec::new(),
                     expulsion_points: Vec::new(),
                     hazards: Vec::new(),
+                    chains: Vec::new(),
                 },
                 Vec2::new(36.67, 430.0),
             ),
@@ -401,6 +428,7 @@ impl Level {
                     lights: Vec::new(),
                     expulsion_points: Vec::new(),
                     hazards: Vec::new(),
+                    chains: Vec::new(),
                 },
                 Vec2::new(-100.0, -245.0),
             ),
@@ -443,6 +471,7 @@ impl Level {
                     lights: Vec::new(),
                     expulsion_points: Vec::new(),
                     hazards: Vec::new(),
+                    chains: Vec::new(),
                 },
                 Vec2::new(-300.0, -285.0),
             ),
@@ -475,6 +504,7 @@ impl Level {
                     lights: Vec::new(),
                     expulsion_points: Vec::new(),
                     hazards: Vec::new(),
+                    chains: Vec::new(),
                 },
                 Vec2::new(0.0, -125.0),
             ),
@@ -545,10 +575,18 @@ fn v_valley_fixtures(center: Vec2, width: f32, depth: f32) -> Vec<Vec<Vec2>> {
     ]
 }
 
-pub(super) fn setup_environment(mut commands: Commands, asset_server: Option<Res<AssetServer>>) {
+pub(super) fn setup_environment(
+    mut commands: Commands,
+    asset_server: Option<Res<AssetServer>>,
+    meshes: Option<ResMut<Assets<Mesh>>>,
+    materials: Option<ResMut<Assets<ColorMaterial>>>,
+) {
     let level = Level::prototype();
     spawn_level_colliders(&mut commands, &level);
     spawn_level_artwork(&mut commands, asset_server.as_deref(), &level);
+    if let (Some(mut meshes), Some(mut materials)) = (meshes, materials) {
+        spawn_level_chains(&mut commands, &level, &mut meshes, &mut materials);
+    }
     commands.insert_resource(level);
     commands.insert_resource(TestScenario::default());
     commands.insert_resource(LevelDebugOverlay::default());
@@ -596,6 +634,233 @@ fn spawn_level_artwork(commands: &mut Commands, asset_server: Option<&AssetServe
             },
             Transform::from_translation(layer.position.extend(layer.depth)),
         ));
+    }
+}
+
+fn spawn_level_chains(
+    commands: &mut Commands,
+    level: &Level,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<ColorMaterial>,
+) {
+    for (chain_index, chain) in level.chains.iter().enumerate() {
+        let mesh = meshes.add(ellipse_ring_mesh(
+            Vec2::new(chain.link_radius * 0.56, chain.link_radius * 0.95),
+            Vec2::new(chain.link_radius * 0.88, chain.link_radius * 1.28),
+            16,
+        ));
+        let material = materials.add(ColorMaterial::from(game_palette::color(game_palette::INK)));
+        let anchor = commands
+            .spawn((
+                Name::new(format!("Chain anchor: {}", chain.id)),
+                LevelChain,
+                ChainAnchor { chain_index },
+                RigidBody::Kinematic,
+                Mesh2d(meshes.add(ring_mesh(1.5, 5.5, 12))),
+                MeshMaterial2d(material.clone()),
+                Transform::from_translation(chain.anchor.extend(0.0)),
+            ))
+            .id();
+        let mut previous = anchor;
+        for link_index in 0..chain.links {
+            let position = chain.anchor - Vec2::Y * chain.spacing * (link_index + 1) as f32;
+            let link = commands
+                .spawn((
+                    Name::new(format!("Chain link {}: {link_index}", chain.id)),
+                    LevelChain,
+                    ChainLink {
+                        radius: chain.link_radius,
+                        chain_index,
+                        link_index,
+                    },
+                    RigidBody::Dynamic,
+                    Collider::circle(chain.link_radius),
+                    MassPropertiesBundle::from_shape(&Circle::new(chain.link_radius), 0.7),
+                    LinearDamping(1.1),
+                    AngularDamping(1.8),
+                    CollisionLayers::new(
+                        [GameLayer::Projectile],
+                        [GameLayer::Environment, GameLayer::Projectile],
+                    ),
+                    Mesh2d(mesh.clone()),
+                    MeshMaterial2d(material.clone()),
+                    Transform::from_translation(position.extend(0.12)).with_rotation(
+                        Quat::from_rotation_z(if link_index % 2 == 0 { 0.0 } else { 0.35 }),
+                    ),
+                ))
+                .id();
+            commands.spawn((
+                LevelChain,
+                RevoluteJoint::new(previous, link)
+                    .with_local_anchor2(Vec2::Y * chain.spacing)
+                    .with_point_compliance(0.000_01),
+                JointCollisionDisabled,
+            ));
+            previous = link;
+        }
+    }
+}
+
+/// Thin bridge marks show the alternating links that are seen edge-on.
+pub(super) fn draw_level_chains(
+    mut gizmos: Gizmos,
+    links: Query<(&Transform, &ChainLink)>,
+    anchors: Query<(&Transform, &ChainAnchor)>,
+) {
+    let mut ordered = links
+        .iter()
+        .map(|(transform, link)| {
+            (
+                link.chain_index,
+                link.link_index,
+                transform.translation.truncate(),
+            )
+        })
+        .collect::<Vec<_>>();
+    ordered.sort_by_key(|(chain, link, _)| (*chain, *link));
+    for pair in ordered.windows(2) {
+        let [
+            (first_chain, first_link, first),
+            (second_chain, second_link, second),
+        ] = pair
+        else {
+            continue;
+        };
+        if first_chain != second_chain || *second_link != *first_link + 1 {
+            continue;
+        }
+        draw_chain_stroke(&mut gizmos, *first, *second);
+    }
+    for (anchor_transform, anchor) in &anchors {
+        let anchor_position = anchor_transform.translation.truncate();
+        if let Some((_, _, first_link)) = ordered.iter().find(|(chain_index, link_index, _)| {
+            *chain_index == anchor.chain_index && *link_index == 0
+        }) {
+            draw_chain_stroke(&mut gizmos, anchor_position, *first_link);
+        }
+    }
+}
+
+fn draw_chain_stroke(gizmos: &mut Gizmos, start: Vec2, end: Vec2) {
+    let direction = (end - start).normalize_or(Vec2::NEG_Y);
+    let normal = Vec2::new(-direction.y, direction.x);
+    let start = start + direction * 4.0;
+    let end = end - direction * 4.0;
+    for offset in [-1.0, 0.0, 1.0] {
+        gizmos.line_2d(
+            start + normal * offset,
+            end + normal * offset,
+            game_palette::color(game_palette::INK),
+        );
+    }
+}
+
+fn ring_mesh(inner_radius: f32, outer_radius: f32, segments: usize) -> Mesh {
+    ellipse_ring_mesh(
+        Vec2::splat(inner_radius),
+        Vec2::splat(outer_radius),
+        segments,
+    )
+}
+
+fn ellipse_ring_mesh(inner_radius: Vec2, outer_radius: Vec2, segments: usize) -> Mesh {
+    let segments = segments.max(3);
+    let mut positions = Vec::with_capacity(segments * 2);
+    for index in 0..segments {
+        let angle = index as f32 / segments as f32 * std::f32::consts::TAU;
+        positions.push([
+            outer_radius.x * angle.cos(),
+            outer_radius.y * angle.sin(),
+            0.0,
+        ]);
+        positions.push([
+            inner_radius.x * angle.cos(),
+            inner_radius.y * angle.sin(),
+            0.0,
+        ]);
+    }
+    let mut indices = Vec::with_capacity(segments * 6);
+    for index in 0..segments {
+        let next = (index + 1) % segments;
+        let outer = (index * 2) as u32;
+        let inner = outer + 1;
+        let next_outer = (next * 2) as u32;
+        let next_inner = next_outer + 1;
+        indices.extend_from_slice(&[outer, next_outer, inner, inner, next_outer, next_inner]);
+    }
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_indices(Indices::U32(indices));
+    mesh
+}
+
+/// Couples the blob's custom membrane solver to Avian chain links. Each link
+/// resolves only its closest membrane point, preventing a hanging chain from
+/// behaving like a continuous rigid wall.
+pub(super) fn resolve_blob_chain_contacts(
+    mut blobs: ResMut<BlobWorld>,
+    mut links: Query<(&Transform, &ChainLink, &mut LinearVelocity)>,
+) {
+    for (transform, link, mut velocity) in &mut links {
+        let link_position = transform.translation.truncate();
+        for active_blob in &mut blobs.active {
+            let blob_center = active_blob.body.center();
+            let blob_velocity = active_blob
+                .body
+                .particles
+                .iter()
+                .map(|particle| particle.position - particle.previous)
+                .sum::<Vec2>()
+                / active_blob.body.particles.len().max(1) as f32;
+            let average_radius = active_blob
+                .body
+                .particles
+                .iter()
+                .map(|particle| particle.position.distance(blob_center))
+                .sum::<f32>()
+                / active_blob.body.particles.len().max(1) as f32;
+            let volume_radius = average_radius.max(active_blob.body.rest_radius * 0.70);
+            let center_offset = link_position - blob_center;
+            let center_distance = center_offset.length();
+            // A link inside the body receives pressure from the blob volume,
+            // rather than waiting until it reaches one membrane particle.
+            if center_distance < volume_radius {
+                let volume_normal = center_offset.normalize_or(Vec2::Y);
+                let depth = volume_radius - center_distance;
+                // Transfer both the body's travel and its volumetric pressure.
+                // This is intentionally stronger than a membrane-only hit:
+                // a chain should visibly yield when a blob presses through it.
+                **velocity += blob_velocity * 0.48 + volume_normal * (depth * 5.2).min(220.0);
+            }
+            let skin = 2.0 * active_blob.body.size_scale();
+            let minimum_distance = link.radius + skin;
+            let Some((particle_index, distance)) = active_blob
+                .body
+                .particles
+                .iter()
+                .enumerate()
+                .map(|(index, particle)| (index, particle.position.distance(link_position)))
+                .min_by(|(_, first), (_, second)| first.total_cmp(second))
+            else {
+                continue;
+            };
+            if distance >= minimum_distance {
+                continue;
+            }
+            let particle = &mut active_blob.body.particles[particle_index];
+            let normal = (particle.position - link_position).normalize_or(Vec2::Y);
+            let incoming = particle.position - particle.previous;
+            let penetration = minimum_distance - distance;
+            // A soft partial correction lets the membrane fold around a link.
+            let correction = normal * penetration * 0.42;
+            particle.position += correction;
+            particle.previous += correction * 0.35;
+            let impact = (-incoming.dot(normal)).max(0.0);
+            **velocity -= normal * (impact * 0.55 + penetration * 5.0);
+        }
     }
 }
 
@@ -650,7 +915,10 @@ pub(super) fn switch_test_scenario(
     mut commands: Commands,
     colliders: Query<Entity, With<EnvironmentCollider>>,
     artwork: Query<Entity, With<LevelArtwork>>,
+    chains: Query<Entity, With<LevelChain>>,
     asset_server: Option<Res<AssetServer>>,
+    meshes: Option<ResMut<Assets<Mesh>>>,
+    materials: Option<ResMut<Assets<ColorMaterial>>>,
     mut scenario: ResMut<TestScenario>,
     mut route_progress: ResMut<RouteProgress>,
     mut level: ResMut<Level>,
@@ -681,11 +949,17 @@ pub(super) fn switch_test_scenario(
     for entity in &artwork {
         commands.entity(entity).despawn();
     }
+    for entity in &chains {
+        commands.entity(entity).despawn();
+    }
     for entity in &nutrient_bodies {
         commands.entity(entity).despawn();
     }
     let (new_level, spawn) = Level::test_scenario(requested);
     spawn_level_artwork(&mut commands, asset_server.as_deref(), &new_level);
+    if let (Some(mut meshes), Some(mut materials)) = (meshes, materials) {
+        spawn_level_chains(&mut commands, &new_level, &mut meshes, &mut materials);
+    }
     spawn_level_colliders(&mut commands, &new_level);
     *level = new_level;
     scenario.0 = requested;

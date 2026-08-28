@@ -20,6 +20,7 @@ pub(super) struct ParsedLevel {
     pub(super) lights: Vec<LightDefinition>,
     pub(super) expulsion_points: Vec<ExpulsionPointDefinition>,
     pub(super) hazards: Vec<HazardDefinition>,
+    pub(super) chains: Vec<ChainDefinition>,
     pub(super) decorations: Vec<VisualLayer>,
     pub(super) drop_emitters: Vec<DropEmitterDefinition>,
     pub(super) wastewater_areas: Vec<WastewaterAreaDefinition>,
@@ -121,6 +122,15 @@ pub(super) struct HazardDefinition {
     pub(super) damage_per_second: f32,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct ChainDefinition {
+    pub(super) id: String,
+    pub(super) anchor: Vec2,
+    pub(super) links: usize,
+    pub(super) link_radius: f32,
+    pub(super) spacing: f32,
+}
+
 #[derive(Debug)]
 pub(super) struct LevelFormatError(String);
 
@@ -157,6 +167,8 @@ struct LevelDocument {
     expulsion_points: Vec<ExpulsionPointDocument>,
     #[serde(default)]
     hazards: Vec<HazardDocument>,
+    #[serde(default)]
+    chains: Vec<ChainDocument>,
     #[serde(default)]
     decorations: Vec<VisualLayerDocument>,
     #[serde(default)]
@@ -280,6 +292,16 @@ struct HazardDocument {
     position: Point,
     size: Point,
     damage_per_second: f32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChainDocument {
+    id: String,
+    anchor: Point,
+    links: usize,
+    link_radius: f32,
+    spacing: f32,
 }
 
 pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError> {
@@ -453,6 +475,31 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
             })
         })
         .collect::<Result<Vec<_>, LevelFormatError>>()?;
+    let chains = document
+        .chains
+        .into_iter()
+        .enumerate()
+        .map(|(index, chain)| {
+            if !(2..=24).contains(&chain.links) {
+                return Err(LevelFormatError(format!(
+                    "chain {index} links must be between 2 and 24"
+                )));
+            }
+            Ok(ChainDefinition {
+                id: {
+                    validate_text(&format!("chain {index} id"), &chain.id)?;
+                    chain.id
+                },
+                anchor: finite_point(&format!("chain {index} anchor"), chain.anchor)?,
+                links: chain.links,
+                link_radius: positive_number(
+                    &format!("chain {index} link_radius"),
+                    chain.link_radius,
+                )?,
+                spacing: positive_number(&format!("chain {index} spacing"), chain.spacing)?,
+            })
+        })
+        .collect::<Result<Vec<_>, LevelFormatError>>()?;
     let lights = document
         .lights
         .into_iter()
@@ -533,6 +580,7 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
         lights,
         expulsion_points,
         hazards,
+        chains,
         decorations,
         drop_emitters,
         wastewater_areas,
@@ -666,6 +714,13 @@ mod tests {
                     "gravity": 420,
                     "depth": -5
                 }],
+                "chains": [{
+                    "id": "test_chain",
+                    "anchor": { "x": 40, "y": 90 },
+                    "links": 6,
+                    "link_radius": 7,
+                    "spacing": 15
+                }],
                 "wastewater_areas": [{
                     "position": { "x": 0, "y": -350 },
                     "size": { "x": 900, "y": 100 },
@@ -689,6 +744,8 @@ mod tests {
         assert_eq!(level.fixtures.len(), 1);
         assert_eq!(level.visual_layers.len(), 1);
         assert_eq!(level.drop_emitters.len(), 1);
+        assert_eq!(level.chains.len(), 1);
+        assert_eq!(level.chains[0].id, "test_chain");
         assert_eq!(level.wastewater_areas.len(), 1);
         assert_eq!(
             level.wastewater_areas[0]

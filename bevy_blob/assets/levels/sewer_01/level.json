@@ -56,6 +56,15 @@
     { "x": 460, "y": 265 },
     { "x": 700, "y": 445 }
   ],
+  "chains": [
+    {
+      "id": "entrance_hanging_chain",
+      "anchor": { "x": -330, "y": -170 },
+      "links": 8,
+      "link_radius": 7,
+      "spacing": 15
+    }
+  ],
   "visual_layers": [
     { "image": "levels/sewer_01/art/background.png", "position": { "x": 0, "y": 182 }, "size": { "x": 1800, "y": 1500 }, "depth": -50 },
     { "image": "levels/sewer_01/art/platform.png", "position": { "x": 0, "y": -366.75 }, "size": { "x": 660, "y": 100 }, "depth": -1 },
