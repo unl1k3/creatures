@@ -41,9 +41,22 @@ pub(super) fn follow_camera(
         5 => 1.32,
         _ => 1.0,
     };
+    let mut pixel_scale = None;
     if let Projection::Orthographic(projection) = &mut *camera.1 {
         projection.scale += (desired_scale - projection.scale) * response;
+        pixel_scale = Some(projection.scale);
     }
+    if let Some(pixel_scale) = pixel_scale {
+        snap_to_texture_pixel_grid(&mut camera.0.translation, pixel_scale);
+    }
+}
+
+/// Align the camera to the rendered pixel grid. Thin ink lines are stable only
+/// when their sampling position does not drift through fractions of a pixel.
+fn snap_to_texture_pixel_grid(translation: &mut Vec3, orthographic_scale: f32) {
+    let pixel = orthographic_scale.max(f32::EPSILON);
+    translation.x = (translation.x / pixel).round() * pixel;
+    translation.y = (translation.y / pixel).round() * pixel;
 }
 
 fn update_debug_camera(

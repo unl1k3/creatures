@@ -9,9 +9,6 @@ use bevy::prelude::Color;
 pub(crate) const IVORY: [f32; 4] = [0.89, 0.86, 0.77, 1.0];
 pub(crate) const NIGHT: [f32; 4] = [0.025, 0.035, 0.075, 1.0];
 pub(crate) const INK: [f32; 4] = [0.035, 0.045, 0.055, 1.0];
-pub(crate) const DEEP_INK: [f32; 4] = [0.015, 0.020, 0.024, 1.0];
-pub(crate) const PAPER_STROKE: [f32; 4] = [0.055, 0.060, 0.058, 0.58];
-pub(crate) const STONE_LIGHT: [f32; 4] = [0.58, 0.54, 0.44, 1.0];
 
 pub(crate) const BLOB_FAMILIES: [[f32; 3]; 6] = [
     // Root cyan, then deliberately distant hues for descendant families.

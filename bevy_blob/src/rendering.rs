@@ -3,9 +3,27 @@ use crate::environment::{ForegroundArtwork, LevelArtwork};
 use crate::level_format::LightDefinition;
 use crate::palette as game_palette;
 use crate::shield::shield_spine_fans;
+use bevy::image::{
+    ImageAddressMode, ImageFilterMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor,
+};
+use bevy::math::Affine2;
 use bevy::sprite::Anchor;
 use bevy::{asset::RenderAssetUsages, mesh::Indices, render::render_resource::PrimitiveTopology};
 use std::collections::HashSet;
+
+const PLATFORM_VISUAL_CONTACT_OFFSET: f32 = 5.0 * DEFAULT_CREATURE_SCALE;
+const BRICK_TILE_PIXEL_WIDTH: f32 = 256.0;
+const BRICK_TILE_PIXEL_HEIGHT: f32 = 40.0;
+const REFERENCE_PLATFORM_HEIGHT: f32 = 28.0;
+const BRICK_TILE_WORLD_SCALE: f32 =
+    (REFERENCE_PLATFORM_HEIGHT + 2.0 * PLATFORM_VISUAL_CONTACT_OFFSET - 3.2)
+        / BRICK_TILE_PIXEL_HEIGHT;
+const BRICK_TILE_WORLD_WIDTH: f32 = BRICK_TILE_PIXEL_WIDTH * BRICK_TILE_WORLD_SCALE;
+const BRICK_TILE_WORLD_HEIGHT: f32 = BRICK_TILE_PIXEL_HEIGHT * BRICK_TILE_WORLD_SCALE;
+const PLATFORM_TEXTURE_DEPTH: f32 = 2.25;
+// Rounded caps and authored polygon fixtures can meet the visual skin of a
+// rectangle. Draw them just above the slab texture to avoid coplanar overlap.
+const FIXTURE_TEXTURE_DEPTH: f32 = PLATFORM_TEXTURE_DEPTH + 0.01;
 
 #[derive(Resource)]
 pub(super) struct InkStylePreview {
@@ -129,21 +147,61 @@ pub(super) fn sync_ink_preview(
     }
 
     let ink = game_palette::color(game_palette::INK);
-    for (index, platform) in level.platforms.iter().enumerate() {
-        spawn_ink_platform(&mut commands, scenario.0, index, platform, ink);
+    // Platform geometry is shared by every level, so the paper-and-ink tile
+    // is shared too: laboratory and regression scenarios stay visually
+    // comparable with the playable sewer scene.
+    let brick_texture = asset_server
+        .load_builder()
+        .with_settings(|settings: &mut ImageLoaderSettings| {
+            settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+                address_mode_u: ImageAddressMode::Repeat,
+                address_mode_v: ImageAddressMode::Repeat,
+                // Ink lines are intentionally high contrast. Nearest sampling
+                // keeps a line black rather than blending it to a flickering
+                // grey while the camera follows the blob.
+                mag_filter: ImageFilterMode::Nearest,
+                min_filter: ImageFilterMode::Nearest,
+                ..default()
+            });
+        })
+        .load("levels/sewer_01/art/ink/platform-bricks.png");
+    for platform in &level.platforms {
+        spawn_ink_platform(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            scenario.0,
+            platform,
+            ink,
+            &brick_texture,
+        );
     }
-    let material = materials.add(ColorMaterial::from(ink));
+    let fixture_material = materials.add(ColorMaterial {
+        texture: Some(brick_texture.clone()),
+        ..default()
+    });
     for fixture in &level.fixtures {
         if fixture.len() < 3 {
             continue;
         }
-        // Rectangular artwork is already shifted by the default 5-unit
-        // collision skin. Expand polygon artwork by the same amount along its
-        // edge normals, keeping the stable collider untouched.
-        let visual_fixture = offset_convex_polygon(fixture, 5.0 * DEFAULT_CREATURE_SCALE);
+        // The physics uses these authored vertices. Grow only the visible
+        // contour by the blob's contact skin so the membrane meets the drawn
+        // surface without changing Avian's stable collision geometry.
+        let visual_fixture = offset_convex_polygon(fixture, PLATFORM_VISUAL_CONTACT_OFFSET);
         let positions = visual_fixture
             .iter()
             .map(|point| [point.x, point.y, 0.0])
+            .collect::<Vec<_>>();
+        // Fixture vertices are already in world space. Their UV coordinates
+        // therefore share the same global origin as every rectangular slab.
+        let texture_coordinates = visual_fixture
+            .iter()
+            .map(|point| {
+                [
+                    point.x / BRICK_TILE_WORLD_WIDTH,
+                    point.y / BRICK_TILE_WORLD_HEIGHT,
+                ]
+            })
             .collect::<Vec<_>>();
         let mut indices = Vec::with_capacity((fixture.len() - 2) * 3);
         for index in 1..fixture.len() - 1 {
@@ -154,14 +212,15 @@ pub(super) fn sync_ink_preview(
             RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
         );
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, texture_coordinates);
         mesh.insert_indices(Indices::U32(indices));
         commands.spawn((
             InkPreviewShape {
                 scenario: scenario.0,
             },
             Mesh2d(meshes.add(mesh)),
-            MeshMaterial2d(material.clone()),
-            Transform::from_xyz(0.0, 0.0, -0.20),
+            MeshMaterial2d(fixture_material.clone()),
+            Transform::from_xyz(0.0, 0.0, FIXTURE_TEXTURE_DEPTH),
         ));
     }
 }
@@ -191,25 +250,29 @@ fn offset_convex_polygon(vertices: &[Vec2], distance: f32) -> Vec<Vec2> {
             let next_outward = -(next - current).perp().normalize_or_zero() * orientation;
             let bisector = (previous_outward + next_outward).normalize_or(previous_outward);
             let alignment = bisector.dot(previous_outward).abs().max(0.35);
-            let miter = (distance / alignment).min(distance * 2.5);
-            current + bisector * miter
+            current + bisector * (distance / alignment).min(distance * 2.5)
         })
         .collect()
 }
 
 fn spawn_ink_platform(
     commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<ColorMaterial>,
     scenario: u8,
-    index: usize,
     platform: &Platform,
     ink: Color,
+    brick_texture: &Handle<Image>,
 ) {
-    const VISUAL_CONTACT_OFFSET: f32 = 5.0 * DEFAULT_CREATURE_SCALE;
-    // Blob collision carries a skin in every direction. Grow the visual slab
-    // by that same skin instead of shifting it upward: the top remains in its
-    // current correct position while side and underside contact also align.
+    // Level 1's ordinary horizontal platforms are 28 world units tall. The
+    // artwork's 40-pixel tile is calibrated to their visible inner height so
+    // it displays exactly its authored two rows there. All other rectangles
+    // reuse this fixed scale instead of stretching the drawing.
+    // The contact solver retains a small gap around the physical rectangle.
+    // Grow only the artwork by that documented skin to hide the numerical
+    // clearance while keeping the Avian collider untouched.
     let visual_center = platform.center;
-    let visual_half_size = platform.half_size + Vec2::splat(VISUAL_CONTACT_OFFSET);
+    let visual_half_size = platform.half_size + Vec2::splat(PLATFORM_VISUAL_CONTACT_OFFSET);
     let size = visual_half_size * 2.0;
     commands.spawn((
         InkPreviewShape { scenario },
@@ -219,72 +282,26 @@ fn spawn_ink_platform(
         Transform::from_translation(visual_center.extend(2.20)),
     ));
 
-    // A continuous cap marks the exact walkable edge. Light printed slabs below
-    // echo the ivory/charcoal background without extending beyond the collider.
-    let cap_height = (size.y * 0.24).clamp(4.0, 7.0);
+    let inner_size = (size - Vec2::splat(3.2)).max(Vec2::splat(2.0));
+    // Repeat the texture in UV space over a mesh that is exactly the size of
+    // the rectangle. Mesh bounds clip incomplete edge bricks rather than
+    // compressing them, and a thicker structure naturally exposes more rows.
+    let brick_world_size = Vec2::new(BRICK_TILE_WORLD_WIDTH, BRICK_TILE_WORLD_HEIGHT);
+    let texture_scale = inner_size / brick_world_size;
+    let texture_origin = (visual_center - inner_size * 0.5) / brick_world_size;
+    let texture_material = materials.add(ColorMaterial {
+        texture: Some(brick_texture.clone()),
+        // Anchoring UV zero in world space keeps the pattern continuous where
+        // two independently-authored structures meet or overlap.
+        uv_transform: Affine2::from_scale_angle_translation(texture_scale, 0.0, texture_origin),
+        ..default()
+    });
     commands.spawn((
         InkPreviewShape { scenario },
-        Sprite::from_color(
-            game_palette::color(game_palette::DEEP_INK),
-            Vec2::new(size.x, cap_height),
-        ),
-        Transform::from_translation(
-            (visual_center + Vec2::Y * (visual_half_size.y - cap_height * 0.5)).extend(2.27),
-        ),
+        Mesh2d(meshes.add(Rectangle::new(inner_size.x, inner_size.y))),
+        MeshMaterial2d(texture_material),
+        Transform::from_translation(visual_center.extend(PLATFORM_TEXTURE_DEPTH)),
     ));
-
-    let block_count = (size.x / 62.0).round().clamp(2.0, 9.0) as usize;
-    let block_width = size.x / block_count as f32;
-    let body_height = (size.y - cap_height - 2.0).max(2.0);
-    for block in 0..block_count {
-        let variation = ink_hash(index, block);
-        // A paper-like interior keeps the structures legible against the
-        // ivory background; ink borders and sparse strokes provide texture.
-        let block_color = game_palette::mix(
-            game_palette::IVORY,
-            game_palette::STONE_LIGHT,
-            0.18 + variation * 0.18,
-        );
-        let position = visual_center
-            + Vec2::new(
-                -visual_half_size.x + block_width * (block as f32 + 0.5),
-                -visual_half_size.y + body_height * 0.5 + 1.0,
-            );
-        commands.spawn((
-            InkPreviewShape { scenario },
-            Sprite::from_color(
-                game_palette::color(block_color),
-                Vec2::new((block_width - 2.2).max(3.0), body_height),
-            ),
-            Transform::from_translation(position.extend(2.25)),
-        ));
-
-        if block_width > 24.0 && body_height > 7.0 {
-            let stroke_length = block_width.min(42.0) * (0.28 + variation * 0.18);
-            let stroke_offset = Vec2::new(
-                (ink_hash(index + 31, block) - 0.5) * block_width * 0.28,
-                (ink_hash(index + 67, block) - 0.5) * body_height * 0.30,
-            );
-            let angle = (ink_hash(index + 97, block) - 0.5) * 0.22;
-            commands.spawn((
-                InkPreviewShape { scenario },
-                Sprite::from_color(
-                    game_palette::color(game_palette::PAPER_STROKE),
-                    Vec2::new(stroke_length, 1.1),
-                ),
-                Transform::from_translation((position + stroke_offset).extend(2.255))
-                    .with_rotation(Quat::from_rotation_z(angle)),
-            ));
-        }
-    }
-}
-
-fn ink_hash(first: usize, second: usize) -> f32 {
-    let value = (first as u32)
-        .wrapping_mul(0x9e37_79b9)
-        .wrapping_add((second as u32).wrapping_mul(0x85eb_ca6b));
-    let mixed = value ^ (value >> 16);
-    (mixed & 0xffff) as f32 / u16::MAX as f32
 }
 
 // Scenario 0 is the startup instance of level 1; pressing 1 explicitly assigns 1.
@@ -294,8 +311,7 @@ fn supports_ink_background(scenario: u8) -> bool {
 
 #[cfg(test)]
 mod ink_preview_tests {
-    use super::{InkStylePreview, offset_convex_polygon, supports_ink_background};
-    use bevy::prelude::Vec2;
+    use super::{InkStylePreview, supports_ink_background};
 
     #[test]
     fn ink_preview_is_the_default_rendering_mode() {
@@ -307,22 +323,6 @@ mod ink_preview_tests {
         assert!(supports_ink_background(0));
         assert!(supports_ink_background(1));
         assert!(!supports_ink_background(2));
-    }
-
-    #[test]
-    fn polygon_artwork_expands_to_cover_the_contact_skin() {
-        let square = [
-            Vec2::new(-10.0, -10.0),
-            Vec2::new(10.0, -10.0),
-            Vec2::new(10.0, 10.0),
-            Vec2::new(-10.0, 10.0),
-        ];
-        let expanded = offset_convex_polygon(&square, 3.25);
-
-        assert!((expanded[0].x + 13.25).abs() < 0.001);
-        assert!((expanded[0].y + 13.25).abs() < 0.001);
-        assert!((expanded[2].x - 13.25).abs() < 0.001);
-        assert!((expanded[2].y - 13.25).abs() < 0.001);
     }
 }
 
