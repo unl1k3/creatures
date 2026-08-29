@@ -21,6 +21,9 @@ const BRICK_TILE_WORLD_SCALE: f32 =
 const BRICK_TILE_WORLD_WIDTH: f32 = BRICK_TILE_PIXEL_WIDTH * BRICK_TILE_WORLD_SCALE;
 const BRICK_TILE_WORLD_HEIGHT: f32 = BRICK_TILE_PIXEL_HEIGHT * BRICK_TILE_WORLD_SCALE;
 const PLATFORM_TEXTURE_DEPTH: f32 = 2.25;
+// Overlapping authored slabs are intentional in several levels. A stable
+// depth step prevents their coplanar texture meshes from flickering.
+const PLATFORM_DEPTH_STEP: f32 = 0.001;
 // Rounded caps and authored polygon fixtures can meet the visual skin of a
 // rectangle. Draw them just above the slab texture to avoid coplanar overlap.
 const FIXTURE_TEXTURE_DEPTH: f32 = PLATFORM_TEXTURE_DEPTH + 0.01;
@@ -165,7 +168,6 @@ pub(super) fn sync_ink_preview(
         ));
     }
 
-    let ink = game_palette::color(game_palette::INK);
     // Platform geometry is shared by every level, so the paper-and-ink tile
     // is shared too: laboratory and regression scenarios stay visually
     // comparable with the playable sewer scene.
@@ -190,8 +192,8 @@ pub(super) fn sync_ink_preview(
             &mut meshes,
             &mut materials,
             scenario.0,
+            platform_index,
             platform,
-            ink,
             &brick_texture,
             level
                 .counterbalances
@@ -287,8 +289,8 @@ fn spawn_ink_platform(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<ColorMaterial>,
     scenario: u8,
+    platform_index: usize,
     platform: &Platform,
-    ink: Color,
     brick_texture: &Handle<Image>,
     counterbalance_platform: Option<usize>,
 ) {
@@ -302,24 +304,20 @@ fn spawn_ink_platform(
     let visual_center = platform.center;
     let visual_half_size = platform.half_size + Vec2::splat(PLATFORM_VISUAL_CONTACT_OFFSET);
     let size = visual_half_size * 2.0;
-    let mut border = commands.spawn((
-        InkPreviewShape { scenario },
-        Sprite::from_color(ink, size),
-        // The foreground artwork is an intentional occlusion layer (z=2.5),
-        // so structures are drawn beneath its pipes and corner debris.
-        Transform::from_translation(visual_center.extend(2.20)),
-    ));
-    if let Some(platform_index) = counterbalance_platform {
-        border.insert(CounterbalanceVisual { platform_index });
-    }
-
-    let inner_size = (size - Vec2::splat(3.2)).max(Vec2::splat(2.0));
     // Repeat the texture in UV space over a mesh that is exactly the size of
     // the rectangle. Mesh bounds clip incomplete edge bricks rather than
     // compressing them, and a thicker structure naturally exposes more rows.
     let brick_world_size = Vec2::new(BRICK_TILE_WORLD_WIDTH, BRICK_TILE_WORLD_HEIGHT);
-    let texture_scale = inner_size / brick_world_size;
-    let texture_origin = (visual_center - inner_size * 0.5) / brick_world_size;
+    // `Rectangle` uses image-style UVs: V grows downward while world Y grows
+    // upward. Account for that inversion here; otherwise every rectangle gets
+    // a different vertical brick phase despite sharing world coordinates.
+    let texture_scale = Vec2::new(size.x / brick_world_size.x, -size.y / brick_world_size.y);
+    let visual_min = visual_center - size * 0.5;
+    let visual_max = visual_center + size * 0.5;
+    let texture_origin = Vec2::new(
+        visual_min.x / brick_world_size.x,
+        visual_max.y / brick_world_size.y,
+    );
     let texture_material = materials.add(ColorMaterial {
         texture: Some(brick_texture.clone()),
         // Anchoring UV zero in world space keeps the pattern continuous where
@@ -329,9 +327,12 @@ fn spawn_ink_platform(
     });
     let mut fill = commands.spawn((
         InkPreviewShape { scenario },
-        Mesh2d(meshes.add(Rectangle::new(inner_size.x, inner_size.y))),
+        Mesh2d(meshes.add(Rectangle::new(size.x, size.y))),
         MeshMaterial2d(texture_material),
-        Transform::from_translation(visual_center.extend(PLATFORM_TEXTURE_DEPTH)),
+        Transform::from_translation(
+            visual_center
+                .extend(PLATFORM_TEXTURE_DEPTH + platform_index as f32 * PLATFORM_DEPTH_STEP),
+        ),
     ));
     if let Some(platform_index) = counterbalance_platform {
         fill.insert(CounterbalanceVisual { platform_index });

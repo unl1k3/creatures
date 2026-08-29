@@ -956,7 +956,7 @@ fn spawn_level_colliders(commands: &mut Commands, level: &Level) {
 /// collider keeps the soft-body and rigid-body views of the level identical.
 pub(super) fn simulate_counterbalances(
     time: Res<Time<Fixed>>,
-    blobs: Res<BlobWorld>,
+    mut blobs: ResMut<BlobWorld>,
     mut level: ResMut<Level>,
     // These are disjoint entity sets. State it explicitly so Bevy can safely
     // borrow both mutable transforms in the same system.
@@ -966,23 +966,25 @@ pub(super) fn simulate_counterbalances(
     let balances = level.counterbalances.clone();
     for balance in balances {
         let plate_surface = level.platforms[balance.plate_platform];
-        let load = blobs
-            .active
-            .iter()
-            .filter(|blob| {
-                let center = blob.body.center();
-                let radius = blob.body.rest_radius;
-                let plate_top = plate_surface.center.y + plate_surface.half_size.y;
-                let plate_bottom = plate_surface.center.y - plate_surface.half_size.y;
-                // Do not arm the mechanism merely because a blob passes next
-                // to it. Its lower membrane must first reach the plate.
-                (center.x - plate_surface.center.x).abs()
-                    <= plate_surface.half_size.x + radius * 0.3
-                    && center.y - radius <= plate_top + 5.0
-                    && center.y + radius >= plate_bottom - 5.0
-            })
-            .map(|blob| blob.body.rest_radius)
-            .sum::<f32>();
+        let mut load = 0.0;
+        let mut riders = Vec::new();
+        for (index, blob) in blobs.active.iter().enumerate() {
+            let center = blob.body.center();
+            let radius = blob.body.rest_radius;
+            let plate_top = plate_surface.center.y + plate_surface.half_size.y;
+            // Do not arm the mechanism merely because a blob passes next to
+            // it. Its lower membrane must first reach the upper plate face.
+            let rides_plate = (center.x - plate_surface.center.x).abs()
+                <= plate_surface.half_size.x + radius * 0.3
+                && center.y - radius <= plate_top + 5.0
+                // A blob climbing through the well can brush the plate from
+                // below; it must not count as a counterweight in that case.
+                && center.y >= plate_surface.center.y;
+            if rides_plate {
+                load += radius;
+                riders.push(index);
+            }
+        }
         let closed = gates
             .iter()
             .find(|(gate, _)| gate.platform_index == balance.gate_platform)
@@ -991,12 +993,12 @@ pub(super) fn simulate_counterbalances(
         let lift = (load / balance.minimum_radius).clamp(0.0, 1.0);
         // A single cable transmits the same travel at both ends: the plate
         // descends exactly as far as the gate rises.
+        let current_gate = level.platforms[balance.gate_platform].center;
         let desired = closed + balance.open_offset * lift;
         // Slow enough for a resting soft body to follow the plate instead of
         // receiving a sharp correction that looks like a bounce.
         let blend = 1.0 - (-0.85 * time.delta_secs()).exp();
-        let current = level.platforms[balance.gate_platform].center;
-        let desired = current.lerp(desired, blend);
+        let desired = current_gate.lerp(desired, blend);
         level.platforms[balance.gate_platform].center = desired;
         for (gate, mut transform) in &mut gates {
             if gate.platform_index == balance.gate_platform {
@@ -1007,11 +1009,23 @@ pub(super) fn simulate_counterbalances(
         for (plate, mut transform) in &mut plates {
             if plate.platform_index == plate_index {
                 let plate_target = plate.closed_center - balance.open_offset * lift;
+                let previous_position = level.platforms[plate_index].center;
                 let plate_position = level.platforms[plate_index]
                     .center
                     .lerp(plate_target, blend);
+                let plate_delta = plate_position - previous_position;
                 level.platforms[plate_index].center = plate_position;
                 transform.translation = plate_position.extend(0.0);
+                // The custom soft body does not receive rigid-body conveyor
+                // velocity from Avian. Move actual riders with the plate so
+                // its surface remains a support rather than passing through
+                // their smaller membrane particles.
+                for &index in &riders {
+                    for particle in &mut blobs.active[index].body.particles {
+                        particle.position += plate_delta;
+                        particle.previous += plate_delta;
+                    }
+                }
             }
         }
     }

@@ -35,10 +35,10 @@ use environment::{
 use hud::{arrange_auxiliary_windows, setup_legend, toggle_legend, update_metrics};
 #[cfg(test)]
 use input::next_selection;
-use input::{cycle_selection, exit_on_escape, handle_blob_actions};
+use input::{cycle_selection, exit_on_escape, handle_blob_actions, toggle_pause};
 use nutrition::{
     NutrientPhysics, NutritionWorld, circle_blob_penetration, draw_nutrition, setup_nutrition,
-    simulate_nutrition, start_phagocytosis,
+    simulate_nutrition, spawn_nutrient_bodies, start_phagocytosis,
 };
 #[cfg(test)]
 use rendering::blob_family_color;
@@ -135,8 +135,8 @@ fn main() {
             FixedUpdate,
             (
                 simulate_shields,
-                simulate_blob,
                 simulate_counterbalances,
+                simulate_blob,
                 resolve_blob_chain_contacts,
                 resolve_avian_environment,
                 enforce_blob_safety_bounds,
@@ -183,9 +183,12 @@ fn main() {
         .add_systems(
             Update,
             (
+                toggle_pause,
                 toggle_foreground,
                 draw_level_chains,
-                sync_counterbalance_visuals,
+                // Ink platforms may be rebuilt when the scenario changes;
+                // update movable visual layers only after that rebuild.
+                sync_counterbalance_visuals.after(sync_ink_preview),
             ),
         )
         .run();
@@ -232,7 +235,39 @@ fn simulate_blob(
     let horizontal = (keyboard.pressed(KeyCode::KeyD) || keyboard.pressed(KeyCode::ArrowRight))
         as i8
         - (keyboard.pressed(KeyCode::KeyA) || keyboard.pressed(KeyCode::ArrowLeft)) as i8;
-    let rejoin_directions = rejoin_roll_directions(&blobs, &level.platforms);
+    // A returning counterweight plate may pass through a blob that has just
+    // jumped away from it. It is visually moving, but must not become a
+    // second moving collision surface underneath the airborne soft body.
+    let airborne_counterweight_plates: Vec<usize> = level
+        .counterbalances
+        .iter()
+        .filter_map(|balance| {
+            let plate = level.platforms[balance.plate_platform];
+            let has_rider = blobs.active.iter().any(|blob| {
+                let center = blob.body.center();
+                let radius = blob.body.rest_radius;
+                (center.x - plate.center.x).abs() <= plate.half_size.x + radius * 0.3
+                    && center.y - radius <= plate.center.y + plate.half_size.y + 5.0
+                    && center.y >= plate.center.y
+            });
+            let has_airborne_blob_above = blobs.active.iter().any(|blob| {
+                let center = blob.body.center();
+                (center.x - plate.center.x).abs() <= plate.half_size.x + blob.body.rest_radius * 0.3
+                    && center.y > plate.center.y
+            });
+            (!has_rider && has_airborne_blob_above).then_some(balance.plate_platform)
+        })
+        .collect();
+    let collision_platforms: Vec<Platform> = level
+        .platforms
+        .iter()
+        .copied()
+        .enumerate()
+        .filter_map(|(index, platform)| {
+            (!airborne_counterweight_plates.contains(&index)).then_some(platform)
+        })
+        .collect();
+    let rejoin_directions = rejoin_roll_directions(&blobs, &collision_platforms);
     let selected = blobs.selected;
     for (index, active_blob) in blobs.active.iter_mut().enumerate() {
         let is_selected = index == selected;
@@ -270,7 +305,7 @@ fn simulate_blob(
             active_blob.id,
             &active_blob.body,
             shield_extension,
-            &level.platforms,
+            &collision_platforms,
             &level.fixtures,
         );
         active_blob
@@ -285,7 +320,7 @@ fn simulate_blob(
                 && !protrusion_active
                 && shield_extension < 0.05
                 && keyboard.pressed(KeyCode::ArrowDown),
-            &level.platforms,
+            &collision_platforms,
             &level.fixtures,
             vigor,
             alive,

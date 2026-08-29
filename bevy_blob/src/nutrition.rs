@@ -10,12 +10,11 @@ const ENGULF_DURATION: f32 = 1.25;
 const DIGESTION_DURATION: f32 = 6.0;
 const EXPULSION_DURATION: f32 = 1.2;
 const INTERNAL_WASTE_DRAG: f32 = 2.2;
-// The procedural nutrient is an organic capsule whose nominal vertical extent
-// is 88% of its logical radius. The same contact profile is used against every
-// level collider to avoid an invisible gap around the rendered mesh. The
-// small skin also covers Avian's resting-contact tolerance.
-const NUTRIENT_STRUCTURE_CONTACT_SCALE: f32 = 0.88;
-const NUTRIENT_CONTACT_SKIN: f32 = 0.9;
+// The procedural nutrient is slightly squashed, but its collision envelope is
+// kept close to the rendered profile so it never looks embedded in a surface.
+// The small skin also covers Avian's resting-contact tolerance.
+const NUTRIENT_STRUCTURE_CONTACT_SCALE: f32 = 0.96;
+const NUTRIENT_CONTACT_SKIN: f32 = 1.1;
 const ENERGY_YIELD: f32 = 0.46;
 const OBJECT_GRAVITY: f32 = 900.0;
 const PHAGOCYTOSIS_REACH: f32 = 44.0;
@@ -456,7 +455,7 @@ pub(super) fn simulate_nutrition(
     let rolling_command = movement_command(&keyboard);
     // Avian owns free nutrient motion and its collision against the static
     // level. The biological state machine reads that result below.
-    for (physics, transform, mut velocity, _) in &mut physics_nutrients {
+    for (physics, mut transform, mut velocity, _) in &mut physics_nutrients {
         let Some(nutrient) = nutrition.nutrients.get_mut(physics.index) else {
             continue;
         };
@@ -464,6 +463,20 @@ pub(super) fn simulate_nutrition(
             nutrient.state,
             NutrientState::Available { .. } | NutrientState::Waste { .. }
         ) {
+            // Avian handles ordinary rigid-body contacts. This compact
+            // post-solve pass is a safety net for a nutrient squeezed by the
+            // custom soft membrane: it resolves against level solids first,
+            // then guarantees that the free object remains outside blobs.
+            let contact_radius = free_nutrient_contact_radius(nutrient);
+            let mut position = transform.translation.truncate();
+            resolve_free_nutrient_penetration(
+                &mut position,
+                &mut velocity,
+                contact_radius,
+                &level,
+                &blobs,
+            );
+            transform.translation = position.extend(transform.translation.z);
             nutrient.position = transform.translation.truncate();
             match &mut nutrient.state {
                 NutrientState::Available { velocity: stored }
@@ -849,6 +862,47 @@ fn free_nutrient_contact_radius(nutrient: &Nutrient) -> f32 {
 
 fn nutrient_contact_radius(radius: f32) -> f32 {
     radius * NUTRIENT_STRUCTURE_CONTACT_SCALE + NUTRIENT_CONTACT_SKIN
+}
+
+/// Resolves the exceptional case where a soft blob presses a dynamic nutrient
+/// through an Avian contact in a single simulation step. Level geometry wins
+/// over membrane contact; the nutrient is never allowed to remain inside
+/// either kind of solid.
+fn resolve_free_nutrient_penetration(
+    position: &mut Vec2,
+    velocity: &mut LinearVelocity,
+    radius: f32,
+    level: &Level,
+    blobs: &BlobWorld,
+) {
+    for _ in 0..4 {
+        let correction = level
+            .platforms
+            .iter()
+            .find_map(|platform| {
+                circle_aabb_penetration(*position, radius, platform.center, platform.half_size)
+            })
+            .or_else(|| {
+                level
+                    .fixtures
+                    .iter()
+                    .find_map(|fixture| circle_convex_penetration(*position, radius, fixture))
+            })
+            .or_else(|| {
+                blobs
+                    .active
+                    .iter()
+                    .find_map(|blob| circle_blob_penetration(*position, radius, &blob.body))
+            });
+        let Some((depth, normal)) = correction else {
+            break;
+        };
+        *position += normal * (depth + 0.35);
+        let inward_speed = velocity.0.dot(normal);
+        if inward_speed < 0.0 {
+            velocity.0 -= normal * inward_speed;
+        }
+    }
 }
 
 fn movement_command(keyboard: &ButtonInput<KeyCode>) -> bool {

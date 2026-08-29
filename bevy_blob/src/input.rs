@@ -9,6 +9,21 @@ pub(super) fn exit_on_escape(
     }
 }
 
+/// Pauses virtual time, which also stops fixed physics while preserving the
+/// UI update loop so the same key can resume the game.
+pub(super) fn toggle_pause(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut virtual_time: ResMut<Time<Virtual>>,
+) {
+    if keyboard.just_pressed(KeyCode::KeyP) {
+        if virtual_time.is_paused() {
+            virtual_time.unpause();
+        } else {
+            virtual_time.pause();
+        }
+    }
+}
+
 pub(super) fn cycle_selection(
     keyboard: Res<ButtonInput<KeyCode>>,
     vitality: Res<VitalityWorld>,
@@ -35,6 +50,8 @@ pub(super) fn handle_blob_actions(
     mut vitality: ResMut<VitalityWorld>,
     mut route_progress: ResMut<RouteProgress>,
     mut nutrition: ResMut<NutritionWorld>,
+    mut commands: Commands,
+    nutrient_bodies: Query<Entity, With<NutrientPhysics>>,
 ) {
     if keyboard.just_pressed(KeyCode::KeyR) {
         reset_world_at(&mut blobs, level.spawn_position);
@@ -42,7 +59,11 @@ pub(super) fn handle_blob_actions(
         shields.reset();
         vitality.reset();
         route_progress.next = 1;
+        for entity in &nutrient_bodies {
+            commands.entity(entity).despawn();
+        }
         nutrition.reset_from_definitions(&level.nutrients);
+        spawn_nutrient_bodies(&mut commands, &level.nutrients);
         return;
     }
 

@@ -20,7 +20,7 @@ pub(super) fn follow_camera(
         return;
     }
     if debug_overlay.camera_detached {
-        if keyboard.just_pressed(KeyCode::KeyP) {
+        if keyboard.just_pressed(KeyCode::KeyF) {
             camera.0.translation.x = target.x;
             camera.0.translation.y = target.y;
             debug_overlay.camera_detached = false;
@@ -84,7 +84,7 @@ fn update_debug_camera(
         orthographic.scale =
             (orthographic.scale * (zoom as f32 * 1.35 * dt).exp()).clamp(0.45, 3.5);
     }
-    if keyboard.just_pressed(KeyCode::KeyP) {
+    if keyboard.just_pressed(KeyCode::KeyF) {
         transform.translation.x = selected_target.x;
         transform.translation.y = selected_target.y;
         orthographic.scale = 1.0;
@@ -124,7 +124,7 @@ mod tests {
         keyboard.release(KeyCode::KeyL);
         keyboard.release(KeyCode::KeyI);
         keyboard.release(KeyCode::KeyU);
-        keyboard.press(KeyCode::KeyP);
+        keyboard.press(KeyCode::KeyF);
         update_debug_camera(
             0.0,
             &keyboard,
