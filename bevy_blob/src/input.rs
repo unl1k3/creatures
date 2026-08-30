@@ -107,11 +107,19 @@ pub(super) fn handle_blob_actions(
             .is_some_and(|blob| blob.body.can_split())
     {
         let parent_id = blobs.active[blobs.selected].id;
-        split_selected(&mut blobs, &mut split_rng, fixed_time.delta_secs());
-        if let (Some(first), Some(second)) = (
-            blobs.active.get(blobs.selected),
-            blobs.active.get(blobs.selected + 1),
-        ) {
+        let split_succeeded = split_selected_in_level(
+            &mut blobs,
+            &mut split_rng,
+            fixed_time.delta_secs(),
+            &level.platforms,
+            &level.fixtures,
+        );
+        if split_succeeded
+            && let (Some(first), Some(second)) = (
+                blobs.active.get(blobs.selected),
+                blobs.active.get(blobs.selected + 1),
+            )
+        {
             vitality.split(parent_id, [first.id, second.id]);
         }
     }

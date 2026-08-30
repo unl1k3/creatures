@@ -1143,7 +1143,7 @@ pub(super) fn resolve_avian_environment(
     let selected = blobs.selected;
     for (blob_index, active_blob) in blobs.active.iter_mut().enumerate() {
         let blob_center = active_blob.body.center();
-        let skin = 5.0 * active_blob.body.size_scale();
+        let skin = (5.0 * active_blob.body.size_scale()).max(crate::blob::MIN_COLLISION_SKIN);
         let probe_radius = (skin * 0.55).max(0.8);
         let probe = Collider::circle(probe_radius);
         let ignore_impact_trauma = active_blob.body.ignores_impact_trauma();

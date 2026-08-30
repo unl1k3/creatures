@@ -415,6 +415,8 @@ fn enforce_blob_safety_bounds(level: Res<Level>, mut blobs: ResMut<BlobWorld>) {
     }
 }
 
+/// Returns true only for an actual containment, not for the shallow overlap
+/// that can occur while a soft membrane is resting on its contact skin.
 fn reset_world_at(blobs: &mut BlobWorld, position: Vec2) {
     blobs.active = vec![ActiveBlob {
         id: 0,
@@ -428,20 +430,38 @@ fn reset_world_at(blobs: &mut BlobWorld, position: Vec2) {
     blobs.next_id = 1;
 }
 
+#[cfg(test)]
 fn split_selected(blobs: &mut BlobWorld, rng: &mut SplitRng, dt: f32) {
+    let _ = split_selected_in_level(blobs, rng, dt, &[], &[]);
+}
+
+fn split_selected_in_level(
+    blobs: &mut BlobWorld,
+    rng: &mut SplitRng,
+    dt: f32,
+    platforms: &[Platform],
+    fixtures: &[Vec<Vec2>],
+) -> bool {
     if blobs.active.is_empty() || blobs.active.len() >= MAX_ACTIVE_BLOBS {
-        return;
+        return false;
     }
     let index = blobs.selected.min(blobs.active.len() - 1);
     if !blobs.active[index].body.can_split() {
-        return;
+        return false;
     }
+    let parent_body = &blobs.active[index].body;
+    let (smaller_count, smaller_on_left) = rng.split_choice(parent_body.particles.len());
+    let [mut first_body, mut second_body] =
+        parent_body.split_pair_uneven(dt, smaller_count, smaller_on_left);
+    // Never replace a valid parent with children already embedded in level
+    // geometry. This is most visible next to the thin wall of scenario 8.
+    if !place_blob_clear(&mut first_body, platforms, fixtures)
+        || !place_blob_clear(&mut second_body, platforms, fixtures)
+    {
+        return false;
+    }
+
     let parent = blobs.active.remove(index);
-    let (smaller_count, smaller_on_left) = rng.split_choice(parent.body.particles.len());
-    let [first_body, second_body] =
-        parent
-            .body
-            .split_pair_uneven(dt, smaller_count, smaller_on_left);
     blobs.parent_links.insert(parent.id, parent.parent_id);
     let first_id = blobs.next_id;
     let second_id = blobs.next_id + 1;
@@ -464,6 +484,7 @@ fn split_selected(blobs: &mut BlobWorld, rng: &mut SplitRng, dt: f32) {
     );
     blobs.selected = index;
     blobs.rejoin_elapsed = 0.0;
+    true
 }
 
 fn start_selected_rejoin(blobs: &mut BlobWorld) -> bool {
@@ -559,7 +580,7 @@ fn update_rejoining(
             &blobs.active[first_index].body,
             &blobs.active[second_index].body,
         );
-        if !place_merged_blob_clear(&mut merged, platforms, fixtures) {
+        if !place_blob_clear(&mut merged, platforms, fixtures) {
             return None;
         }
         let grandparent = blobs.parent_links.remove(&parent_id).flatten();
@@ -582,15 +603,11 @@ fn update_rejoining(
     None
 }
 
-fn place_merged_blob_clear(
-    merged: &mut Blob,
-    platforms: &[Platform],
-    fixtures: &[Vec<Vec2>],
-) -> bool {
-    let initial_center = merged.center();
-    let clearance_radius = merged.rest_radius + 3.0 * merged.size_scale();
+fn place_blob_clear(blob: &mut Blob, platforms: &[Platform], fixtures: &[Vec<Vec2>]) -> bool {
+    let initial_center = blob.center();
+    let clearance_radius = blob.rest_radius + 3.0 * blob.size_scale();
     for _ in 0..16 {
-        let center = merged.center();
+        let center = blob.center();
         let correction = platforms
             .iter()
             .find_map(|platform| merge_circle_aabb_penetration(center, clearance_radius, platform))
@@ -600,9 +617,9 @@ fn place_merged_blob_clear(
                 })
             });
         let Some((depth, normal)) = correction else {
-            return merged.center().distance(initial_center) <= merged.rest_radius * 1.1;
+            return blob.center().distance(initial_center) <= blob.rest_radius * 1.1;
         };
-        merged.translate(normal * (depth + 0.5));
+        blob.translate(normal * (depth + 0.5));
     }
     false
 }

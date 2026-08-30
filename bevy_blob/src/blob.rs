@@ -3,10 +3,13 @@ use bevy::prelude::*;
 pub const PARTICLE_COUNT: usize = 24;
 pub const REFERENCE_RADIUS: f32 = 58.0;
 pub const DEFAULT_CREATURE_SCALE: f32 = 0.65;
+/// Small fragments need a finite physical envelope around thin level walls.
+/// This does not alter their drawn size or elastic rest shape.
+pub const MIN_COLLISION_SKIN: f32 = 2.5;
 const DEFAULT_GAMEPLAY_RADIUS: f32 = REFERENCE_RADIUS * DEFAULT_CREATURE_SCALE;
-const SPLIT_RESOLUTION_MULTIPLIER: usize = 2;
 const MIN_SPLIT_SOURCE_PARTICLES: usize = 16;
 const SOLVER_ITERATIONS: usize = 8;
+const MAX_ADAPTIVE_CONTACT_PASSES: usize = 4;
 const GRAVITY: f32 = 1_150.0;
 const GROUND_ACCELERATION: f32 = 1_050.0;
 const AIR_ACCELERATION: f32 = 310.0;
@@ -66,7 +69,6 @@ pub struct Blob {
     pub rest_area: f32,
     pub rest_radius: f32,
     pub grounded: bool,
-    pub coyote: f32,
     pub charge: f32,
     pub last_impact_speed: f32,
     launch_grace: f32,
@@ -119,7 +121,6 @@ impl Blob {
             rest_area,
             rest_radius: radius,
             grounded: false,
-            coyote: 0.0,
             charge: 0.0,
             last_impact_speed: 0.0,
             launch_grace: 0.0,
@@ -148,9 +149,11 @@ impl Blob {
         self.particles.len() >= MIN_SPLIT_SOURCE_PARTICLES
     }
 
-    /// Splits mass, points and area according to the requested smaller child.
-    /// Position and separation impulse are mass-weighted, preserving the
-    /// parent's centre of mass and total momentum.
+    /// Splits mass and area according to the requested smaller child.
+    /// Each child keeps the base membrane resolution so even the smallest
+    /// fragments retain a smooth, stable collision contour. Position and
+    /// separation impulse remain mass-weighted, preserving centre of mass and
+    /// total momentum.
     pub fn split_pair_uneven(
         &self,
         dt: f32,
@@ -167,8 +170,8 @@ impl Blob {
         };
         let left_fraction = left_mass_units as f32 / total_count as f32;
         let right_fraction = right_mass_units as f32 / total_count as f32;
-        let left_count = left_mass_units * SPLIT_RESOLUTION_MULTIPLIER;
-        let right_count = right_mass_units * SPLIT_RESOLUTION_MULTIPLIER;
+        let left_count = PARTICLE_COUNT;
+        let right_count = PARTICLE_COUNT;
         let radius_for = |count: usize, area_fraction: f32| {
             let polygon_factor = count as f32 * (std::f32::consts::TAU / count as f32).sin();
             (2.0 * self.rest_area * area_fraction / polygon_factor).sqrt()
@@ -599,15 +602,9 @@ impl Blob {
             self.idle_amount = 0.0;
         }
 
-        self.coyote = if self.grounded {
-            0.16
-        } else {
-            (self.coyote - dt).max(0.0)
-        };
-
-        // Arm whenever Down is held while ground contact is available. This
-        // also works if the key was pressed just before landing or while moving.
-        if charging && !self.jump_armed && self.coyote > 0.0 {
+        // A charge begins only from a real support contact. Keeping a short
+        // coyote window here made it possible to start charging in mid-air.
+        if charging && !self.jump_armed && self.grounded {
             self.jump_armed = true;
         }
         if charging && self.jump_armed {
@@ -772,7 +769,6 @@ impl Blob {
             }
             self.remove_angular_velocity();
             self.charge = 0.0;
-            self.coyote = 0.0;
             self.jump_armed = false;
             self.grounded = false;
             self.launch_grace = 0.12;
@@ -819,6 +815,28 @@ impl Blob {
             // tiny lateral correction. A resting creature may deform, but it
             // must not slowly walk across the platform by itself.
             self.translate(Vec2::X * (anchor_x - self.center().x));
+        }
+        // Small fragments cover a larger fraction of their radius in one
+        // fixed step. Give their contact constraints extra passes without
+        // re-running input or jump impulses.
+        let maximum_travel = self
+            .particles
+            .iter()
+            .map(|particle| (particle.position - particle.previous).length())
+            .fold(0.0_f32, f32::max);
+        let contact_step = (self.rest_radius * 0.22).max(3.0);
+        let adaptive_passes = (maximum_travel / contact_step)
+            .ceil()
+            .clamp(1.0, MAX_ADAPTIVE_CONTACT_PASSES as f32) as usize;
+        for _ in 1..adaptive_passes {
+            self.solve_edges();
+            self.solve_curvature();
+            self.solve_area();
+            self.limit_collapse();
+            self.limit_stretch();
+            self.solve_collisions(platforms);
+            self.solve_fixture_collisions(fixtures);
+            self.repair_self_intersection();
         }
         self.last_impact_speed /= dt.max(0.000_001);
     }
@@ -1088,7 +1106,7 @@ impl Blob {
     fn solve_collisions(&mut self, platforms: &[Platform]) {
         // Keep contact thickness constant while tonicity changes. A growing
         // collision envelope would move a resting corpse on its own.
-        let skin = 5.0 * self.size_scale();
+        let skin = (5.0 * self.size_scale()).max(MIN_COLLISION_SKIN);
         let blob_center = self.center();
         let mut support_sum = Vec2::ZERO;
         let mut support_count = 0;
@@ -1341,7 +1359,9 @@ fn has_self_intersections(particles: &[Particle]) -> bool {
 fn jump_size_factor(radius: f32) -> f32 {
     (DEFAULT_GAMEPLAY_RADIUS / radius.max(1.0))
         .powf(0.8)
-        .clamp(0.72, 1.75)
+        // Small fragments retain a modest, readable advantage without
+        // turning the smallest pieces into dramatically stronger jumpers.
+        .clamp(0.72, 1.90)
 }
 
 fn convex_penetration(point: Vec2, vertices: &[Vec2]) -> Option<(f32, Vec2)> {
