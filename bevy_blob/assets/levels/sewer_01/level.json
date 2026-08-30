@@ -63,6 +63,27 @@
       "links": 8,
       "link_radius": 7,
       "spacing": 15
+    },
+    {
+      "id": "left_service_chain",
+      "anchor": { "x": -540, "y": -6 },
+      "links": 7,
+      "link_radius": 6,
+      "spacing": 14
+    },
+    {
+      "id": "central_support_chain",
+      "anchor": { "x": 120, "y": 50 },
+      "links": 6,
+      "link_radius": 6,
+      "spacing": 14
+    },
+    {
+      "id": "upper_right_support_chain",
+      "anchor": { "x": 250, "y": 494 },
+      "links": 7,
+      "link_radius": 5.5,
+      "spacing": 13
     }
   ],
   "visual_layers": [
