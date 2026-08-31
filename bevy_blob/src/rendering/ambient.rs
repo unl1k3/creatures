@@ -1,4 +1,5 @@
 use super::InkStylePreview;
+use crate::camera::GameCamera;
 use crate::environment::{Level, TestScenario, WastewaterEffects};
 use crate::level_format::{BubbleSettingsDefinition, WastewaterAreaDefinition};
 use crate::palette;
@@ -16,10 +17,34 @@ pub(crate) struct AmbientDropAssets {
 #[derive(Resource, Default)]
 pub(crate) struct WastewaterEffectMaterials(HashMap<[u8; 3], Handle<ColorMaterial>>);
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub(crate) struct AmbientDropState {
     scenario: Option<u8>,
     timers: Vec<f32>,
+    random: u64,
+    rain_enabled: bool,
+    rain_delay: f32,
+}
+
+impl Default for AmbientDropState {
+    fn default() -> Self {
+        Self {
+            scenario: None,
+            timers: Vec::new(),
+            random: 0xa2d4_7c81_39ef_165b,
+            rain_enabled: false,
+            rain_delay: 0.0,
+        }
+    }
+}
+
+impl AmbientDropState {
+    fn unit_random(&mut self) -> f32 {
+        self.random ^= self.random << 13;
+        self.random ^= self.random >> 7;
+        self.random ^= self.random << 17;
+        (self.random as u32) as f32 / u32::MAX as f32
+    }
 }
 
 #[derive(Resource, Default)]
@@ -77,20 +102,26 @@ pub(crate) struct WastewaterBubble {
 
 #[derive(Component)]
 pub(crate) struct AmbientDrop {
+    position: Vec2,
     velocity: Vec2,
     gravity: f32,
     radius: f32,
     terminal_y: f32,
     splash_on_impact: bool,
+    depth: f32,
+    parallax: f32,
 }
 
 #[derive(Component)]
 pub(crate) struct AmbientSplashParticle {
+    position: Vec2,
     velocity: Vec2,
     gravity: f32,
     remaining: f32,
     duration: f32,
     radius: f32,
+    depth: f32,
+    parallax: f32,
 }
 
 pub(crate) fn setup_ambient_drop_assets(
@@ -369,11 +400,14 @@ fn spawn_bubble_burst(
         let radius = source_radius * (0.20 + size_variation * 0.16);
         commands.spawn((
             AmbientSplashParticle {
+                position: impact + Vec2::Y * radius,
                 velocity,
                 gravity: 245.0,
                 remaining: duration,
                 duration,
                 radius,
+                depth: 0.11,
+                parallax: 1.0,
             },
             Mesh2d(assets.mesh.clone()),
             MeshMaterial2d(material.clone()),
@@ -425,10 +459,17 @@ pub(crate) fn simulate_ambient_drops(
     ink_style: Res<InkStylePreview>,
     scenario: Res<TestScenario>,
     level: Res<Level>,
+    camera: Single<&Transform, With<GameCamera>>,
     assets: Res<AmbientDropAssets>,
     mut state: ResMut<AmbientDropState>,
-    mut drops: Query<(Entity, &mut AmbientDrop, &mut Transform), Without<AmbientSplashParticle>>,
-    mut splashes: Query<(Entity, &mut AmbientSplashParticle, &mut Transform), Without<AmbientDrop>>,
+    mut drops: Query<
+        (Entity, &mut AmbientDrop, &mut Transform),
+        (Without<AmbientSplashParticle>, Without<GameCamera>),
+    >,
+    mut splashes: Query<
+        (Entity, &mut AmbientSplashParticle, &mut Transform),
+        (Without<AmbientDrop>, Without<GameCamera>),
+    >,
 ) {
     let dt = time.delta_secs().min(1.0 / 20.0);
     if !ink_style.enabled || !matches!(scenario.0, 0 | 1) {
@@ -445,16 +486,23 @@ pub(crate) fn simulate_ambient_drops(
 
     for (entity, mut drop, mut transform) in &mut drops {
         drop.velocity.y -= drop.gravity * dt;
-        transform.translation += (drop.velocity * dt).extend(0.0);
+        let velocity = drop.velocity;
+        drop.position += velocity * dt;
+        transform.translation = (drop.position
+            + parallax_offset(camera.translation.truncate(), drop.parallax))
+        .extend(drop.depth);
         let speed_stretch = 1.0 + (-drop.velocity.y / 360.0).clamp(0.0, 0.65);
         transform.scale.y = drop.radius * speed_stretch;
-        if transform.translation.y - drop.radius * speed_stretch <= drop.terminal_y {
+        if drop.position.y - drop.radius * speed_stretch <= drop.terminal_y {
             if drop.splash_on_impact {
                 spawn_dry_surface_splash(
                     &mut commands,
                     &assets,
-                    Vec2::new(transform.translation.x, drop.terminal_y),
+                    Vec2::new(drop.position.x, drop.terminal_y),
                     drop.radius,
+                    drop.depth,
+                    drop.parallax,
+                    camera.translation.truncate(),
                 );
             }
             commands.entity(entity).despawn();
@@ -468,7 +516,11 @@ pub(crate) fn simulate_ambient_drops(
             continue;
         }
         particle.velocity.y -= particle.gravity * dt;
-        transform.translation += (particle.velocity * dt).extend(0.0);
+        let velocity = particle.velocity;
+        particle.position += velocity * dt;
+        transform.translation = (particle.position
+            + parallax_offset(camera.translation.truncate(), particle.parallax))
+        .extend(particle.depth);
         let life = (particle.remaining / particle.duration).clamp(0.0, 1.0);
         let scale = particle.radius * life.sqrt();
         transform.scale = Vec3::new(scale, scale * 1.35, 1.0);
@@ -495,16 +547,97 @@ pub(crate) fn simulate_ambient_drops(
         commands.spawn((
             AmbientDrop {
                 velocity: Vec2::ZERO,
+                position: emitter.position,
                 gravity: emitter.gravity,
                 radius: emitter.radius,
                 terminal_y,
                 splash_on_impact: surface.is_some(),
+                depth: emitter.depth,
+                parallax: emitter.parallax,
             },
             Mesh2d(assets.mesh.clone()),
             MeshMaterial2d(assets.material.clone()),
             Transform {
-                translation: emitter.position.extend(emitter.depth),
+                translation: (emitter.position
+                    + parallax_offset(camera.translation.truncate(), emitter.parallax))
+                .extend(emitter.depth),
                 scale: Vec3::new(emitter.radius * 1.35, emitter.radius, 1.0),
+                ..default()
+            },
+        ));
+    }
+}
+
+/// Toggles a visual rain test. The drops stay inside the playable side walls
+/// and deliberately bypass the authored level emitters.
+pub(crate) fn trigger_drop_shower(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
+    camera: Single<&Transform, With<GameCamera>>,
+    level: Res<Level>,
+    assets: Res<AmbientDropAssets>,
+    mut state: ResMut<AmbientDropState>,
+    mut commands: Commands,
+) {
+    if keyboard.just_pressed(KeyCode::KeyV) {
+        state.rain_enabled = !state.rain_enabled;
+        state.rain_delay = 0.0;
+    }
+    if !state.rain_enabled {
+        return;
+    }
+
+    state.rain_delay -= time.delta_secs();
+    if state.rain_delay > 0.0 {
+        return;
+    }
+    state.rain_delay += 0.38;
+
+    const DROP_COUNT: usize = 12;
+    const VIEW_TOP_OFFSET: f32 = 390.0;
+    let camera_position = camera.translation.truncate();
+    let start_y =
+        (camera_position.y + VIEW_TOP_OFFSET).min(level.center().y + level.size().y * 0.5 - 28.0);
+    let horizontal_bounds = level.safety_bounds.map_or(
+        (
+            level.center().x - level.size().x * 0.5,
+            level.center().x + level.size().x * 0.5,
+        ),
+        |bounds| (bounds.min.x, bounds.max.x),
+    );
+    // Keep the stream away from the physical wall colliders themselves.
+    let rain_left = horizontal_bounds.0 + 42.0;
+    let rain_right = (horizontal_bounds.1 - 42.0).max(rain_left + 1.0);
+
+    for index in 0..DROP_COUNT {
+        let fraction = (index as f32 + 0.5) / DROP_COUNT as f32;
+        let horizontal_variation = state.unit_random() - 0.5;
+        let height_variation = state.unit_random() - 0.5;
+        let speed_variation = state.unit_random();
+        let position = Vec2::new(
+            (rain_left + (rain_right - rain_left) * fraction + horizontal_variation * 34.0)
+                .clamp(rain_left, rain_right),
+            start_y + height_variation * 58.0,
+        );
+        let surface = first_surface_below(position, &level);
+        let terminal_y = surface.unwrap_or(level.center().y - level.size().y * 0.5 - 14.0);
+        let radius = 1.7 + speed_variation * 1.8;
+        commands.spawn((
+            AmbientDrop {
+                position,
+                velocity: Vec2::new(horizontal_variation * 86.0, -40.0 - speed_variation * 165.0),
+                gravity: 380.0 + state.unit_random() * 190.0,
+                radius,
+                terminal_y,
+                splash_on_impact: surface.is_some(),
+                depth: -4.8,
+                parallax: 1.0,
+            },
+            Mesh2d(assets.mesh.clone()),
+            MeshMaterial2d(assets.material.clone()),
+            Transform {
+                translation: position.extend(-4.8),
+                scale: Vec3::new(radius * 1.35, radius, 1.0),
                 ..default()
             },
         ));
@@ -516,6 +649,9 @@ fn spawn_dry_surface_splash(
     assets: &AmbientDropAssets,
     impact: Vec2,
     source_radius: f32,
+    depth: f32,
+    parallax: f32,
+    camera_position: Vec2,
 ) {
     // Above platform artwork (-0.13..-0.105), but still behind the blob fill (-0.1).
     const SPLASH_DEPTH: f32 = 0.11;
@@ -533,21 +669,31 @@ fn spawn_dry_surface_splash(
         let radius = source_radius * (0.34 + index as f32 * 0.022);
         commands.spawn((
             AmbientSplashParticle {
+                position: impact + Vec2::Y * radius,
                 velocity,
                 gravity: 300.0,
                 remaining: duration,
                 duration,
                 radius,
+                depth,
+                parallax,
             },
             Mesh2d(assets.mesh.clone()),
             MeshMaterial2d(assets.material.clone()),
             Transform {
-                translation: (impact + Vec2::Y * radius).extend(SPLASH_DEPTH),
+                translation: (impact
+                    + Vec2::Y * radius
+                    + parallax_offset(camera_position, parallax))
+                .extend(depth + SPLASH_DEPTH),
                 scale: Vec3::new(radius, radius * 1.35, 1.0),
                 ..default()
             },
         ));
     }
+}
+
+fn parallax_offset(camera_position: Vec2, factor: f32) -> Vec2 {
+    camera_position * (1.0 - factor)
 }
 
 fn create_teardrop_mesh() -> Mesh {

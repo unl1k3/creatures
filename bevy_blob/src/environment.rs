@@ -56,6 +56,20 @@ pub(super) struct LevelArtwork;
 #[derive(Component)]
 pub(super) struct ForegroundArtwork;
 
+/// Artwork offset from its authored world position to create parallax while
+/// leaving colliders and world-aligned foreground art untouched.
+#[derive(Component)]
+pub(super) struct ParallaxLayer {
+    origin: Vec3,
+    factor: f32,
+}
+
+impl ParallaxLayer {
+    pub(super) fn new(origin: Vec3, factor: f32) -> Self {
+        Self { origin, factor }
+    }
+}
+
 #[derive(Component)]
 pub(super) struct LevelChain;
 
@@ -642,6 +656,7 @@ fn spawn_level_artwork(commands: &mut Commands, asset_server: Option<&AssetServe
                 ..default()
             },
             Transform::from_translation(layer.position.extend(layer.depth)),
+            ParallaxLayer::new(layer.position.extend(layer.depth), layer.parallax),
         ));
     }
     for layer in &level.decorations {
@@ -654,7 +669,21 @@ fn spawn_level_artwork(commands: &mut Commands, asset_server: Option<&AssetServe
                 ..default()
             },
             Transform::from_translation(layer.position.extend(layer.depth)),
+            ParallaxLayer::new(layer.position.extend(layer.depth), layer.parallax),
         ));
+    }
+}
+
+/// Applies parallax in world space after the camera has followed the active
+/// blob. A factor of one preserves the exact authored alignment.
+pub(super) fn update_parallax_layers(
+    camera: Single<&Transform, With<GameCamera>>,
+    mut layers: Query<(&ParallaxLayer, &mut Transform), Without<GameCamera>>,
+) {
+    let camera_position = camera.translation.truncate();
+    for (layer, mut transform) in &mut layers {
+        let offset = camera_position * (1.0 - layer.factor);
+        transform.translation = layer.origin + offset.extend(0.0);
     }
 }
 

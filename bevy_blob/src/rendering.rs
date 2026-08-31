@@ -1,5 +1,5 @@
 use super::*;
-use crate::environment::{ForegroundArtwork, LevelArtwork};
+use crate::environment::{ForegroundArtwork, LevelArtwork, ParallaxLayer};
 use crate::level_format::LightDefinition;
 use crate::palette as game_palette;
 use crate::shield::shield_spine_fans;
@@ -140,32 +140,64 @@ pub(super) fn sync_ink_preview(
     // The illustration supplies depth and atmosphere only. Playable silhouettes
     // are generated below from the same geometry used by collision detection.
     if supports_ink_background(scenario.0) {
+        // Keep a single authored backdrop. Its slow parallax keeps it in view
+        // through the initial vertical extension without visibly repeating or
+        // stretching the illustration.
+        const INK_SECTOR_HEIGHT: f32 = 1500.0;
+        // The source foreground is split into two anchored bands. This preserves
+        // the artwork's scale while leaving the extended middle of the level open.
+        const INK_FOREGROUND_SOURCE_HEIGHT: f32 = 1150.0;
+        const INK_FOREGROUND_BOTTOM_PIXELS: f32 = 330.0;
+        const INK_FOREGROUND_TOP_WIDTH: f32 = 1940.0;
+        const INK_FOREGROUND_TOP_HEIGHT_PIXELS: f32 = 810.0;
+        const INK_FOREGROUND_BOTTOM_HEIGHT: f32 =
+            INK_SECTOR_HEIGHT * INK_FOREGROUND_BOTTOM_PIXELS / INK_FOREGROUND_SOURCE_HEIGHT;
+        let ink_foreground_top_height =
+            INK_FOREGROUND_TOP_HEIGHT_PIXELS * level.size().x / INK_FOREGROUND_TOP_WIDTH;
+        let bottom = level.center().y - level.size().y * 0.5;
+        let background_origin = Vec3::new(level.center().x, bottom + 750.0, -20.0);
         commands.spawn((
             InkPreviewShape {
                 scenario: scenario.0,
             },
             Sprite {
                 image: asset_server.load("levels/sewer_01/art/ink/background.png"),
-                custom_size: Some(level.size()),
+                custom_size: Some(Vec2::new(level.size().x, INK_SECTOR_HEIGHT)),
                 ..default()
             },
-            Transform::from_translation(level.center().extend(-20.0)),
+            Transform::from_translation(background_origin),
+            ParallaxLayer::new(background_origin, 0.10),
         ));
-        commands.spawn((
-            InkPreviewShape {
-                scenario: scenario.0,
-            },
-            InkForeground,
-            Sprite {
-                image: asset_server.load("levels/sewer_01/art/ink/foreground.png"),
-                custom_size: Some(level.size()),
-                ..default()
-            },
-            // Foreground pipes and debris are an occlusion layer: gameplay
-            // structures remain visible through their central opening, while
-            // overlapping portions correctly pass behind this artwork.
-            Transform::from_translation(level.center().extend(2.5)),
-        ));
+        let foreground_layers = [
+            (
+                "levels/sewer_01/art/ink/foreground-bottom.png",
+                Vec2::new(level.size().x, INK_FOREGROUND_BOTTOM_HEIGHT),
+                bottom + INK_FOREGROUND_BOTTOM_HEIGHT * 0.5,
+            ),
+            (
+                "levels/sewer_01/art/ink/foreground-top-finished.png",
+                Vec2::new(level.size().x, ink_foreground_top_height),
+                bottom + level.size().y - ink_foreground_top_height * 0.5,
+            ),
+        ];
+
+        for (image_path, foreground_size, y) in foreground_layers {
+            commands.spawn((
+                InkPreviewShape {
+                    scenario: scenario.0,
+                },
+                InkForeground,
+                Sprite {
+                    image: asset_server.load(image_path),
+                    custom_size: Some(foreground_size),
+                    ..default()
+                },
+                // Foreground pipes and debris are an occlusion layer: gameplay
+                // structures remain visible through their central opening, while
+                // overlapping portions correctly pass behind this artwork.
+                Transform::from_translation(Vec3::new(level.center().x, y, 2.5)),
+            ));
+        }
     }
 
     // Platform geometry is shared by every level, so the paper-and-ink tile
@@ -368,7 +400,7 @@ mod palette;
 mod vacuoles;
 pub(super) use ambient::{
     setup_ambient_drop_assets, simulate_ambient_drops, simulate_wastewater,
-    simulate_wastewater_bubbles, simulate_wastewater_impacts,
+    simulate_wastewater_bubbles, simulate_wastewater_impacts, trigger_drop_shower,
 };
 #[cfg(test)]
 pub(super) use body::create_blob_mesh;

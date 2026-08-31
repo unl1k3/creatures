@@ -31,6 +31,7 @@ use environment::{
     WastewaterEffects, advance_route_progress, draw_level_chains, resolve_avian_environment,
     resolve_blob_chain_contacts, sample_avian_contacts, setup_environment,
     simulate_counterbalances, simulate_level_hazards, switch_test_scenario, toggle_level_debug,
+    update_parallax_layers,
 };
 use hud::{arrange_auxiliary_windows, setup_legend, toggle_legend, update_metrics};
 #[cfg(test)]
@@ -46,7 +47,7 @@ use rendering::{
     InkStylePreview, draw_world, setup_ambient_drop_assets, simulate_ambient_drops,
     simulate_wastewater, simulate_wastewater_bubbles, simulate_wastewater_impacts,
     sync_blob_meshes, sync_counterbalance_visuals, sync_ink_preview, sync_route_markers,
-    toggle_foreground, toggle_ink_style,
+    toggle_foreground, toggle_ink_style, trigger_drop_shower,
 };
 use shield::{ShieldWorld, simulate_shields, spider_climb_anchor_direction};
 use std::{
@@ -160,11 +161,12 @@ fn main() {
                 start_phagocytosis,
                 fire_acid,
                 cycle_selection,
-                follow_camera,
+                (follow_camera, update_parallax_layers).chain(),
                 advance_route_progress,
                 sample_avian_contacts,
                 update_metrics,
                 (
+                    trigger_drop_shower,
                     simulate_ambient_drops,
                     simulate_wastewater_impacts,
                     simulate_wastewater,

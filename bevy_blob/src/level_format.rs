@@ -40,6 +40,9 @@ pub(super) struct VisualLayer {
     pub(super) position: Vec2,
     pub(super) size: Vec2,
     pub(super) depth: f32,
+    /// Screen movement relative to the camera: 1.0 is world-locked, lower
+    /// values recede into the distance and values above 1.0 are foreground.
+    pub(super) parallax: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -50,6 +53,8 @@ pub(super) struct DropEmitterDefinition {
     pub(super) radius: f32,
     pub(super) gravity: f32,
     pub(super) depth: f32,
+    /// Rendering depth factor; 1.0 keeps the drop in world space.
+    pub(super) parallax: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -238,6 +243,12 @@ struct VisualLayerDocument {
     position: Point,
     size: Point,
     depth: f32,
+    #[serde(default = "default_parallax")]
+    parallax: f32,
+}
+
+fn default_parallax() -> f32 {
+    1.0
 }
 
 #[derive(Deserialize)]
@@ -250,6 +261,8 @@ struct DropEmitterDocument {
     radius: f32,
     gravity: f32,
     depth: f32,
+    #[serde(default = "default_parallax")]
+    parallax: f32,
 }
 
 #[derive(Deserialize)]
@@ -402,6 +415,7 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
                 position: finite_point(&format!("visual layer {index} position"), layer.position)?,
                 size: positive_size(&format!("visual layer {index} size"), layer.size)?,
                 depth: finite_number(&format!("visual layer {index} depth"), layer.depth)?,
+                parallax: finite_number(&format!("visual layer {index} parallax"), layer.parallax)?,
             })
         })
         .collect::<Result<Vec<_>, LevelFormatError>>()?;
@@ -436,6 +450,10 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
                     emitter.gravity,
                 )?,
                 depth: finite_number(&format!("drop emitter {index} depth"), emitter.depth)?,
+                parallax: finite_number(
+                    &format!("drop emitter {index} parallax"),
+                    emitter.parallax,
+                )?,
             })
         })
         .collect::<Result<Vec<_>, LevelFormatError>>()?;
@@ -688,6 +706,7 @@ fn parse_visual_layers(
                 position: finite_point(&format!("{label} {index} position"), layer.position)?,
                 size: positive_size(&format!("{label} {index} size"), layer.size)?,
                 depth: finite_number(&format!("{label} {index} depth"), layer.depth)?,
+                parallax: finite_number(&format!("{label} {index} parallax"), layer.parallax)?,
             })
         })
         .collect()
