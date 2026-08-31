@@ -18,6 +18,7 @@ use avian2d::prelude::PhysicsPlugins;
 use avian2d::prelude::{Collider, ContactManifold, Gravity};
 use bevy::{
     app::AppExit,
+    audio::Volume,
     diagnostic::FrameTimeDiagnosticsPlugin,
     prelude::*,
     window::{ExitCondition, WindowPosition, WindowResolution},
@@ -126,6 +127,7 @@ fn main() {
             (
                 setup_environment,
                 setup,
+                setup_ambient_music,
                 setup_nutrition,
                 setup_ambient_drop_assets,
                 setup_legend,
@@ -194,6 +196,14 @@ fn main() {
             ),
         )
         .run();
+}
+
+/// Starts the authored sewer ambience once for the whole application.
+fn setup_ambient_music(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.spawn((
+        AudioPlayer::new(asset_server.load("audio/music/underworld-echoes.mp3")),
+        PlaybackSettings::LOOP.with_volume(Volume::Linear(0.22)),
+    ));
 }
 
 fn setup(mut commands: Commands, level: Res<Level>) {
