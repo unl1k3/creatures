@@ -58,6 +58,7 @@ pub(super) fn simulate_shields(
     mut shields: ResMut<ShieldWorld>,
     vitality: Res<VitalityWorld>,
     nutrition: Res<NutritionWorld>,
+    mut sound_events: MessageWriter<BlobSoundEvent>,
 ) {
     let dt = time.delta_secs();
     let active_ids = blobs
@@ -71,6 +72,7 @@ pub(super) fn simulate_shields(
 
     for (index, active_blob) in blobs.active.iter_mut().enumerate() {
         let status = shields.states.entry(active_blob.id).or_default();
+        let extension_before = status.extension;
         let wants_shield = index == selected
             && keyboard.pressed(KeyCode::KeyQ)
             && vitality.is_alive(active_blob.id)
@@ -82,6 +84,11 @@ pub(super) fn simulate_shields(
             dt,
             vitality.vigor(active_blob.id) * nutrition.capability_factor(active_blob.id),
         );
+        if extension_before <= 0.02 && status.extension > 0.02 {
+            sound_events.write(BlobSoundEvent::ShieldDeploy);
+        } else if extension_before > 0.08 && status.extension <= 0.02 {
+            sound_events.write(BlobSoundEvent::ShieldRetract);
+        }
         if status.extension > 0.02 {
             active_blob.body.cancel_jump_charge();
         }

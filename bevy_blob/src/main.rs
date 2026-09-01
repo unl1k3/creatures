@@ -18,7 +18,7 @@ use avian2d::prelude::PhysicsPlugins;
 use avian2d::prelude::{Collider, ContactManifold, Gravity};
 use bevy::{
     app::AppExit,
-    audio::Volume,
+    audio::{AudioSink, Volume},
     diagnostic::FrameTimeDiagnosticsPlugin,
     prelude::*,
     window::{ExitCondition, WindowPosition, WindowResolution},
@@ -84,6 +84,67 @@ struct BlobWorld {
     next_id: u64,
 }
 
+/// Audio assets and short per-blob cooldowns used by creature actions.
+#[derive(Resource)]
+struct BlobAudio {
+    charge: Handle<AudioSource>,
+    split: Handle<AudioSource>,
+    merge: Handle<AudioSource>,
+    land: Handle<AudioSource>,
+    water_impact: Handle<AudioSource>,
+    water_move_bare: Handle<AudioSource>,
+    water_move_spined: Handle<AudioSource>,
+    roll: Handle<AudioSource>,
+    spine_scrape: Handle<AudioSource>,
+    probe: Handle<AudioSource>,
+    engulf: Handle<AudioSource>,
+    expel: Handle<AudioSource>,
+    nutrient_impact: Handle<AudioSource>,
+    nutrient_water: Handle<AudioSource>,
+    ambient_drop: Handle<AudioSource>,
+    ambient_bubble: Handle<AudioSource>,
+    chain_impact: Handle<AudioSource>,
+    death_motifs: [Handle<AudioSource>; palette::BLOB_FAMILIES.len()],
+    jump_release: Handle<AudioSource>,
+    shield_deploy: Handle<AudioSource>,
+    shield_retract: Handle<AudioSource>,
+    acid_burst: Handle<AudioSource>,
+    acid_impact: Handle<AudioSource>,
+    mechanism_move: Handle<AudioSource>,
+    landing_cooldowns: HashMap<u64, f32>,
+    rolling_cooldowns: HashMap<u64, f32>,
+    water_movement_cooldowns: HashMap<u64, f32>,
+}
+
+/// Sound cues emitted by the phagocytosis state machine.
+#[derive(Message)]
+enum BlobSoundEvent {
+    Probe,
+    Engulf,
+    Expel,
+    NutrientImpact { strength: f32 },
+    NutrientWater { strength: f32 },
+    AmbientDrop,
+    AmbientBubble,
+    ChainImpact { strength: f32 },
+    Death { family: usize },
+    JumpRelease { charge: f32 },
+    ShieldDeploy,
+    ShieldRetract,
+    AcidBurst,
+    AcidImpact,
+    MechanismMove,
+}
+
+/// User preference for the looping environmental music. Effects remain audible.
+#[derive(Resource)]
+struct BackgroundMusic {
+    enabled: bool,
+}
+
+#[derive(Component)]
+struct AmbientMusic;
+
 #[derive(Resource)]
 struct SplitRng(u64);
 
@@ -109,6 +170,8 @@ fn main() {
         .insert_resource(ClearColor(palette::color(palette::IVORY)))
         .insert_resource(Time::<Fixed>::from_hz(120.0))
         .init_resource::<InkStylePreview>()
+        .insert_resource(BackgroundMusic { enabled: true })
+        .add_message::<BlobSoundEvent>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Blob — X divide, E ricongiunge, R reset, TAB seleziona".into(),
@@ -184,6 +247,8 @@ fn main() {
             )
                 .chain(),
         )
+        .add_systems(Update, play_blob_sound_events.after(start_phagocytosis))
+        .add_systems(Update, toggle_background_music)
         .add_systems(
             Update,
             (
@@ -201,12 +266,65 @@ fn main() {
 /// Starts the authored sewer ambience once for the whole application.
 fn setup_ambient_music(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn((
+        AmbientMusic,
         AudioPlayer::new(asset_server.load("audio/music/underworld-echoes.mp3")),
         PlaybackSettings::LOOP.with_volume(Volume::Linear(0.22)),
     ));
 }
 
-fn setup(mut commands: Commands, level: Res<Level>) {
+/// B mutes/unmutes the ambient loop without affecting gameplay effects.
+fn toggle_background_music(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut music: ResMut<BackgroundMusic>,
+    mut sinks: Query<&mut AudioSink, With<AmbientMusic>>,
+) {
+    if keyboard.just_pressed(KeyCode::KeyB) {
+        music.enabled = !music.enabled;
+    }
+    let volume = if music.enabled {
+        Volume::Linear(0.22)
+    } else {
+        Volume::SILENT
+    };
+    for mut sink in &mut sinks {
+        sink.set_volume(volume);
+    }
+}
+
+fn setup(mut commands: Commands, level: Res<Level>, asset_server: Res<AssetServer>) {
+    commands.insert_resource(BlobAudio {
+        charge: asset_server.load("audio/blob_jump.wav"),
+        split: asset_server.load("audio/blob_split.wav"),
+        // The lower-pitched split sample is a temporary distinct merge cue.
+        // It can be replaced by an authored merge sound without code changes.
+        merge: asset_server.load("audio/blob_split.wav"),
+        land: asset_server.load("audio/blob_land.wav"),
+        water_impact: asset_server.load("audio/blob_splash.wav"),
+        water_move_bare: asset_server.load("audio/blob_water_bare.wav"),
+        water_move_spined: asset_server.load("audio/blob_water_spines.wav"),
+        roll: asset_server.load("audio/blob_roll.wav"),
+        spine_scrape: asset_server.load("audio/blob_spine_scrape.wav"),
+        probe: asset_server.load("audio/blob_probe.wav"),
+        engulf: asset_server.load("audio/blob_gulp.wav"),
+        expel: asset_server.load("audio/blob_fart.wav"),
+        nutrient_impact: asset_server.load("audio/nutrient_tap.wav"),
+        nutrient_water: asset_server.load("audio/nutrient_plop.wav"),
+        ambient_drop: asset_server.load("audio/ambient_drop.wav"),
+        ambient_bubble: asset_server.load("audio/ambient_bubble.wav"),
+        chain_impact: asset_server.load("audio/chain_impact.wav"),
+        death_motifs: std::array::from_fn(|family| {
+            asset_server.load(format!("audio/blob_death_{family}.wav"))
+        }),
+        jump_release: asset_server.load("audio/blob_jump_release.wav"),
+        shield_deploy: asset_server.load("audio/shield_deploy.wav"),
+        shield_retract: asset_server.load("audio/shield_retract.wav"),
+        acid_burst: asset_server.load("audio/acid_burst.wav"),
+        acid_impact: asset_server.load("audio/acid_impact.wav"),
+        mechanism_move: asset_server.load("audio/mechanism_move.wav"),
+        landing_cooldowns: HashMap::new(),
+        rolling_cooldowns: HashMap::new(),
+        water_movement_cooldowns: HashMap::new(),
+    });
     commands.spawn((Camera2d, GameCamera));
     commands.insert_resource(BlobWorld {
         active: vec![ActiveBlob {
@@ -231,18 +349,142 @@ fn setup(mut commands: Commands, level: Res<Level>) {
     commands.insert_resource(VitalityWorld::default());
 }
 
+/// Keeps digestion audio tied to meaningful state changes rather than key holds.
+fn play_blob_sound_events(
+    mut events: MessageReader<BlobSoundEvent>,
+    blob_audio: Res<BlobAudio>,
+    mut commands: Commands,
+    time: Res<Time>,
+    mut chain_cooldown: Local<f32>,
+    mut acid_cooldown: Local<f32>,
+    mut mechanism_cooldown: Local<f32>,
+) {
+    *chain_cooldown = (*chain_cooldown - time.delta_secs()).max(0.0);
+    *acid_cooldown = (*acid_cooldown - time.delta_secs()).max(0.0);
+    *mechanism_cooldown = (*mechanism_cooldown - time.delta_secs()).max(0.0);
+    for event in events.read() {
+        if let BlobSoundEvent::ChainImpact { strength } = event {
+            if *chain_cooldown <= 0.0 {
+                commands.spawn((
+                    AudioPlayer::new(blob_audio.chain_impact.clone()),
+                    PlaybackSettings::ONCE
+                        .with_volume(Volume::Linear((0.10 + strength * 0.15).clamp(0.10, 0.25))),
+                ));
+                *chain_cooldown = 0.16;
+            }
+            continue;
+        }
+        if let BlobSoundEvent::Death { family } = event {
+            if let Some(motif) = blob_audio.death_motifs.get(*family) {
+                commands.spawn((
+                    AudioPlayer::new(motif.clone()),
+                    PlaybackSettings::ONCE.with_volume(Volume::Linear(0.86)),
+                ));
+            }
+            continue;
+        }
+        if matches!(event, BlobSoundEvent::AcidImpact) {
+            if *acid_cooldown <= 0.0 {
+                commands.spawn((
+                    AudioPlayer::new(blob_audio.acid_impact.clone()),
+                    PlaybackSettings::ONCE.with_volume(Volume::Linear(0.22)),
+                ));
+                *acid_cooldown = 0.18;
+            }
+            continue;
+        }
+        if matches!(event, BlobSoundEvent::MechanismMove) {
+            if *mechanism_cooldown <= 0.0 {
+                commands.spawn((
+                    AudioPlayer::new(blob_audio.mechanism_move.clone()),
+                    PlaybackSettings::ONCE.with_volume(Volume::Linear(0.20)),
+                ));
+                *mechanism_cooldown = 0.52;
+            }
+            continue;
+        }
+        let (sound, settings) = match event {
+            BlobSoundEvent::Probe => (
+                blob_audio.probe.clone(),
+                PlaybackSettings::ONCE.with_volume(Volume::Linear(0.28)),
+            ),
+            BlobSoundEvent::Engulf => (
+                blob_audio.engulf.clone(),
+                PlaybackSettings::ONCE.with_volume(Volume::Linear(0.40)),
+            ),
+            BlobSoundEvent::Expel => (
+                blob_audio.expel.clone(),
+                PlaybackSettings::ONCE.with_volume(Volume::Linear(0.58)),
+            ),
+            BlobSoundEvent::NutrientImpact { strength } => (
+                blob_audio.nutrient_impact.clone(),
+                PlaybackSettings::ONCE
+                    .with_volume(Volume::Linear((0.10 + strength * 0.20).clamp(0.10, 0.30))),
+            ),
+            BlobSoundEvent::NutrientWater { strength } => (
+                blob_audio.nutrient_water.clone(),
+                PlaybackSettings::ONCE
+                    .with_volume(Volume::Linear((0.12 + strength * 0.18).clamp(0.12, 0.28))),
+            ),
+            BlobSoundEvent::AmbientDrop => (
+                blob_audio.ambient_drop.clone(),
+                PlaybackSettings::ONCE.with_volume(Volume::Linear(0.13)),
+            ),
+            BlobSoundEvent::AmbientBubble => (
+                blob_audio.ambient_bubble.clone(),
+                PlaybackSettings::ONCE.with_volume(Volume::Linear(0.10)),
+            ),
+            BlobSoundEvent::ChainImpact { .. } => unreachable!("handled above"),
+            BlobSoundEvent::Death { .. } => unreachable!("handled above"),
+            BlobSoundEvent::JumpRelease { charge } => (
+                blob_audio.jump_release.clone(),
+                PlaybackSettings::ONCE
+                    .with_volume(Volume::Linear((0.14 + charge * 0.28).clamp(0.14, 0.42))),
+            ),
+            BlobSoundEvent::ShieldDeploy => (
+                blob_audio.shield_deploy.clone(),
+                PlaybackSettings::ONCE.with_volume(Volume::Linear(0.26)),
+            ),
+            BlobSoundEvent::ShieldRetract => (
+                blob_audio.shield_retract.clone(),
+                PlaybackSettings::ONCE.with_volume(Volume::Linear(0.20)),
+            ),
+            BlobSoundEvent::AcidBurst => (
+                blob_audio.acid_burst.clone(),
+                PlaybackSettings::ONCE.with_volume(Volume::Linear(0.30)),
+            ),
+            BlobSoundEvent::AcidImpact | BlobSoundEvent::MechanismMove => {
+                unreachable!("handled above")
+            }
+        };
+        commands.spawn((AudioPlayer::new(sound), settings));
+    }
+}
+
 fn simulate_blob(
     time: Res<Time<Fixed>>,
     keyboard: Res<ButtonInput<KeyCode>>,
     level: Res<Level>,
     shields: Res<ShieldWorld>,
     nutrition: Res<NutritionWorld>,
+    mut blob_audio: ResMut<BlobAudio>,
+    mut commands: Commands,
     mut vitality: ResMut<VitalityWorld>,
     mut blobs: ResMut<BlobWorld>,
     mut wastewater_effects: ResMut<WastewaterEffects>,
     mut nutrient_bodies: Query<(&NutrientPhysics, &mut Transform, &mut LinearVelocity)>,
+    mut sound_events: MessageWriter<BlobSoundEvent>,
 ) {
     advance_rejoin_timeout(&mut blobs, time.delta_secs());
+    for cooldown in blob_audio.landing_cooldowns.values_mut() {
+        *cooldown = (*cooldown - time.delta_secs()).max(0.0);
+    }
+    for cooldown in blob_audio.rolling_cooldowns.values_mut() {
+        *cooldown = (*cooldown - time.delta_secs()).max(0.0);
+    }
+    for cooldown in blob_audio.water_movement_cooldowns.values_mut() {
+        *cooldown = (*cooldown - time.delta_secs()).max(0.0);
+    }
 
     let horizontal = (keyboard.pressed(KeyCode::KeyD) || keyboard.pressed(KeyCode::ArrowRight))
         as i8
@@ -323,6 +565,7 @@ fn simulate_blob(
         active_blob
             .body
             .set_spider_cling(spider_anchor.map(|anchor| (anchor.direction, anchor.wall_top)));
+        let charge_before_step = active_blob.body.charge;
         active_blob.body.step_with_vigor(
             time.delta_secs(),
             movement,
@@ -338,6 +581,87 @@ fn simulate_blob(
             alive,
             true,
         );
+        if charge_before_step <= 0.01 && active_blob.body.charge > 0.01 {
+            commands.spawn((
+                AudioPlayer::new(blob_audio.charge.clone()),
+                PlaybackSettings::ONCE.with_volume(Volume::Linear(0.65)),
+            ));
+        }
+        if charge_before_step > 0.05 && active_blob.body.charge <= 0.01 {
+            sound_events.write(BlobSoundEvent::JumpRelease {
+                charge: charge_before_step,
+            });
+        }
+        let surface_speed = active_blob.body.velocity().length() / time.delta_secs().max(0.000_001);
+        let angular_rate =
+            active_blob.body.angular_displacement().abs() / time.delta_secs().max(0.000_001);
+        let roll_ready = blob_audio
+            .rolling_cooldowns
+            .get(&active_blob.id)
+            .copied()
+            .unwrap_or_default()
+            <= 0.0;
+        let spine_motion =
+            shield_extension > 0.05 && (active_blob.body.grounded || spider_anchor.is_some());
+        // A normal roll has a dependable link between translation and its
+        // sound. Deployed spines are different: their audible contact is tied
+        // to the membrane turning against the surface, including a wall climb.
+        let movement_rate = if spine_motion {
+            angular_rate
+        } else {
+            surface_speed
+        };
+        let movement_threshold = if spine_motion { 0.04 } else { 48.0 };
+        if (active_blob.body.grounded || spine_motion)
+            && movement.abs() > 0.01
+            && active_blob.body.charge <= 0.01
+            && movement_rate >= movement_threshold
+            && roll_ready
+        {
+            let speed_ratio =
+                (movement_rate / if spine_motion { 0.85 } else { 330.0 }).clamp(0.0, 1.0);
+            commands.spawn((
+                AudioPlayer::new(if spine_motion {
+                    blob_audio.spine_scrape.clone()
+                } else {
+                    blob_audio.roll.clone()
+                }),
+                PlaybackSettings::ONCE
+                    .with_speed(if spine_motion {
+                        0.92 + speed_ratio * 0.16
+                    } else {
+                        0.88 + speed_ratio * 0.22
+                    })
+                    .with_volume(Volume::Linear(if spine_motion {
+                        0.09 + speed_ratio * 0.13
+                    } else {
+                        0.10 + speed_ratio * 0.16
+                    })),
+            ));
+            blob_audio.rolling_cooldowns.insert(
+                active_blob.id,
+                if spine_motion {
+                    0.18
+                } else {
+                    0.30 - speed_ratio * 0.14
+                },
+            );
+        }
+        let impact_speed = active_blob.body.last_impact_speed;
+        let landing_ready = blob_audio
+            .landing_cooldowns
+            .get(&active_blob.id)
+            .copied()
+            .unwrap_or_default()
+            <= 0.0;
+        if landing_ready && impact_speed >= 420.0 {
+            let volume = (impact_speed / 1_500.0).clamp(0.18, 0.52);
+            commands.spawn((
+                AudioPlayer::new(blob_audio.land.clone()),
+                PlaybackSettings::ONCE.with_volume(Volume::Linear(volume)),
+            ));
+            blob_audio.landing_cooldowns.insert(active_blob.id, 0.14);
+        }
         for (nutrient, mut transform, mut velocity) in &mut nutrient_bodies {
             if !nutrition.is_free_index(nutrient.index) {
                 continue;
@@ -401,6 +725,73 @@ fn simulate_blob(
                     active_blob.body.rest_radius * (0.46 + contact.submerged_fraction * 0.42),
                     impact_strength,
                 );
+                commands.spawn((
+                    AudioPlayer::new(blob_audio.water_impact.clone()),
+                    PlaybackSettings::ONCE
+                        .with_volume(Volume::Linear((0.18 + impact_strength * 0.28).min(0.55))),
+                ));
+            }
+
+            // Liquid motion needs its own quiet cue: without spines it is a
+            // heavy displaced-water sound; deployed spines make a faster,
+            // fibrous swish while the blob paddles or climbs out.
+            let water_motion_ready = blob_audio
+                .water_movement_cooldowns
+                .get(&active_blob.id)
+                .copied()
+                .unwrap_or_default()
+                <= 0.0;
+            let spines_in_water = shield_extension > 0.05;
+            let rotation_rate =
+                active_blob.body.angular_displacement().abs() / time.delta_secs().max(0.000_001);
+            if water_motion_ready
+                && !contact.entered
+                && contact.submerged_fraction >= 0.20
+                && movement.abs() > 0.01
+                // Bare blobs are intentionally almost immobilised by liquid
+                // drag. They still displace water while the player pushes,
+                // even if their measured spin never reaches the spine cue's
+                // threshold.
+                && (!spines_in_water || rotation_rate >= 0.04)
+            {
+                // Water motion is rotational: the rate of the membrane's
+                // actual roll, rather than centre translation, controls the
+                // cadence, pitch and volume of the submerged-body cue.
+                let rotation_ratio =
+                    (rotation_rate / if spines_in_water { 0.65 } else { 0.40 }).clamp(0.0, 1.0);
+                let audio_rotation_ratio = if spines_in_water {
+                    rotation_ratio
+                } else {
+                    // Audible at the smallest attempted roll, then genuinely
+                    // follows angular velocity as the body gains momentum.
+                    rotation_ratio.max(0.18)
+                };
+                commands.spawn((
+                    AudioPlayer::new(if spines_in_water {
+                        blob_audio.water_move_spined.clone()
+                    } else {
+                        blob_audio.water_move_bare.clone()
+                    }),
+                    PlaybackSettings::ONCE
+                        .with_speed(if spines_in_water {
+                            0.84 + audio_rotation_ratio * 0.34
+                        } else {
+                            0.82 + audio_rotation_ratio * 0.22
+                        })
+                        .with_volume(Volume::Linear(if spines_in_water {
+                            0.12 + audio_rotation_ratio * 0.14
+                        } else {
+                            0.18 + audio_rotation_ratio * 0.14
+                        })),
+                ));
+                blob_audio.water_movement_cooldowns.insert(
+                    active_blob.id,
+                    if spines_in_water {
+                        0.52 - audio_rotation_ratio * 0.20
+                    } else {
+                        0.66 - audio_rotation_ratio * 0.18
+                    },
+                );
             }
         }
     }
@@ -408,6 +799,12 @@ fn simulate_blob(
         update_rejoining(&mut blobs, &level.platforms, &level.fixtures)
     {
         vitality.merge(children, parent);
+        commands.spawn((
+            AudioPlayer::new(blob_audio.merge.clone()),
+            PlaybackSettings::ONCE
+                .with_speed(0.72)
+                .with_volume(Volume::Linear(0.34)),
+        ));
     }
     resolve_blob_collisions_with_vitality(&mut blobs.active, &vitality);
 }

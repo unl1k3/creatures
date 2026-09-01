@@ -255,6 +255,7 @@ pub(super) fn start_phagocytosis(
     level: Res<Level>,
     vitality: Res<VitalityWorld>,
     mut nutrition: ResMut<NutritionWorld>,
+    mut sound_events: MessageWriter<BlobSoundEvent>,
 ) {
     if !keyboard.just_pressed(KeyCode::KeyC) || movement_command(&keyboard) {
         return;
@@ -265,6 +266,7 @@ pub(super) fn start_phagocytosis(
     if !vitality.is_alive(blob.id) || nutrition.is_digesting(blob.id) {
         return;
     }
+    sound_events.write(BlobSoundEvent::Probe);
     let center = blob.body.center();
     let nearest_direction = nutrition
         .nutrients
@@ -442,6 +444,7 @@ pub(super) fn simulate_nutrition(
     level: Res<Level>,
     mut vitality: ResMut<VitalityWorld>,
     mut nutrition: ResMut<NutritionWorld>,
+    mut sound_events: MessageWriter<BlobSoundEvent>,
     mut wastewater_effects: ResMut<WastewaterEffects>,
     mut physics_nutrients: Query<(
         &NutrientPhysics,
@@ -469,13 +472,18 @@ pub(super) fn simulate_nutrition(
             // then guarantees that the free object remains outside blobs.
             let contact_radius = free_nutrient_contact_radius(nutrient);
             let mut position = transform.translation.truncate();
-            resolve_free_nutrient_penetration(
+            let structure_impact = resolve_free_nutrient_penetration(
                 &mut position,
                 &mut velocity,
                 contact_radius,
                 &level,
                 &blobs,
             );
+            if structure_impact >= 110.0 {
+                sound_events.write(BlobSoundEvent::NutrientImpact {
+                    strength: (structure_impact / 480.0).clamp(0.0, 1.0),
+                });
+            }
             transform.translation = position.extend(transform.translation.z);
             nutrient.position = transform.translation.truncate();
             match &mut nutrient.state {
@@ -500,6 +508,9 @@ pub(super) fn simulate_nutrition(
                         nutrient.radius,
                         (entry_speed / 180.0).clamp(0.35, 1.25),
                     );
+                    sound_events.write(BlobSoundEvent::NutrientWater {
+                        strength: (entry_speed / 240.0).clamp(0.0, 1.0),
+                    });
                 }
                 nutrient.was_submerged = true;
             } else {
@@ -680,6 +691,7 @@ pub(super) fn simulate_nutrition(
                     && nutrient.position.distance(blob.body.center())
                         <= blob.body.rest_radius - nutrient.radius * 0.35;
                 nutrient.state = if crossed_membrane {
+                    sound_events.write(BlobSoundEvent::Engulf);
                     NutrientState::Digesting {
                         blob_id,
                         elapsed: 0.0,
@@ -742,6 +754,7 @@ pub(super) fn simulate_nutrition(
                 vitality.restore_energy(blob_id, ENERGY_YIELD / DIGESTION_DURATION * dt);
                 if progress >= 1.0 {
                     let (direction, launch_speed) = expulsion_launch(blob_id, nutrient.position);
+                    sound_events.write(BlobSoundEvent::Expel);
                     nutrient.state = NutrientState::Expelling {
                         blob_id,
                         elapsed: 0.0,
@@ -874,35 +887,42 @@ fn resolve_free_nutrient_penetration(
     radius: f32,
     level: &Level,
     blobs: &BlobWorld,
-) {
+) -> f32 {
+    let mut strongest_structure_impact = 0.0_f32;
     for _ in 0..4 {
         let correction = level
             .platforms
             .iter()
             .find_map(|platform| {
                 circle_aabb_penetration(*position, radius, platform.center, platform.half_size)
+                    .map(|(depth, normal)| (depth, normal, true))
             })
             .or_else(|| {
-                level
-                    .fixtures
-                    .iter()
-                    .find_map(|fixture| circle_convex_penetration(*position, radius, fixture))
+                level.fixtures.iter().find_map(|fixture| {
+                    circle_convex_penetration(*position, radius, fixture)
+                        .map(|(depth, normal)| (depth, normal, true))
+                })
             })
             .or_else(|| {
-                blobs
-                    .active
-                    .iter()
-                    .find_map(|blob| circle_blob_penetration(*position, radius, &blob.body))
+                blobs.active.iter().find_map(|blob| {
+                    circle_blob_penetration(*position, radius, &blob.body)
+                        .map(|(depth, normal)| (depth, normal, false))
+                })
             });
-        let Some((depth, normal)) = correction else {
+        let Some((depth, normal, is_structure)) = correction else {
             break;
         };
+        if is_structure {
+            strongest_structure_impact =
+                strongest_structure_impact.max((-velocity.0.dot(normal)).max(0.0));
+        }
         *position += normal * (depth + 0.35);
         let inward_speed = velocity.0.dot(normal);
         if inward_speed < 0.0 {
             velocity.0 -= normal * inward_speed;
         }
     }
+    strongest_structure_impact
 }
 
 fn movement_command(keyboard: &ButtonInput<KeyCode>) -> bool {

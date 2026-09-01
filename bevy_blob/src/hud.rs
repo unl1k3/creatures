@@ -13,7 +13,7 @@ const METRICS_LAYER: usize = 2;
 // WindowResolution describes the client area and excludes native borders and
 // title bars. Keep enough logical space for those decorations on every OS.
 const NATIVE_WINDOW_GAP: f32 = 64.0;
-const CONTROLS: &str = "CONTROLS\n\nA / D or arrows   Roll and move\nHold Down         Charge jump\nRelease Down      Jump\nHold C            Probe for nutrient\nQ                 Pseudo-spine shield\nSpace             Radial acid burst\nX                 Split selected blob\nTab               Select next blob\nE                 Rejoin siblings\nR                 Reset game\nP                 Pause / resume\nM                 Toggle ink style preview\nV                 Toggle test rain\n\nLEVELS\n1                 Sewer entrance\n2                 Supports lab\n3                 Curves lab\n4                 Low passage lab\n5                 Impact lab\n6                 Split bridge lab\n7                 Small fragment seams\n8                 Nutrient wall regression\n9                 Coral basin regression\n0                 Physics overlay\n\nI / J / K / L     Move debug camera\nU / O             Debug camera zoom\nF                 Return and follow blob\nH                 Show / hide this window\nEsc               Exit";
+const CONTROLS: &str = "CONTROLS\n\nA / D or arrows   Roll and move\nHold Down         Charge jump\nRelease Down      Jump\nHold C            Probe for nutrient\nQ                 Pseudo-spine shield\nSpace             Radial acid burst\nX                 Split selected blob\nTab               Select next blob\nE                 Rejoin siblings\nR                 Reset game\nP                 Pause / resume\nB                 Toggle background music\nM                 Toggle ink style preview\nV                 Toggle test rain\n\nLEVELS\n1                 Sewer entrance\n2                 Supports lab\n3                 Curves lab\n4                 Low passage lab\n5                 Impact lab\n6                 Split bridge lab\n7                 Small fragment seams\n8                 Nutrient wall regression\n9                 Coral basin regression\n0                 Physics overlay\n\nI / J / K / L     Move debug camera\nU / O             Debug camera zoom\nF                 Return and follow blob\nH                 Show / hide this window\nEsc               Exit";
 
 #[derive(Resource)]
 pub(super) struct LegendState {
@@ -37,7 +37,7 @@ pub(super) fn setup_legend(mut commands: Commands) {
             ControlsWindow,
             Window {
                 title: "Blob — Controls".into(),
-                resolution: WindowResolution::new(390, 760),
+                resolution: WindowResolution::new(390, 790),
                 position: WindowPosition::At(IVec2::new(1_000, 30)),
                 resizable: false,
                 enabled_buttons: EnabledButtons {

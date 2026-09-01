@@ -52,6 +52,7 @@ pub(super) fn fire_acid(
     shields: Res<ShieldWorld>,
     mut vitality: ResMut<VitalityWorld>,
     nutrition: Res<NutritionWorld>,
+    mut sound_events: MessageWriter<BlobSoundEvent>,
 ) {
     if !keyboard.just_pressed(KeyCode::Space) {
         return;
@@ -77,6 +78,7 @@ pub(super) fn fire_acid(
         &mut acid,
         vitality.vigor(active_blob.id) * nutrition.capability_factor(active_blob.id),
     );
+    sound_events.write(BlobSoundEvent::AcidBurst);
 }
 
 fn emit_acid(blob: &mut ActiveBlob, acid: &mut AcidWorld, vigor: f32) {
@@ -128,6 +130,7 @@ pub(super) fn simulate_acid(
     blobs: Res<BlobWorld>,
     level: Res<Level>,
     mut acid: ResMut<AcidWorld>,
+    mut sound_events: MessageWriter<BlobSoundEvent>,
 ) {
     let dt = time.delta_secs();
     let active_ids = blobs
@@ -150,14 +153,19 @@ pub(super) fn simulate_acid(
         drop.position += drop.velocity * dt;
         drop.lifetime -= dt;
     }
+    let mut impacted = false;
     acid.drops.retain(|drop| {
-        drop.lifetime > 0.0
-            && !level.platforms.iter().any(|platform| {
-                let minimum = platform.center - platform.half_size - Vec2::splat(drop.radius);
-                let maximum = platform.center + platform.half_size + Vec2::splat(drop.radius);
-                drop.position.cmpge(minimum).all() && drop.position.cmple(maximum).all()
-            })
+        let hit_surface = level.platforms.iter().any(|platform| {
+            let minimum = platform.center - platform.half_size - Vec2::splat(drop.radius);
+            let maximum = platform.center + platform.half_size + Vec2::splat(drop.radius);
+            drop.position.cmpge(minimum).all() && drop.position.cmple(maximum).all()
+        });
+        impacted |= hit_surface;
+        drop.lifetime > 0.0 && !hit_surface
     });
+    if impacted {
+        sound_events.write(BlobSoundEvent::AcidImpact);
+    }
 }
 
 pub(super) fn draw_acid(mut gizmos: Gizmos, acid: Res<AcidWorld>) {

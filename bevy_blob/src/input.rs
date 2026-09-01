@@ -50,6 +50,7 @@ pub(super) fn handle_blob_actions(
     mut vitality: ResMut<VitalityWorld>,
     mut route_progress: ResMut<RouteProgress>,
     mut nutrition: ResMut<NutritionWorld>,
+    blob_audio: Res<BlobAudio>,
     mut commands: Commands,
     nutrient_bodies: Query<Entity, With<NutrientPhysics>>,
 ) {
@@ -121,6 +122,12 @@ pub(super) fn handle_blob_actions(
             )
         {
             vitality.split(parent_id, [first.id, second.id]);
+            commands.spawn((
+                AudioPlayer::new(blob_audio.split.clone()),
+                PlaybackSettings::ONCE
+                    .with_speed(1.12)
+                    .with_volume(Volume::Linear(0.44)),
+            ));
         }
     }
 }

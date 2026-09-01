@@ -1,4 +1,5 @@
 use super::*;
+use crate::BlobSoundEvent;
 use crate::blob::Particle;
 use crate::level_format::{
     ChainDefinition, CounterbalanceDefinition, DropEmitterDefinition, ExpulsionPointDefinition,
@@ -851,8 +852,10 @@ fn ellipse_ring_mesh(inner_radius: Vec2, outer_radius: Vec2, segments: usize) ->
 /// resolves only its closest membrane point, preventing a hanging chain from
 /// behaving like a continuous rigid wall.
 pub(super) fn resolve_blob_chain_contacts(
+    time: Res<Time<Fixed>>,
     mut blobs: ResMut<BlobWorld>,
     mut links: Query<(&Transform, &ChainLink, &mut LinearVelocity)>,
+    mut sound_events: MessageWriter<BlobSoundEvent>,
 ) {
     for (transform, link, mut velocity) in &mut links {
         let link_position = transform.translation.truncate();
@@ -910,6 +913,12 @@ pub(super) fn resolve_blob_chain_contacts(
             particle.previous += correction * 0.35;
             let impact = (-incoming.dot(normal)).max(0.0);
             **velocity -= normal * (impact * 0.55 + penetration * 5.0);
+            let impact_speed = impact / time.delta_secs().max(0.000_001);
+            if impact_speed >= 95.0 {
+                sound_events.write(BlobSoundEvent::ChainImpact {
+                    strength: (impact_speed / 420.0).clamp(0.0, 1.0),
+                });
+            }
         }
     }
 }
@@ -991,6 +1000,7 @@ pub(super) fn simulate_counterbalances(
     // borrow both mutable transforms in the same system.
     mut gates: Query<(&CounterbalanceGate, &mut Transform), Without<CounterbalancePlate>>,
     mut plates: Query<(&CounterbalancePlate, &mut Transform), Without<CounterbalanceGate>>,
+    mut sound_events: MessageWriter<BlobSoundEvent>,
 ) {
     let balances = level.counterbalances.clone();
     for balance in balances {
@@ -1028,6 +1038,9 @@ pub(super) fn simulate_counterbalances(
         // receiving a sharp correction that looks like a bounce.
         let blend = 1.0 - (-0.85 * time.delta_secs()).exp();
         let desired = current_gate.lerp(desired, blend);
+        if desired.distance_squared(current_gate) > 0.0025 {
+            sound_events.write(BlobSoundEvent::MechanismMove);
+        }
         level.platforms[balance.gate_platform].center = desired;
         for (gate, mut transform) in &mut gates {
             if gate.platform_index == balance.gate_platform {

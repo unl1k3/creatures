@@ -132,6 +132,7 @@ pub(super) fn simulate_vitality(
     shields: Res<ShieldWorld>,
     mut blobs: ResMut<BlobWorld>,
     mut vitality_world: ResMut<VitalityWorld>,
+    mut sound_events: MessageWriter<BlobSoundEvent>,
 ) {
     let dt = time.delta_secs();
     let active_ids = blobs
@@ -186,6 +187,9 @@ pub(super) fn simulate_vitality(
         if let Some(cause) = cause {
             vitality.state = LifeState::Corpse(cause);
             active_blob.body.cancel_jump_charge();
+            sound_events.write(BlobSoundEvent::Death {
+                family: crate::palette::blob_family_index(active_blob.parent_id),
+            });
             death_occurred = true;
         }
     }

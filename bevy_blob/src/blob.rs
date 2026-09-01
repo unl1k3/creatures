@@ -224,6 +224,24 @@ impl Blob {
             / self.particles.len() as f32
     }
 
+    /// Angular displacement of the membrane over the current physics step.
+    /// Consumers that need an angular speed should divide this by their step
+    /// duration. Keeping it on the body makes visual and audio feedback agree
+    /// with the same rotation used by the liquid and climbing simulation.
+    pub fn angular_displacement(&self) -> f32 {
+        let center = self.center();
+        let center_velocity = self.velocity();
+        self.particles
+            .iter()
+            .map(|particle| {
+                let offset = particle.position - center;
+                let relative_velocity = particle.position - particle.previous - center_velocity;
+                offset.perp_dot(relative_velocity) / offset.length_squared().max(1.0)
+            })
+            .sum::<f32>()
+            / self.particles.len() as f32
+    }
+
     pub fn mass(&self) -> f32 {
         self.rest_area
     }

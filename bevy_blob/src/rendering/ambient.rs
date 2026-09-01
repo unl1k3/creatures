@@ -1,4 +1,5 @@
 use super::InkStylePreview;
+use crate::BlobSoundEvent;
 use crate::camera::GameCamera;
 use crate::environment::{Level, TestScenario, WastewaterEffects};
 use crate::level_format::{BubbleSettingsDefinition, WastewaterAreaDefinition};
@@ -269,6 +270,7 @@ pub(crate) fn simulate_wastewater_bubbles(
     mut effects: ResMut<WastewaterEffects>,
     mut state: ResMut<WastewaterBubbleState>,
     mut bubbles: Query<(Entity, &WastewaterBubble, &mut Transform)>,
+    mut sound_events: MessageWriter<BlobSoundEvent>,
 ) {
     let dt = time.delta_secs().min(1.0 / 20.0);
     let visible = !level.wastewater_areas.is_empty();
@@ -312,6 +314,10 @@ pub(crate) fn simulate_wastewater_bubbles(
                 &mut materials,
             );
             spawn_bubble_burst(&mut commands, &assets, impact, radius, variation, material);
+            // This event is intentionally adjacent to the surface burst and
+            // despawn: every bubble that visibly pops owns one matching cue.
+            // Bubble intervals in the JSON already control the overall rate.
+            sound_events.write(BlobSoundEvent::AmbientBubble);
             commands.entity(entity).despawn();
         }
     }
@@ -470,8 +476,11 @@ pub(crate) fn simulate_ambient_drops(
         (Entity, &mut AmbientSplashParticle, &mut Transform),
         (Without<AmbientDrop>, Without<GameCamera>),
     >,
+    mut sound_events: MessageWriter<BlobSoundEvent>,
+    mut sound_cooldown: Local<f32>,
 ) {
     let dt = time.delta_secs().min(1.0 / 20.0);
+    *sound_cooldown = (*sound_cooldown - dt).max(0.0);
     if !ink_style.enabled || !matches!(scenario.0, 0 | 1) {
         for (entity, _, _) in &mut drops {
             commands.entity(entity).despawn();
@@ -504,6 +513,10 @@ pub(crate) fn simulate_ambient_drops(
                     drop.parallax,
                     camera.translation.truncate(),
                 );
+                if *sound_cooldown <= 0.0 {
+                    sound_events.write(BlobSoundEvent::AmbientDrop);
+                    *sound_cooldown = 0.18;
+                }
             }
             commands.entity(entity).despawn();
         }
