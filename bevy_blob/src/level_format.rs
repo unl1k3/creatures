@@ -111,6 +111,9 @@ pub(super) struct LightDefinition {
     pub(super) color: [f32; 3],
     pub(super) radius: f32,
     pub(super) intensity: f32,
+    /// Authored intensity retained while runtime lantern pulses update the
+    /// current `intensity` field.
+    pub(super) base_intensity: f32,
     pub(super) enabled: bool,
 }
 
@@ -552,11 +555,13 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
                     "light {index} color channels must be between 0 and 1"
                 )));
             }
+            let intensity = positive_number(&format!("light {index} intensity"), light.intensity)?;
             Ok(LightDefinition {
                 position: finite_point(&format!("light {index} position"), light.position)?,
                 color: light.color,
                 radius: positive_number(&format!("light {index} radius"), light.radius)?,
-                intensity: positive_number(&format!("light {index} intensity"), light.intensity)?,
+                intensity,
+                base_intensity: intensity,
                 enabled: light.enabled,
             })
         })

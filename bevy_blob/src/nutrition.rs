@@ -2,6 +2,7 @@ use super::*;
 use crate::environment::{GameLayer, WastewaterEffects};
 use crate::level_format::NutrientDefinition;
 use crate::palette;
+use crate::rendering::light_dynamic_rgba;
 use avian2d::dynamics::ccd::SweptCcd;
 use avian2d::prelude::{Collider, CollisionLayers, GravityScale, LinearVelocity, RigidBody};
 use bevy::{asset::RenderAssetUsages, mesh::Indices, render::render_resource::PrimitiveTopology};
@@ -402,7 +403,7 @@ pub(super) fn setup_nutrition(
     nutrition.reset_from_definitions(&level.nutrients);
     let slots = nutrition.nutrients.len().max(1);
     let mut nutrient_mesh = empty_nutrient_mesh();
-    update_nutrient_mesh(&mut nutrient_mesh, &nutrition.nutrients, slots, 0.0);
+    update_nutrient_mesh(&mut nutrient_mesh, &nutrition.nutrients, slots, 0.0, &[]);
     commands.insert_resource(nutrition);
     spawn_nutrient_bodies(&mut commands, &level.nutrients);
     let mesh = meshes.add(nutrient_mesh);
@@ -1282,6 +1283,7 @@ fn circle_convex_penetration(center: Vec2, radius: f32, vertices: &[Vec2]) -> Op
 
 pub(super) fn draw_nutrition(
     time: Res<Time>,
+    level: Res<Level>,
     nutrition: Res<NutritionWorld>,
     mut render_assets: ResMut<NutrientRenderAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -1295,10 +1297,17 @@ pub(super) fn draw_nutrition(
         &nutrition.nutrients,
         render_assets.slots,
         time.elapsed_secs(),
+        &level.lights,
     );
 }
 
-fn update_nutrient_mesh(mesh: &mut Mesh, nutrients: &[Nutrient], slots: usize, elapsed: f32) {
+fn update_nutrient_mesh(
+    mesh: &mut Mesh,
+    nutrients: &[Nutrient],
+    slots: usize,
+    elapsed: f32,
+    lights: &[crate::level_format::LightDefinition],
+) {
     let mut positions = Vec::new();
     let mut colors = Vec::new();
     let mut indices = Vec::new();
@@ -1307,6 +1316,9 @@ fn update_nutrient_mesh(mesh: &mut Mesh, nutrients: &[Nutrient], slots: usize, e
     }
     for _ in nutrients.len()..slots {
         append_hidden_nutrient_mesh(&mut positions, &mut colors, &mut indices);
+    }
+    for (position, color) in positions.iter().zip(&mut colors) {
+        *color = light_dynamic_rgba(*color, Vec2::new(position[0], position[1]), lights);
     }
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
@@ -1582,11 +1594,11 @@ mod tests {
             was_submerged: false,
         };
         let mut mesh = empty_nutrient_mesh();
-        update_nutrient_mesh(&mut mesh, &[nutrient], 1, 0.0);
+        update_nutrient_mesh(&mut mesh, &[nutrient], 1, 0.0, &[]);
         let live_vertices = mesh.count_vertices();
         let live_indices = mesh.indices().expect("live nutrient indices").len();
 
-        update_nutrient_mesh(&mut mesh, &[], 1, 1.0);
+        update_nutrient_mesh(&mut mesh, &[], 1, 1.0, &[]);
 
         assert_eq!(mesh.count_vertices(), live_vertices);
         assert_eq!(

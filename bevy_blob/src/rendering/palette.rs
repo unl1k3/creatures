@@ -77,9 +77,9 @@ pub(super) fn blob_vertex_light(
     lights: &[LightDefinition],
     center_vertex: bool,
 ) -> [f32; 4] {
-    // Cool sewer ambience keeps the unlit side readable without flattening
+    // A low cool ambient keeps the unlit side readable without flattening
     // the warm contribution of nearby lamps.
-    let mut rgb = Vec3::new(0.24, 0.31, 0.36);
+    let mut rgb = Vec3::new(0.065, 0.085, 0.095);
     for light in lights.iter().filter(|light| light.enabled) {
         let toward_light = light.position - position;
         let distance = toward_light.length();
@@ -103,14 +103,51 @@ pub(super) fn blob_vertex_light(
         rgb += light_color * attenuation * response * light.intensity;
 
         if !center_vertex {
-            // A compact, pale highlight makes the membrane look wet. This is
-            // deliberately subtle until a per-pixel shader replaces it.
-            let specular = normal_light.max(0.0).powi(8) * attenuation * light.intensity * 0.24;
-            rgb += light_color.lerp(Vec3::ONE, 0.62) * specular;
+            // A broad, coloured wet sheen is more stable on a deforming,
+            // vertex-lit membrane than a small white specular spot. The old
+            // sharp highlight jumped between membrane points and looked like
+            // a detached reflection, especially through clear wastewater.
+            let sheen = normal_light.max(0.0).powi(5) * attenuation * light.intensity * 0.075;
+            rgb += light_color.lerp(Vec3::ONE, 0.15) * sheen;
         }
     }
     // Reinhard-style compression preserves hue when several lamps overlap,
     // unlike a hard clamp that turns the whole surface white.
     let mapped = rgb / (Vec3::ONE + rgb) * 1.34;
     [mapped.x.min(1.0), mapped.y.min(1.0), mapped.z.min(1.0), 1.0]
+}
+
+/// Static scenery uses the same authored lamps as the blob, without a fake
+/// surface normal. The light is sampled per mesh vertex so the paper-and-ink
+/// platforms can fall into shadow between the lantern pools.
+pub(super) fn scenery_vertex_light(position: Vec2, lights: &[LightDefinition]) -> [f32; 4] {
+    let mut rgb = Vec3::new(0.06, 0.075, 0.08);
+    for light in lights.iter().filter(|light| light.enabled) {
+        let distance = light.position.distance(position);
+        if distance >= light.radius {
+            continue;
+        }
+        let radial = 1.0 - distance / light.radius;
+        let attenuation = radial * radial * (3.0 - 2.0 * radial);
+        rgb += Vec3::from_array(light.color) * attenuation * light.intensity * 0.78;
+    }
+    let mapped = rgb / (Vec3::ONE + rgb) * 1.42;
+    [mapped.x.min(1.0), mapped.y.min(1.0), mapped.z.min(1.0), 1.0]
+}
+
+/// Applies scene lighting to an authored dynamic colour without changing its
+/// alpha. A modest floor preserves gameplay readability while the nearby lamp
+/// colour still determines the visible hue and intensity.
+pub(crate) fn light_dynamic_rgba(
+    base: [f32; 4],
+    position: Vec2,
+    lights: &[LightDefinition],
+) -> [f32; 4] {
+    let light = scenery_vertex_light(position, lights);
+    [
+        base[0] * (0.22 + light[0] * 1.02),
+        base[1] * (0.22 + light[1] * 1.02),
+        base[2] * (0.22 + light[2] * 1.02),
+        base[3],
+    ]
 }

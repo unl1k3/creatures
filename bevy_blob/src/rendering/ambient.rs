@@ -4,6 +4,7 @@ use crate::camera::GameCamera;
 use crate::environment::{Level, TestScenario, WastewaterEffects};
 use crate::level_format::{BubbleSettingsDefinition, WastewaterAreaDefinition};
 use crate::palette;
+use crate::rendering::light_dynamic_rgba;
 use bevy::prelude::*;
 use bevy::{asset::RenderAssetUsages, mesh::Indices, render::render_resource::PrimitiveTopology};
 use std::collections::HashMap;
@@ -90,6 +91,7 @@ pub(crate) struct WastewaterSurface {
     definition: WastewaterAreaDefinition,
     mesh: Handle<Mesh>,
     phase_offset: f32,
+    occlusion_layer: bool,
 }
 
 #[derive(Component)]
@@ -107,10 +109,25 @@ pub(crate) struct AmbientDrop {
     velocity: Vec2,
     gravity: f32,
     radius: f32,
-    terminal_y: f32,
+    /// World-space contact height. It is projected into the emitter's layer
+    /// every frame so the visual impact stays on the physical surface.
+    terminal_world_y: f32,
     splash_on_impact: bool,
     depth: f32,
+    /// The complete fall remains in the outlet's parallax plane. Mixing
+    /// factors during the fall would make a vertical drop appear diagonal.
     parallax: f32,
+}
+
+impl AmbientDrop {
+    fn terminal_y(&self, camera_position: Vec2) -> f32 {
+        self.terminal_world_y - camera_position.y * (1.0 - self.parallax)
+    }
+}
+
+#[derive(Component)]
+pub(crate) struct AmbientLightTint {
+    material: Handle<ColorMaterial>,
 }
 
 #[derive(Component)]
@@ -169,6 +186,7 @@ pub(crate) fn simulate_wastewater(
                     index,
                     time.elapsed_secs() + phase_offset,
                     false,
+                    &level.lights,
                 ));
                 // `ColorMaterial::from(Color::WHITE)` selects opaque mode and
                 // discards vertex transparency. The default material uses
@@ -180,6 +198,7 @@ pub(crate) fn simulate_wastewater(
                         definition,
                         mesh: rear_mesh.clone(),
                         phase_offset,
+                        occlusion_layer: false,
                     },
                     Mesh2d(rear_mesh),
                     MeshMaterial2d(material.clone()),
@@ -190,6 +209,7 @@ pub(crate) fn simulate_wastewater(
                     index,
                     time.elapsed_secs() + phase_offset,
                     true,
+                    &level.lights,
                 ));
                 commands.spawn((
                     WastewaterSurface {
@@ -197,6 +217,7 @@ pub(crate) fn simulate_wastewater(
                         definition,
                         mesh: front_mesh.clone(),
                         phase_offset,
+                        occlusion_layer: true,
                     },
                     Mesh2d(front_mesh),
                     MeshMaterial2d(material),
@@ -223,6 +244,8 @@ pub(crate) fn simulate_wastewater(
                 surface.area_index,
                 time.elapsed_secs() + surface.phase_offset,
                 &effects,
+                &level.lights,
+                surface.occlusion_layer,
             );
         }
     }
@@ -469,7 +492,7 @@ pub(crate) fn simulate_ambient_drops(
     assets: Res<AmbientDropAssets>,
     mut state: ResMut<AmbientDropState>,
     mut drops: Query<
-        (Entity, &mut AmbientDrop, &mut Transform),
+        (Entity, &mut AmbientDrop, &mut Transform, &AmbientLightTint),
         (Without<AmbientSplashParticle>, Without<GameCamera>),
     >,
     mut splashes: Query<
@@ -478,11 +501,12 @@ pub(crate) fn simulate_ambient_drops(
     >,
     mut sound_events: MessageWriter<BlobSoundEvent>,
     mut sound_cooldown: Local<f32>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     let dt = time.delta_secs().min(1.0 / 20.0);
     *sound_cooldown = (*sound_cooldown - dt).max(0.0);
     if !ink_style.enabled || !matches!(scenario.0, 0 | 1) {
-        for (entity, _, _) in &mut drops {
+        for (entity, _, _, _) in &mut drops {
             commands.entity(entity).despawn();
         }
         for (entity, _, _) in &mut splashes {
@@ -493,25 +517,33 @@ pub(crate) fn simulate_ambient_drops(
         return;
     }
 
-    for (entity, mut drop, mut transform) in &mut drops {
+    for (entity, mut drop, mut transform, tint) in &mut drops {
         drop.velocity.y -= drop.gravity * dt;
         let velocity = drop.velocity;
         drop.position += velocity * dt;
-        transform.translation = (drop.position
-            + parallax_offset(camera.translation.truncate(), drop.parallax))
-        .extend(drop.depth);
+        let camera_position = camera.translation.truncate();
+        transform.translation =
+            (drop.position + parallax_offset(camera_position, drop.parallax)).extend(drop.depth);
         let speed_stretch = 1.0 + (-drop.velocity.y / 360.0).clamp(0.0, 0.65);
         transform.scale.y = drop.radius * speed_stretch;
-        if drop.position.y - drop.radius * speed_stretch <= drop.terminal_y {
+        if let Some(mut material) = materials.get_mut(&tint.material) {
+            material.color = palette::color(light_dynamic_rgba(
+                palette::AMBIENT_DROP,
+                drop.position,
+                &level.lights,
+            ));
+        }
+        let terminal_y = drop.terminal_y(camera_position);
+        if drop.position.y - drop.radius * speed_stretch <= terminal_y {
             if drop.splash_on_impact {
                 spawn_dry_surface_splash(
                     &mut commands,
                     &assets,
-                    Vec2::new(drop.position.x, drop.terminal_y),
+                    Vec2::new(drop.position.x, terminal_y),
                     drop.radius,
                     drop.depth,
                     drop.parallax,
-                    camera.translation.truncate(),
+                    camera_position,
                 );
                 if *sound_cooldown <= 0.0 {
                     sound_events.write(BlobSoundEvent::AmbientDrop);
@@ -554,22 +586,33 @@ pub(crate) fn simulate_ambient_drops(
             continue;
         }
         state.timers[index] -= emitter.interval;
-        let surface = first_surface_below(emitter.position, &level);
-        let terminal_y = surface
+        let camera_position = camera.translation.truncate();
+        // Query the geometry under the rendered outlet, not under its raw
+        // background coordinate. This lets a drop stay vertical in its layer
+        // and still reach the platform visible directly below it.
+        let emitter_world = emitter.position + parallax_offset(camera_position, emitter.parallax);
+        let surface = first_surface_below(emitter_world, &level);
+        let terminal_world_y = surface
             .unwrap_or_else(|| level.center().y - level.size().y * 0.5 - emitter.radius * 4.0);
+        let material = materials.add(ColorMaterial::from(palette::color(light_dynamic_rgba(
+            palette::AMBIENT_DROP,
+            emitter.position,
+            &level.lights,
+        ))));
         commands.spawn((
             AmbientDrop {
                 velocity: Vec2::ZERO,
                 position: emitter.position,
                 gravity: emitter.gravity,
                 radius: emitter.radius,
-                terminal_y,
+                terminal_world_y,
                 splash_on_impact: surface.is_some(),
                 depth: emitter.depth,
                 parallax: emitter.parallax,
             },
             Mesh2d(assets.mesh.clone()),
-            MeshMaterial2d(assets.material.clone()),
+            MeshMaterial2d(material.clone()),
+            AmbientLightTint { material },
             Transform {
                 translation: (emitter.position
                     + parallax_offset(camera.translation.truncate(), emitter.parallax))
@@ -591,6 +634,7 @@ pub(crate) fn trigger_drop_shower(
     assets: Res<AmbientDropAssets>,
     mut state: ResMut<AmbientDropState>,
     mut commands: Commands,
+    mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     if keyboard.just_pressed(KeyCode::KeyV) {
         state.rain_enabled = !state.rain_enabled;
@@ -635,19 +679,25 @@ pub(crate) fn trigger_drop_shower(
         let surface = first_surface_below(position, &level);
         let terminal_y = surface.unwrap_or(level.center().y - level.size().y * 0.5 - 14.0);
         let radius = 1.7 + speed_variation * 1.8;
+        let material = materials.add(ColorMaterial::from(palette::color(light_dynamic_rgba(
+            palette::AMBIENT_DROP,
+            position,
+            &level.lights,
+        ))));
         commands.spawn((
             AmbientDrop {
                 position,
                 velocity: Vec2::new(horizontal_variation * 86.0, -40.0 - speed_variation * 165.0),
                 gravity: 380.0 + state.unit_random() * 190.0,
                 radius,
-                terminal_y,
+                terminal_world_y: terminal_y,
                 splash_on_impact: surface.is_some(),
                 depth: -4.8,
                 parallax: 1.0,
             },
             Mesh2d(assets.mesh.clone()),
-            MeshMaterial2d(assets.material.clone()),
+            MeshMaterial2d(material.clone()),
+            AmbientLightTint { material },
             Transform {
                 translation: position.extend(-4.8),
                 scale: Vec3::new(radius * 1.35, radius, 1.0),
@@ -769,24 +819,27 @@ fn create_bubble_mesh() -> Mesh {
 
 const WASTEWATER_SEGMENTS: usize = 64;
 const WASTEWATER_ROWS: usize = 4;
+// The rear layer gives the basin its coloured volume. The front layer only
+// filters immersed objects, so it must stay substantially more transparent.
+const WASTEWATER_REAR_ALPHA_SCALE: [f32; WASTEWATER_ROWS] = [0.26, 0.34, 0.29, 0.32];
+const WASTEWATER_FRONT_ALPHA: [f32; WASTEWATER_ROWS] = [0.20, 0.08, 0.12, 0.17];
 
 fn create_wastewater_mesh(
     definition: WastewaterAreaDefinition,
     area_index: usize,
     elapsed: f32,
     occlusion_layer: bool,
+    lights: &[crate::level_format::LightDefinition],
 ) -> Mesh {
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
     );
-    mesh.insert_attribute(
-        Mesh::ATTRIBUTE_POSITION,
-        wastewater_positions(definition, area_index, elapsed, None),
-    );
+    let positions = wastewater_positions(definition, area_index, elapsed, None);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions.clone());
     mesh.insert_attribute(
         Mesh::ATTRIBUTE_COLOR,
-        wastewater_colors(definition, occlusion_layer),
+        wastewater_colors(definition, occlusion_layer, &positions, lights, elapsed),
     );
 
     let row_width = WASTEWATER_SEGMENTS + 1;
@@ -817,10 +870,16 @@ fn update_wastewater_positions(
     area_index: usize,
     elapsed: f32,
     effects: &WastewaterEffects,
+    lights: &[crate::level_format::LightDefinition],
+    occlusion_layer: bool,
 ) {
+    let positions = wastewater_positions(definition, area_index, elapsed, Some(effects));
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions.clone());
+    // Lighting follows the wavy surface as it moves, so shallow bright bands
+    // do not remain frozen in world space after an impact ripple.
     mesh.insert_attribute(
-        Mesh::ATTRIBUTE_POSITION,
-        wastewater_positions(definition, area_index, elapsed, Some(effects)),
+        Mesh::ATTRIBUTE_COLOR,
+        wastewater_colors(definition, occlusion_layer, &positions, lights, elapsed),
     );
 }
 
@@ -859,14 +918,21 @@ fn wastewater_shore_rim(local_x: f32, elapsed: f32) -> f32 {
     2.6 + broad + fine
 }
 
-fn wastewater_colors(definition: WastewaterAreaDefinition, occlusion_layer: bool) -> Vec<[f32; 4]> {
+fn wastewater_colors(
+    definition: WastewaterAreaDefinition,
+    occlusion_layer: bool,
+    positions: &[[f32; 3]],
+    lights: &[crate::level_format::LightDefinition],
+    elapsed: f32,
+) -> Vec<[f32; 4]> {
     let [red, green, blue, alpha] = definition.color;
     let alphas = if occlusion_layer {
         // Objects remain visible below the surface, increasingly filtered by
-        // murky water with depth instead of being cut away completely.
-        [0.86, 0.48, 0.62, 0.78]
+        // murky water with depth instead of being cut away completely. The
+        // old values made the foreground layer almost opaque by itself.
+        WASTEWATER_FRONT_ALPHA
     } else {
-        [alpha * 0.86, alpha, alpha * 0.92, alpha * 0.96]
+        WASTEWATER_REAR_ALPHA_SCALE.map(|scale| alpha * scale)
     };
     let shades = [
         // Dark, low-saturation rim: it reads as foam, grease and debris
@@ -886,11 +952,43 @@ fn wastewater_colors(definition: WastewaterAreaDefinition, occlusion_layer: bool
         [red, green, blue, alphas[2]],
         [red * 0.45, green * 0.48, blue * 0.38, alphas[3]],
     ];
-    let mut colors = Vec::with_capacity((WASTEWATER_SEGMENTS + 1) * WASTEWATER_ROWS);
-    for shade in shades {
-        colors.extend(std::iter::repeat_n(shade, WASTEWATER_SEGMENTS + 1));
-    }
-    colors
+    positions
+        .iter()
+        .enumerate()
+        .map(|(index, position)| {
+            let shade = shades[index / (WASTEWATER_SEGMENTS + 1)];
+            let row = index / (WASTEWATER_SEGMENTS + 1);
+            let world_position = definition.position + Vec2::new(position[0], position[1]);
+            let mut color = light_dynamic_rgba(shade, world_position, lights);
+            // Reflections belong only to the two moving surface rows. Their
+            // broken horizontal bands drift independently under each lantern
+            // rather than painting a uniform bright stripe across the basin.
+            if row <= 1 {
+                for (light_index, light) in
+                    lights.iter().enumerate().filter(|(_, light)| light.enabled)
+                {
+                    let lateral = (1.0
+                        - (world_position.x - light.position.x).abs() / light.radius)
+                        .clamp(0.0, 1.0);
+                    let vertical = (1.0
+                        - (world_position.y - light.position.y).abs() / (light.radius * 1.35))
+                        .clamp(0.0, 1.0);
+                    let phase = world_position.x * (0.075 + light_index as f32 * 0.004)
+                        - elapsed * (2.1 + light_index as f32 * 0.11)
+                        + light_index as f32 * 1.37;
+                    let shimmer = (phase.sin() * 0.5 + 0.5).powi(5)
+                        * lateral.powi(2)
+                        * vertical
+                        * light.intensity
+                        * 0.18;
+                    color[0] = (color[0] + light.color[0] * shimmer).min(1.0);
+                    color[1] = (color[1] + light.color[1] * shimmer).min(1.0);
+                    color[2] = (color[2] + light.color[2] * shimmer).min(1.0);
+                }
+            }
+            color
+        })
+        .collect()
 }
 
 fn first_surface_below(origin: Vec2, level: &Level) -> Option<f32> {

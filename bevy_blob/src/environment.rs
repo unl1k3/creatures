@@ -8,6 +8,7 @@ use crate::level_format::{
 };
 use crate::nutrition::{NutrientPhysics, NutritionWorld, spawn_nutrient_bodies};
 use crate::palette as game_palette;
+use crate::rendering::light_dynamic_rgba;
 use avian2d::prelude::{
     AngularDamping, Collider, CollisionLayers, JointCollisionDisabled, LinearDamping,
     MassPropertiesBundle, PhysicsLayer, RevoluteJoint, RigidBody, ShapeCastConfig, SpatialQuery,
@@ -86,6 +87,11 @@ pub(super) struct ChainLink {
     link_index: usize,
 }
 
+/// Each physical chain element owns a material so its ink darkens and warms
+/// independently while swinging through the authored lantern pools.
+#[derive(Component)]
+pub(super) struct ChainLightMaterial(Handle<ColorMaterial>);
+
 #[derive(Resource)]
 pub(super) struct Level {
     _name: String,
@@ -106,6 +112,50 @@ pub(super) struct Level {
     pub(super) hazards: Vec<HazardDefinition>,
     pub(super) chains: Vec<ChainDefinition>,
     pub(super) counterbalances: Vec<CounterbalanceDefinition>,
+}
+
+/// Y enables a deliberately exaggerated lantern rhythm. It is a visual test
+/// aid; normal play keeps the same independent, much subtler pulse.
+#[derive(Resource, Default)]
+pub(super) struct LightPulsePreview {
+    pub(super) enabled: bool,
+}
+
+pub(super) fn toggle_light_pulse_preview(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut preview: ResMut<LightPulsePreview>,
+) {
+    if keyboard.just_pressed(KeyCode::KeyY) {
+        preview.enabled = !preview.enabled;
+    }
+}
+
+/// Gives each authored lantern a small, deterministic pulse. The phase comes
+/// from its index and position, so a reset never makes all lights breathe in
+/// unison and no random state is needed in the level format.
+pub(super) fn animate_level_lights(
+    time: Res<Time>,
+    preview: Res<LightPulsePreview>,
+    mut level: ResMut<Level>,
+) {
+    let elapsed = time.elapsed_secs();
+    for (index, light) in level.lights.iter_mut().enumerate() {
+        if !light.enabled {
+            continue;
+        }
+        let phase = index as f32 * 1.91 + light.position.x * 0.013 + light.position.y * 0.007;
+        let (slow_strength, flutter_strength, lower, upper) = if preview.enabled {
+            // High contrast makes it easy to verify both the local lighting
+            // and the glow radius from a still camera position.
+            (0.42, 0.14, 0.42, 1.72)
+        } else {
+            (0.20, 0.06, 0.68, 1.34)
+        };
+        let slow = (elapsed * (0.78 + index as f32 * 0.052) + phase).sin() * slow_strength;
+        let flutter =
+            (elapsed * (2.15 + index as f32 * 0.13) + phase * 1.7).sin() * flutter_strength;
+        light.intensity = light.base_intensity * (1.0 + slow + flutter).clamp(lower, upper);
+    }
 }
 
 #[derive(Resource, Default)]
@@ -700,7 +750,9 @@ fn spawn_level_chains(
             Vec2::new(chain.link_radius * 0.88, chain.link_radius * 1.28),
             16,
         ));
-        let material = materials.add(ColorMaterial::from(game_palette::color(game_palette::INK)));
+        let anchor_material = materials.add(ColorMaterial::from(game_palette::color(
+            light_dynamic_rgba(game_palette::INK, chain.anchor, &level.lights),
+        )));
         let anchor = commands
             .spawn((
                 Name::new(format!("Chain anchor: {}", chain.id)),
@@ -708,13 +760,17 @@ fn spawn_level_chains(
                 ChainAnchor { chain_index },
                 RigidBody::Kinematic,
                 Mesh2d(meshes.add(ring_mesh(1.5, 5.5, 12))),
-                MeshMaterial2d(material.clone()),
+                MeshMaterial2d(anchor_material.clone()),
+                ChainLightMaterial(anchor_material),
                 Transform::from_translation(chain.anchor.extend(0.0)),
             ))
             .id();
         let mut previous = anchor;
         for link_index in 0..chain.links {
             let position = chain.anchor - Vec2::Y * chain.spacing * (link_index + 1) as f32;
+            let material = materials.add(ColorMaterial::from(game_palette::color(
+                light_dynamic_rgba(game_palette::INK, position, &level.lights),
+            )));
             let link = commands
                 .spawn((
                     Name::new(format!("Chain link {}: {link_index}", chain.id)),
@@ -735,6 +791,7 @@ fn spawn_level_chains(
                     ),
                     Mesh2d(mesh.clone()),
                     MeshMaterial2d(material.clone()),
+                    ChainLightMaterial(material),
                     Transform::from_translation(position.extend(0.12)).with_rotation(
                         Quat::from_rotation_z(if link_index % 2 == 0 { 0.0 } else { 0.35 }),
                     ),
@@ -752,9 +809,30 @@ fn spawn_level_chains(
     }
 }
 
+/// Updates chain ink from the current physical positions. The links are Avian
+/// bodies, so their light must be sampled after the physics step rather than
+/// from their JSON spawn coordinates.
+pub(super) fn sync_chain_lighting(
+    level: Res<Level>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    chains: Query<(&Transform, &ChainLightMaterial)>,
+) {
+    for (transform, material_handle) in &chains {
+        let Some(mut material) = materials.get_mut(&material_handle.0) else {
+            continue;
+        };
+        material.color = game_palette::color(light_dynamic_rgba(
+            game_palette::INK,
+            transform.translation.truncate(),
+            &level.lights,
+        ));
+    }
+}
+
 /// Thin bridge marks show the alternating links that are seen edge-on.
 pub(super) fn draw_level_chains(
     mut gizmos: Gizmos,
+    level: Res<Level>,
     links: Query<(&Transform, &ChainLink)>,
     anchors: Query<(&Transform, &ChainAnchor)>,
 ) {
@@ -780,29 +858,30 @@ pub(super) fn draw_level_chains(
         if first_chain != second_chain || *second_link != *first_link + 1 {
             continue;
         }
-        draw_chain_stroke(&mut gizmos, *first, *second);
+        draw_chain_stroke(&mut gizmos, *first, *second, &level.lights);
     }
     for (anchor_transform, anchor) in &anchors {
         let anchor_position = anchor_transform.translation.truncate();
         if let Some((_, _, first_link)) = ordered.iter().find(|(chain_index, link_index, _)| {
             *chain_index == anchor.chain_index && *link_index == 0
         }) {
-            draw_chain_stroke(&mut gizmos, anchor_position, *first_link);
+            draw_chain_stroke(&mut gizmos, anchor_position, *first_link, &level.lights);
         }
     }
 }
 
-fn draw_chain_stroke(gizmos: &mut Gizmos, start: Vec2, end: Vec2) {
+fn draw_chain_stroke(gizmos: &mut Gizmos, start: Vec2, end: Vec2, lights: &[LightDefinition]) {
     let direction = (end - start).normalize_or(Vec2::NEG_Y);
     let normal = Vec2::new(-direction.y, direction.x);
     let start = start + direction * 4.0;
     let end = end - direction * 4.0;
+    let ink = game_palette::color(light_dynamic_rgba(
+        game_palette::INK,
+        (start + end) * 0.5,
+        lights,
+    ));
     for offset in [-1.0, 0.0, 1.0] {
-        gizmos.line_2d(
-            start + normal * offset,
-            end + normal * offset,
-            game_palette::color(game_palette::INK),
-        );
+        gizmos.line_2d(start + normal * offset, end + normal * offset, ink);
     }
 }
 

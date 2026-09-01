@@ -50,32 +50,38 @@ pub(super) fn update_blob_outline_mesh(
         let inner = point.position + *inward * thickness * organic;
         positions.push([inner.x, inner.y, 0.0]);
     }
+    // The three rings are not merely progressively darker copies.  Each one
+    // samples the same local light as the body, then uses a reduced response.
+    // This keeps the translucent membrane attached to the lit side instead of
+    // looking like a fixed dark sticker around the blob.
+    let mut outer_colors = Vec::with_capacity(count);
+    let mut transition_colors = Vec::with_capacity(count);
+    let mut inner_colors = Vec::with_capacity(count);
     for (point, inward) in contour.points.iter().zip(&contour.inward_normals) {
         let illumination = blob_vertex_light(point.position, -*inward, lights, false);
         let energy = 0.72 + vitality.energy * 0.28;
-        colors.push([
-            (base_rgb.x * (0.62 + illumination[0] * 0.70) * energy).min(1.0),
-            (base_rgb.y * (0.62 + illumination[1] * 0.70) * energy).min(1.0),
-            (base_rgb.z * (0.62 + illumination[2] * 0.70) * energy).min(1.0),
-            if selected { 0.98 } else { 0.94 },
+        outer_colors.push([
+            (base_rgb.x * (0.42 + illumination[0] * 0.92) * energy).min(1.0),
+            (base_rgb.y * (0.42 + illumination[1] * 0.92) * energy).min(1.0),
+            (base_rgb.z * (0.42 + illumination[2] * 0.92) * energy).min(1.0),
+            if selected { 0.94 } else { 0.84 },
+        ]);
+        transition_colors.push([
+            (base_rgb.x * (0.24 + illumination[0] * 0.60) * energy).min(1.0),
+            (base_rgb.y * (0.24 + illumination[1] * 0.60) * energy).min(1.0),
+            (base_rgb.z * (0.24 + illumination[2] * 0.60) * energy).min(1.0),
+            if selected { 0.58 } else { 0.48 },
+        ]);
+        inner_colors.push([
+            (base_rgb.x * (0.10 + illumination[0] * 0.30) * energy).min(1.0),
+            (base_rgb.y * (0.10 + illumination[1] * 0.30) * energy).min(1.0),
+            (base_rgb.z * (0.10 + illumination[2] * 0.30) * energy).min(1.0),
+            0.22,
         ]);
     }
-    colors.extend((0..count).map(|_| {
-        [
-            base_rgb.x * 0.76,
-            base_rgb.y * 0.76,
-            base_rgb.z * 0.76,
-            0.58,
-        ]
-    }));
-    colors.extend((0..count).map(|_| {
-        [
-            base_rgb.x * 0.34,
-            base_rgb.y * 0.34,
-            base_rgb.z * 0.34,
-            0.26,
-        ]
-    }));
+    colors.extend(outer_colors);
+    colors.extend(transition_colors);
+    colors.extend(inner_colors);
 
     let mut indices = Vec::with_capacity(count * 12);
     for index in 0..count {

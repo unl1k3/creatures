@@ -1,5 +1,5 @@
 use super::*;
-use crate::environment::{ForegroundArtwork, LevelArtwork, ParallaxLayer};
+use crate::environment::{ForegroundArtwork, LevelArtwork, LightPulsePreview, ParallaxLayer};
 use crate::level_format::LightDefinition;
 use crate::palette as game_palette;
 use crate::shield::shield_spine_fans;
@@ -27,6 +27,8 @@ const PLATFORM_DEPTH_STEP: f32 = 0.001;
 // Rounded caps and authored polygon fixtures can meet the visual skin of a
 // rectangle. Draw them just above the slab texture to avoid coplanar overlap.
 const FIXTURE_TEXTURE_DEPTH: f32 = PLATFORM_TEXTURE_DEPTH + 0.01;
+const BACKGROUND_LIGHT_DEPTH: f32 = -19.5;
+const LIGHT_GLOW_SEGMENTS: usize = 20;
 
 #[derive(Resource)]
 pub(super) struct InkStylePreview {
@@ -46,6 +48,24 @@ pub(super) struct InkPreviewShape {
 
 #[derive(Component)]
 pub(super) struct InkForeground;
+
+/// Identifies the authored illustration layers whose tint changes with the
+/// camera height. Gameplay meshes keep their own local lamp lighting.
+#[derive(Component)]
+pub(super) struct InkAtmosphereLayer {
+    foreground: bool,
+}
+
+/// Purely decorative mist. It shares the slow background parallax but never
+/// creates a collider or changes visibility of game entities.
+#[derive(Component)]
+struct InkFogBand;
+
+#[derive(Component)]
+pub(super) struct LanternGlow {
+    light_index: usize,
+    mesh: Handle<Mesh>,
+}
 
 /// Tags both visual layers of a platform that is moved by a counterbalance.
 #[derive(Component)]
@@ -107,6 +127,42 @@ pub(super) fn toggle_foreground(
     }
 }
 
+/// Makes the sewer feel deeper and colder as the player climbs.  This only
+/// tints painted scenery: the blob and interactive pieces still derive their
+/// brightness from the nearby authored lanterns.
+pub(super) fn sync_ink_atmosphere(
+    ink_style: Res<InkStylePreview>,
+    scenario: Res<TestScenario>,
+    level: Res<Level>,
+    camera: Single<&Transform, With<GameCamera>>,
+    mut layers: Query<(&InkAtmosphereLayer, &mut Sprite)>,
+) {
+    if !ink_style.enabled || !supports_ink_background(scenario.0) {
+        return;
+    }
+
+    let bottom = level.center().y - level.size().y * 0.5;
+    let ascent = ((camera.translation.y - bottom) / level.size().y).clamp(0.0, 1.0);
+    // Smooth the perceived transition between the lower sewer and the cold,
+    // poorly maintained upper shafts.
+    let ascent = ascent * ascent * (3.0 - 2.0 * ascent);
+    for (layer, mut sprite) in &mut layers {
+        sprite.color = ink_atmosphere_tint(ascent, layer.foreground);
+    }
+}
+
+fn ink_atmosphere_tint(ascent: f32, foreground: bool) -> Color {
+    let (lower, upper) = if foreground {
+        // Foreground stays slightly brighter so pipes and chains still form a
+        // readable silhouette when the upper room becomes very dark.
+        (Vec3::new(0.30, 0.31, 0.28), Vec3::new(0.18, 0.23, 0.25))
+    } else {
+        (Vec3::new(0.24, 0.27, 0.26), Vec3::new(0.13, 0.18, 0.22))
+    };
+    let tint = lower.lerp(upper, ascent);
+    Color::srgb(tint.x, tint.y, tint.z)
+}
+
 pub(super) fn sync_ink_preview(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -163,11 +219,16 @@ pub(super) fn sync_ink_preview(
             Sprite {
                 image: asset_server.load("levels/sewer_01/art/ink/background.png"),
                 custom_size: Some(Vec2::new(level.size().x, INK_SECTOR_HEIGHT)),
+                // The illustration supplies the room's darkness; lantern
+                // glows below restore local warmth at authored light points.
+                color: ink_atmosphere_tint(0.0, false),
                 ..default()
             },
+            InkAtmosphereLayer { foreground: false },
             Transform::from_translation(background_origin),
             ParallaxLayer::new(background_origin, 0.10),
         ));
+        spawn_upper_sewer_atmosphere(&mut commands, &mut meshes, &mut materials, scenario.0);
         let foreground_layers = [
             (
                 "levels/sewer_01/art/ink/foreground-bottom.png",
@@ -190,8 +251,10 @@ pub(super) fn sync_ink_preview(
                 Sprite {
                     image: asset_server.load(image_path),
                     custom_size: Some(foreground_size),
+                    color: ink_atmosphere_tint(0.0, true),
                     ..default()
                 },
+                InkAtmosphereLayer { foreground: true },
                 // Foreground pipes and debris are an occlusion layer: gameplay
                 // structures remain visible through their central opening, while
                 // overlapping portions correctly pass behind this artwork.
@@ -227,6 +290,7 @@ pub(super) fn sync_ink_preview(
             platform_index,
             platform,
             &brick_texture,
+            &level.lights,
             level
                 .counterbalances
                 .iter()
@@ -264,6 +328,10 @@ pub(super) fn sync_ink_preview(
                 ]
             })
             .collect::<Vec<_>>();
+        let vertex_colors = visual_fixture
+            .iter()
+            .map(|point| scenery_vertex_light(*point, &level.lights))
+            .collect::<Vec<_>>();
         let mut indices = Vec::with_capacity((fixture.len() - 2) * 3);
         for index in 1..fixture.len() - 1 {
             indices.extend_from_slice(&[0, index as u32, index as u32 + 1]);
@@ -274,6 +342,7 @@ pub(super) fn sync_ink_preview(
         );
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, texture_coordinates);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vertex_colors);
         mesh.insert_indices(Indices::U32(indices));
         commands.spawn((
             InkPreviewShape {
@@ -284,6 +353,179 @@ pub(super) fn sync_ink_preview(
             Transform::from_xyz(0.0, 0.0, FIXTURE_TEXTURE_DEPTH),
         ));
     }
+
+    // A soft warm disc lies above the darkened illustration but behind every
+    // playable surface. It makes the lantern positions legible even where no
+    // platform happens to sample their light pool.
+    for (light_index, light) in level
+        .lights
+        .iter()
+        .enumerate()
+        .filter(|(_, light)| light.enabled)
+    {
+        let glow_radius = light.radius * 0.72;
+        let mesh = meshes.add(create_lantern_glow_mesh(
+            glow_radius,
+            light.color,
+            light.intensity,
+        ));
+        commands.spawn((
+            InkPreviewShape {
+                scenario: scenario.0,
+            },
+            LanternGlow {
+                light_index,
+                mesh: mesh.clone(),
+            },
+            Mesh2d(mesh),
+            MeshMaterial2d(materials.add(ColorMaterial::default())),
+            Transform::from_translation(light.position.extend(BACKGROUND_LIGHT_DEPTH)),
+        ));
+    }
+}
+
+/// Adds depth only to the upper half of the initial sewer. The player reaches
+/// these bands naturally while climbing, so the environment changes without a
+/// visible scene cut or a second loading step.
+fn spawn_upper_sewer_atmosphere(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<ColorMaterial>,
+    scenario: u8,
+) {
+    const FOG_BANDS: &[(Vec2, f32, f32, f32)] = &[
+        (Vec2::new(-210.0, 960.0), 900.0, 108.0, 0.17),
+        (Vec2::new(250.0, 1_280.0), 1_060.0, 146.0, 0.25),
+        (Vec2::new(-160.0, 1_650.0), 980.0, 122.0, 0.20),
+        (Vec2::new(180.0, 2_035.0), 1_140.0, 168.0, 0.30),
+    ];
+    let fog_material = materials.add(ColorMaterial::default());
+    for (index, (center, width, height, parallax)) in FOG_BANDS.iter().enumerate() {
+        let mesh = meshes.add(create_ink_fog_band(*center, *width, *height, index as f32));
+        commands.spawn((
+            InkPreviewShape { scenario },
+            InkFogBand,
+            Mesh2d(mesh),
+            MeshMaterial2d(fog_material.clone()),
+            Transform::from_xyz(0.0, 0.0, -18.8),
+            ParallaxLayer::new(Vec3::new(0.0, 0.0, -18.8), *parallax),
+        ));
+    }
+
+    let infrastructure = meshes.add(create_upper_infrastructure_mesh());
+    commands.spawn((
+        InkPreviewShape { scenario },
+        Mesh2d(infrastructure),
+        MeshMaterial2d(materials.add(ColorMaterial::default())),
+        Transform::from_xyz(0.0, 0.0, -18.65),
+        ParallaxLayer::new(Vec3::new(0.0, 0.0, -18.65), 0.22),
+    ));
+}
+
+/// A soft three-row ribbon with an irregular ink-like edge. Vertex alpha lets
+/// it dissolve at both edges instead of reading as a translucent rectangle.
+fn create_ink_fog_band(center: Vec2, width: f32, height: f32, seed: f32) -> Mesh {
+    const SEGMENTS: usize = 18;
+    let mut positions = Vec::with_capacity((SEGMENTS + 1) * 3);
+    let mut colors = Vec::with_capacity((SEGMENTS + 1) * 3);
+    let mut indices = Vec::with_capacity(SEGMENTS * 12);
+    for index in 0..=SEGMENTS {
+        let t = index as f32 / SEGMENTS as f32;
+        let x = center.x + (t - 0.5) * width;
+        let uneven = (t * 15.7 + seed * 2.13).sin() * height * 0.10
+            + (t * 29.1 + seed).cos() * height * 0.045;
+        let fade = (std::f32::consts::PI * t).sin().powi(2);
+        for (vertical, alpha) in [(0.5, 0.0), (0.0, 1.0), (-0.5, 0.0)] {
+            positions.push([x, center.y + vertical * height + uneven, 0.0]);
+            colors.push([
+                game_palette::SEWER_FOG[0],
+                game_palette::SEWER_FOG[1],
+                game_palette::SEWER_FOG[2],
+                game_palette::SEWER_FOG[3] * fade * alpha,
+            ]);
+        }
+    }
+    for index in 0..SEGMENTS {
+        let base = (index * 3) as u32;
+        let next = base + 3;
+        indices.extend_from_slice(&[
+            base,
+            next,
+            base + 1,
+            base + 1,
+            next,
+            next + 1,
+            base + 1,
+            next + 1,
+            base + 2,
+            base + 2,
+            next + 1,
+            next + 2,
+        ]);
+    }
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    mesh.insert_indices(Indices::U32(indices));
+    mesh
+}
+
+/// Distant pipes, clamps and grated passages provide new visual landmarks in
+/// the upper shafts. They deliberately remain subtle and non-interactive.
+fn create_upper_infrastructure_mesh() -> Mesh {
+    let mut positions = Vec::new();
+    let mut colors = Vec::new();
+    let mut indices = Vec::new();
+    let color = game_palette::DISTANT_INFRASTRUCTURE;
+    let mut add_rect = |center: Vec2, size: Vec2, opacity: f32| {
+        let first = positions.len() as u32;
+        let half = size * 0.5;
+        positions.extend_from_slice(&[
+            [center.x - half.x, center.y - half.y, 0.0],
+            [center.x + half.x, center.y - half.y, 0.0],
+            [center.x + half.x, center.y + half.y, 0.0],
+            [center.x - half.x, center.y + half.y, 0.0],
+        ]);
+        colors.extend(std::iter::repeat_n(
+            [color[0], color[1], color[2], color[3] * opacity],
+            4,
+        ));
+        indices.extend_from_slice(&[first, first + 1, first + 2, first, first + 2, first + 3]);
+    };
+
+    // Tall service pipes with irregularly spaced clamps.
+    for (x, bottom, height) in [(-605.0, 1_010.0, 1_150.0), (620.0, 1_180.0, 1_050.0)] {
+        add_rect(
+            Vec2::new(x, bottom + height * 0.5),
+            Vec2::new(18.0, height),
+            0.82,
+        );
+        for offset in [110.0, 330.0, 570.0, 820.0] {
+            if offset < height {
+                add_rect(Vec2::new(x, bottom + offset), Vec2::new(42.0, 13.0), 0.96);
+            }
+        }
+    }
+    // Cross pipes and narrow grate marks prevent the extended top room from
+    // becoming visually empty while preserving its open playable silhouette.
+    add_rect(Vec2::new(-330.0, 1_870.0), Vec2::new(430.0, 16.0), 0.70);
+    add_rect(Vec2::new(360.0, 1_420.0), Vec2::new(360.0, 14.0), 0.60);
+    for x in [-190.0, -172.0, -154.0, 480.0, 498.0, 516.0] {
+        let y = if x < 0.0 { 2_120.0 } else { 1_690.0 };
+        add_rect(Vec2::new(x, y), Vec2::new(5.0, 96.0), 0.72);
+    }
+
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    mesh.insert_indices(Indices::U32(indices));
+    mesh
 }
 
 fn offset_convex_polygon(vertices: &[Vec2], distance: f32) -> Vec<Vec2> {
@@ -324,6 +566,7 @@ fn spawn_ink_platform(
     platform_index: usize,
     platform: &Platform,
     brick_texture: &Handle<Image>,
+    lights: &[LightDefinition],
     counterbalance_platform: Option<usize>,
 ) {
     // Level 1's ordinary horizontal platforms are 28 world units tall. The
@@ -357,9 +600,10 @@ fn spawn_ink_platform(
         uv_transform: Affine2::from_scale_angle_translation(texture_scale, 0.0, texture_origin),
         ..default()
     });
+    let mesh = lit_rectangle_mesh(size, visual_center, lights);
     let mut fill = commands.spawn((
         InkPreviewShape { scenario },
-        Mesh2d(meshes.add(Rectangle::new(size.x, size.y))),
+        Mesh2d(meshes.add(mesh)),
         MeshMaterial2d(texture_material),
         Transform::from_translation(
             visual_center
@@ -368,6 +612,110 @@ fn spawn_ink_platform(
     ));
     if let Some(platform_index) = counterbalance_platform {
         fill.insert(CounterbalanceVisual { platform_index });
+    }
+}
+
+/// Rectangle mesh with a light sample at each corner. Texture coordinates stay
+/// in the regular 0..1 range because the material owns the shared world-space
+/// brick phase through its UV transform.
+fn lit_rectangle_mesh(size: Vec2, center: Vec2, lights: &[LightDefinition]) -> Mesh {
+    let half = size * 0.5;
+    let local_positions = [
+        Vec2::new(-half.x, -half.y),
+        Vec2::new(half.x, -half.y),
+        Vec2::new(half.x, half.y),
+        Vec2::new(-half.x, half.y),
+    ];
+    let positions = local_positions
+        .iter()
+        .map(|point| [point.x, point.y, 0.0])
+        .collect::<Vec<_>>();
+    let colors = local_positions
+        .iter()
+        .map(|point| scenery_vertex_light(center + *point, lights))
+        .collect::<Vec<_>>();
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_UV_0,
+        vec![[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    mesh.insert_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3]));
+    mesh
+}
+
+fn create_lantern_glow_mesh(radius: f32, color: [f32; 3], intensity: f32) -> Mesh {
+    let mut positions = Vec::with_capacity(LIGHT_GLOW_SEGMENTS + 2);
+    let mut colors = Vec::with_capacity(LIGHT_GLOW_SEGMENTS + 2);
+    let mut indices = Vec::with_capacity(LIGHT_GLOW_SEGMENTS * 3);
+    positions.push([0.0, 0.0, 0.0]);
+    colors.push([
+        color[0],
+        color[1],
+        color[2],
+        (0.24 * intensity).clamp(0.0, 0.36),
+    ]);
+    for index in 0..=LIGHT_GLOW_SEGMENTS {
+        let angle = index as f32 / LIGHT_GLOW_SEGMENTS as f32 * std::f32::consts::TAU;
+        let point = Vec2::from_angle(angle) * radius;
+        positions.push([point.x, point.y, 0.0]);
+        colors.push([color[0], color[1], color[2], 0.0]);
+    }
+    for index in 0..LIGHT_GLOW_SEGMENTS {
+        indices.extend_from_slice(&[0, index as u32 + 1, index as u32 + 2]);
+    }
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    mesh.insert_indices(Indices::U32(indices));
+    mesh
+}
+
+/// Applies the live lantern pulse to the soft glow behind the scene. The mesh
+/// stays allocated; updating only its vertex colours avoids visual popping.
+pub(super) fn sync_lantern_glows(
+    level: Res<Level>,
+    preview: Res<LightPulsePreview>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut glows: Query<(&LanternGlow, &mut Transform), Without<CounterbalanceVisual>>,
+) {
+    for (glow, mut transform) in &mut glows {
+        let Some(light) = level.lights.get(glow.light_index) else {
+            continue;
+        };
+        let Some(mut mesh) = meshes.get_mut(&glow.mesh) else {
+            continue;
+        };
+        let mut colors = Vec::with_capacity(LIGHT_GLOW_SEGMENTS + 2);
+        colors.push([
+            light.color[0],
+            light.color[1],
+            light.color[2],
+            (0.24 * light.intensity).clamp(0.0, 0.36),
+        ]);
+        colors.extend(std::iter::repeat_n(
+            [light.color[0], light.color[1], light.color[2], 0.0],
+            LIGHT_GLOW_SEGMENTS + 1,
+        ));
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+
+        // Changing alpha alone is barely perceptible against the dark ink
+        // background. A small radius change makes the normal pulse readable;
+        // test mode amplifies the same relation without touching JSON data.
+        let ratio = (light.intensity / light.base_intensity.max(f32::EPSILON)).clamp(0.0, 2.0);
+        let scale = if preview.enabled {
+            0.74 + ratio * 0.36
+        } else {
+            0.90 + ratio * 0.10
+        };
+        transform.scale = Vec3::splat(scale);
     }
 }
 
@@ -410,7 +758,8 @@ use membrane::update_blob_outline_mesh;
 pub(super) use palette::blob_family_color;
 #[cfg(test)]
 pub(super) use palette::blob_fill_color;
-use palette::{blob_outline_color, blob_vertex_light, blob_vital_color};
+pub(crate) use palette::light_dynamic_rgba;
+use palette::{blob_outline_color, blob_vertex_light, blob_vital_color, scenery_vertex_light};
 use vacuoles::update_blob_vacuole_mesh;
 #[cfg(test)]
 use vacuoles::vacuole_tint;
@@ -797,6 +1146,7 @@ mod membrane_detail_tests {
             color: [1.0, 0.3, 0.1],
             radius: 100.0,
             intensity: 1.0,
+            base_intensity: 1.0,
             enabled: true,
         };
         let facing = blob_vertex_light(Vec2::ZERO, Vec2::X, &[light], false);
@@ -815,6 +1165,7 @@ mod membrane_detail_tests {
             color: [1.0, 1.0, 1.0],
             radius: 100.0,
             intensity: 2.0,
+            base_intensity: 2.0,
             enabled: false,
         };
 
@@ -1105,11 +1456,33 @@ pub(super) fn draw_world(
             let right_pulley = Vec2::new(gate.center.x, pulley_height);
             let plate_anchor = plate.center + Vec2::Y * plate.half_size.y;
             let gate_anchor = gate.center + Vec2::Y * gate.half_size.y;
-            let cable = game_palette::color(game_palette::INK);
-            draw_ink_rope(&mut gizmos, plate_anchor, left_pulley, cable);
-            draw_ink_rope(&mut gizmos, left_pulley, right_pulley, cable);
-            draw_ink_rope(&mut gizmos, right_pulley, gate_anchor, cable);
+            let ink_at = |position| {
+                game_palette::color(light_dynamic_rgba(
+                    game_palette::INK,
+                    position,
+                    &level.lights,
+                ))
+            };
+            draw_ink_rope(
+                &mut gizmos,
+                plate_anchor,
+                left_pulley,
+                ink_at((plate_anchor + left_pulley) * 0.5),
+            );
+            draw_ink_rope(
+                &mut gizmos,
+                left_pulley,
+                right_pulley,
+                ink_at((left_pulley + right_pulley) * 0.5),
+            );
+            draw_ink_rope(
+                &mut gizmos,
+                right_pulley,
+                gate_anchor,
+                ink_at((right_pulley + gate_anchor) * 0.5),
+            );
             for pulley in [left_pulley, right_pulley] {
+                let cable = ink_at(pulley);
                 // A small hanging bracket and two imperfect-looking rings
                 // read as hand-drawn hardware over the ivory level artwork.
                 gizmos.line_2d(pulley + Vec2::Y * 10.0, pulley + Vec2::Y * 23.0, cable);

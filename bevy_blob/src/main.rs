@@ -28,10 +28,11 @@ use blob::{Blob, DEFAULT_CREATURE_SCALE, Platform, REFERENCE_RADIUS};
 use camera::selected_camera_target;
 use camera::{GameCamera, follow_camera};
 use environment::{
-    AvianContactDiagnostics, Level, LevelDebugOverlay, RouteProgress, TestScenario,
-    WastewaterEffects, advance_route_progress, draw_level_chains, resolve_avian_environment,
-    resolve_blob_chain_contacts, sample_avian_contacts, setup_environment,
-    simulate_counterbalances, simulate_level_hazards, switch_test_scenario, toggle_level_debug,
+    AvianContactDiagnostics, Level, LevelDebugOverlay, LightPulsePreview, RouteProgress,
+    TestScenario, WastewaterEffects, advance_route_progress, animate_level_lights,
+    draw_level_chains, resolve_avian_environment, resolve_blob_chain_contacts,
+    sample_avian_contacts, setup_environment, simulate_counterbalances, simulate_level_hazards,
+    switch_test_scenario, sync_chain_lighting, toggle_level_debug, toggle_light_pulse_preview,
     update_parallax_layers,
 };
 use hud::{arrange_auxiliary_windows, setup_legend, toggle_legend, update_metrics};
@@ -47,8 +48,9 @@ use rendering::blob_family_color;
 use rendering::{
     InkStylePreview, draw_world, setup_ambient_drop_assets, simulate_ambient_drops,
     simulate_wastewater, simulate_wastewater_bubbles, simulate_wastewater_impacts,
-    sync_blob_meshes, sync_counterbalance_visuals, sync_ink_preview, sync_route_markers,
-    toggle_foreground, toggle_ink_style, trigger_drop_shower,
+    sync_blob_meshes, sync_counterbalance_visuals, sync_ink_atmosphere, sync_ink_preview,
+    sync_lantern_glows, sync_route_markers, toggle_foreground, toggle_ink_style,
+    trigger_drop_shower,
 };
 use shield::{ShieldWorld, simulate_shields, spider_climb_anchor_direction};
 use std::{
@@ -170,6 +172,7 @@ fn main() {
         .insert_resource(ClearColor(palette::color(palette::IVORY)))
         .insert_resource(Time::<Fixed>::from_hz(120.0))
         .init_resource::<InkStylePreview>()
+        .init_resource::<LightPulsePreview>()
         .insert_resource(BackgroundMusic { enabled: true })
         .add_message::<BlobSoundEvent>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -247,6 +250,7 @@ fn main() {
             )
                 .chain(),
         )
+        .add_systems(Update, sync_ink_atmosphere.after(sync_ink_preview))
         .add_systems(Update, play_blob_sound_events.after(start_phagocytosis))
         .add_systems(Update, toggle_background_music)
         .add_systems(
@@ -254,6 +258,10 @@ fn main() {
             (
                 toggle_pause,
                 toggle_foreground,
+                toggle_light_pulse_preview,
+                animate_level_lights,
+                sync_lantern_glows,
+                sync_chain_lighting,
                 draw_level_chains,
                 // Ink platforms may be rebuilt when the scenario changes;
                 // update movable visual layers only after that rebuild.

@@ -1,5 +1,6 @@
 use super::*;
 use crate::palette;
+use crate::rendering::light_dynamic_rgba;
 use std::collections::{HashMap, HashSet};
 
 const MIN_ACID_RADIUS: f32 = INITIAL_RADIUS * 0.55;
@@ -168,20 +169,15 @@ pub(super) fn simulate_acid(
     }
 }
 
-pub(super) fn draw_acid(mut gizmos: Gizmos, acid: Res<AcidWorld>) {
+pub(super) fn draw_acid(mut gizmos: Gizmos, acid: Res<AcidWorld>, level: Res<Level>) {
     for drop in &acid.drops {
         let tail = drop.previous.lerp(drop.position, 0.25);
-        gizmos.line_2d(tail, drop.position, palette::color(palette::ACID_TRAIL));
-        gizmos.circle_2d(
-            drop.position,
-            drop.radius,
-            palette::color(palette::ACID_BODY),
-        );
-        gizmos.circle_2d(
-            drop.position,
-            drop.radius * 0.48,
-            palette::color(palette::ACID_CORE),
-        );
+        let trail = light_dynamic_rgba(palette::ACID_TRAIL, drop.position, &level.lights);
+        let body = light_dynamic_rgba(palette::ACID_BODY, drop.position, &level.lights);
+        let core = light_dynamic_rgba(palette::ACID_CORE, drop.position, &level.lights);
+        gizmos.line_2d(tail, drop.position, palette::color(trail));
+        gizmos.circle_2d(drop.position, drop.radius, palette::color(body));
+        gizmos.circle_2d(drop.position, drop.radius * 0.48, palette::color(core));
     }
 }
 
