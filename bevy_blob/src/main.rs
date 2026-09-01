@@ -756,11 +756,10 @@ fn simulate_blob(
                 && !contact.entered
                 && contact.submerged_fraction >= 0.20
                 && movement.abs() > 0.01
-                // Bare blobs are intentionally almost immobilised by liquid
-                // drag. They still displace water while the player pushes,
-                // even if their measured spin never reaches the spine cue's
-                // threshold.
-                && (!spines_in_water || rotation_rate >= 0.04)
+                // The cue must follow actual body rotation. Previously a bare
+                // blob could retrigger its long swish from input alone while
+                // nearly stationary, causing overlapping "stuck" rustles.
+                && rotation_rate >= if spines_in_water { 0.04 } else { 0.025 }
             {
                 // Water motion is rotational: the rate of the membrane's
                 // actual roll, rather than centre translation, controls the
@@ -795,9 +794,12 @@ fn simulate_blob(
                 blob_audio.water_movement_cooldowns.insert(
                     active_blob.id,
                     if spines_in_water {
-                        0.52 - audio_rotation_ratio * 0.20
+                        // Both source clips must finish before another cue
+                        // may start; otherwise consecutive one-shots blend
+                        // into an unintended continuous sound.
+                        0.78 - audio_rotation_ratio * 0.10
                     } else {
-                        0.66 - audio_rotation_ratio * 0.18
+                        0.92 - audio_rotation_ratio * 0.10
                     },
                 );
             }

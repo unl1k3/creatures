@@ -37,6 +37,8 @@ pub(crate) fn blob_family_index(parent_id: Option<u64>) -> usize {
 }
 /// Inert, desaturated colour shared by a dead blob's body and membrane.
 pub(crate) const DEAD_BLOB: [f32; 4] = [0.72, 0.74, 0.75, 0.90];
+/// Organic grime carried on a living blob's outer gel layer.
+pub(crate) const BLOB_GRIME: [f32; 4] = [0.36, 0.20, 0.06, 0.88];
 /// Defensive spines use coral so an active shield is readable against the
 /// cyan body and toxic-green sewer palette.
 pub(crate) const MEMBRANE_SHIELD_BASE: [f32; 4] = [0.62, 0.10, 0.10, 0.90];

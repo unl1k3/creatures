@@ -112,9 +112,149 @@ pub(super) fn update_blob_vacuole_mesh(
         }
     }
 
+    append_grime_mottles(
+        &mut positions,
+        &mut colors,
+        &mut indices,
+        active_blob,
+        alive,
+        lights,
+        center,
+        material_rotation,
+        &polygon,
+    );
+    append_rotation_edge_mark(
+        &mut positions,
+        &mut colors,
+        &mut indices,
+        active_blob,
+        alive,
+        lights,
+    );
+
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     mesh.insert_indices(Indices::U32(indices));
+}
+
+/// A single, darker patch rides one material particle close to the membrane.
+/// Unlike the interior grime it is deliberately prominent: it gives the
+/// player an intuitive reference for rolling and water-induced rotation.
+fn append_rotation_edge_mark(
+    positions: &mut Vec<[f32; 3]>,
+    colors: &mut Vec<[f32; 4]>,
+    indices: &mut Vec<u32>,
+    active_blob: &ActiveBlob,
+    alive: bool,
+    lights: &[LightDefinition],
+) {
+    const SEGMENTS: usize = 8;
+    if active_blob.body.particles.is_empty() {
+        return;
+    }
+    let blob = &active_blob.body;
+    let visibility = alive as u8 as f32;
+    let center = blob.center();
+    // The chosen material index remains stable for this creature's lifetime;
+    // it therefore follows the same rotation as the soft-body membrane.
+    let particle_index = active_blob.id as usize % blob.particles.len();
+    let boundary = blob.particles[particle_index].position;
+    let outward = (boundary - center).normalize_or(Vec2::Y);
+    let tangent = outward.perp();
+    let radial_radius = (blob.rest_radius * 0.075).max(2.0);
+    let tangent_radius = radial_radius * 1.55;
+    // Pull the patch slightly inward so it seats into, rather than floats
+    // outside, the translucent membrane.
+    let mark_center = boundary - outward * radial_radius * 0.62;
+    let first_vertex = positions.len() as u32;
+    let light = blob_vertex_light(boundary, outward, lights, false);
+    let grime = crate::palette::BLOB_GRIME;
+    let shade = [
+        (grime[0] * (0.76 + light[0] * 0.34)).min(1.0),
+        (grime[1] * (0.76 + light[1] * 0.34)).min(1.0),
+        (grime[2] * (0.76 + light[2] * 0.34)).min(1.0),
+        0.96 * visibility,
+    ];
+    positions.push([mark_center.x, mark_center.y, 0.0]);
+    colors.push([shade[0], shade[1], shade[2], 0.76 * visibility]);
+    for segment in 0..SEGMENTS {
+        let angle = segment as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+        let irregular = 0.90
+            + random_unit(active_blob.id, particle_index, segment as u64 + 41) * 0.18
+            + (angle * 2.0 + active_blob.id as f32 * 0.17).sin() * 0.04;
+        let point = mark_center
+            + tangent * angle.cos() * tangent_radius * irregular
+            + outward * angle.sin() * radial_radius * irregular;
+        positions.push([point.x, point.y, 0.0]);
+        colors.push(shade);
+    }
+    for segment in 0..SEGMENTS {
+        indices.extend_from_slice(&[
+            first_vertex,
+            first_vertex + 1 + segment as u32,
+            first_vertex + 1 + ((segment + 1) % SEGMENTS) as u32,
+        ]);
+    }
+}
+
+/// Adds a few irregular dirt patches under the vacuoles. Their anchors use
+/// the membrane material orientation, so they rotate with the blob rather
+/// than sliding across it during ordinary translation.
+fn append_grime_mottles(
+    positions: &mut Vec<[f32; 3]>,
+    colors: &mut Vec<[f32; 4]>,
+    indices: &mut Vec<u32>,
+    active_blob: &ActiveBlob,
+    alive: bool,
+    lights: &[LightDefinition],
+    center: Vec2,
+    material_rotation: Vec2,
+    polygon: &[Vec2],
+) {
+    const SEGMENTS: usize = 7;
+    let blob = &active_blob.body;
+    let count = ((blob.rest_radius / 22.0).round() as usize).clamp(2, 4);
+    let visibility = alive as u8 as f32;
+    for index in 0..count {
+        let seed = index + 19;
+        let angle = random_unit(active_blob.id, seed, 0) * std::f32::consts::TAU;
+        let distance = blob.rest_radius * (0.16 + random_unit(active_blob.id, seed, 1) * 0.36);
+        let radius =
+            (blob.rest_radius * (0.085 + random_unit(active_blob.id, seed, 2) * 0.075)).max(1.25);
+        let desired = center + material_rotation.rotate(Vec2::from_angle(angle) * distance);
+        let mottle_center = fit_circle_inside_polygon(center, desired, radius * 1.55, polygon);
+        let first_vertex = positions.len() as u32;
+        let light = blob_vertex_light(mottle_center, Vec2::Y, lights, true);
+        let grime = crate::palette::BLOB_GRIME;
+        let shade = [
+            grime[0] * (0.58 + light[0] * 0.42),
+            grime[1] * (0.58 + light[1] * 0.42),
+            grime[2] * (0.58 + light[2] * 0.42),
+            grime[3] * visibility,
+        ];
+        positions.push([mottle_center.x, mottle_center.y, 0.0]);
+        colors.push([shade[0], shade[1], shade[2], shade[3] * 0.70]);
+        let tilt = angle * 1.41;
+        for segment in 0..SEGMENTS {
+            let arc = segment as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+            let irregular = 0.74
+                + random_unit(active_blob.id, seed, segment as u64 + 3) * 0.38
+                + (arc * 3.0 + angle).sin() * 0.09;
+            let local = Vec2::from_angle(tilt).rotate(Vec2::new(
+                arc.cos() * radius * 1.38,
+                arc.sin() * radius * 0.76,
+            )) * irregular;
+            positions.push([mottle_center.x + local.x, mottle_center.y + local.y, 0.0]);
+            colors.push(shade);
+        }
+        for segment in 0..SEGMENTS {
+            indices.extend_from_slice(&[
+                first_vertex,
+                first_vertex + 1 + segment as u32,
+                first_vertex + 1 + ((segment + 1) % SEGMENTS) as u32,
+            ]);
+        }
+    }
 }
 
 pub(super) fn vacuole_tint(parent_id: Option<u64>, index: usize) -> Vec3 {
