@@ -529,6 +529,22 @@ impl Blob {
         self.jump_armed = false;
     }
 
+    /// Applies a deliberately subtle, uncharged lift for the dance preview.
+    /// Unlike the player jump it never compresses the membrane, never fills
+    /// `charge`, and is only permitted while a real support contact exists.
+    pub fn tiny_ground_hop(&mut self, dt: f32) -> bool {
+        if !self.grounded || self.charge > 0.01 || self.water_submerged {
+            return false;
+        }
+        // Noticeable enough to read as a playful hop, still far below the
+        // minimum charged jump used by player movement.
+        let lift = self.support_normal.normalize_or(Vec2::Y) * (128.0 * dt);
+        self.add_velocity(lift);
+        self.grounded = false;
+        self.launch_grace = 0.04;
+        true
+    }
+
     pub fn center(&self) -> Vec2 {
         self.particles
             .iter()
