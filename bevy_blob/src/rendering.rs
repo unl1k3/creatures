@@ -1,5 +1,7 @@
 use super::*;
-use crate::environment::{ForegroundArtwork, LevelArtwork, LightPulsePreview, ParallaxLayer};
+use crate::environment::{
+    ForegroundArtwork, LevelArtwork, LightPulsePreview, LightingProfile, ParallaxLayer,
+};
 use crate::level_format::LightDefinition;
 use crate::palette as game_palette;
 use crate::shield::shield_spine_fans;
@@ -132,6 +134,7 @@ pub(super) fn toggle_foreground(
 /// brightness from the nearby authored lanterns.
 pub(super) fn sync_ink_atmosphere(
     ink_style: Res<InkStylePreview>,
+    lighting: Res<LightingProfile>,
     scenario: Res<TestScenario>,
     level: Res<Level>,
     camera: Single<&Transform, With<GameCamera>>,
@@ -147,7 +150,11 @@ pub(super) fn sync_ink_atmosphere(
     // poorly maintained upper shafts.
     let ascent = ascent * ascent * (3.0 - 2.0 * ascent);
     for (layer, mut sprite) in &mut layers {
-        sprite.color = ink_atmosphere_tint(ascent, layer.foreground);
+        sprite.color = if lighting.uses_base_colors() {
+            Color::WHITE
+        } else {
+            ink_atmosphere_tint(ascent, layer.foreground)
+        };
     }
 }
 
@@ -363,7 +370,10 @@ pub(super) fn sync_ink_preview(
         .enumerate()
         .filter(|(_, light)| light.enabled)
     {
-        let glow_radius = light.radius * 0.72;
+        // A lantern illuminates its immediate masonry strongly, then gives
+        // way to darkness. The former very wide disc made its source look
+        // like a graphic overlay rather than a local lamp.
+        let glow_radius = light.radius * 0.54;
         let mesh = meshes.add(create_lantern_glow_mesh(
             glow_radius,
             light.color,
@@ -683,6 +693,7 @@ fn create_lantern_glow_mesh(radius: f32, color: [f32; 3], intensity: f32) -> Mes
 pub(super) fn sync_lantern_glows(
     level: Res<Level>,
     preview: Res<LightPulsePreview>,
+    profile: Res<LightingProfile>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut glows: Query<(&LanternGlow, &mut Transform), Without<CounterbalanceVisual>>,
 ) {
@@ -698,7 +709,7 @@ pub(super) fn sync_lantern_glows(
             light.color[0],
             light.color[1],
             light.color[2],
-            (0.24 * light.intensity).clamp(0.0, 0.36),
+            (0.24 * light.intensity * profile.glow_scale()).clamp(0.0, 0.36),
         ]);
         colors.extend(std::iter::repeat_n(
             [light.color[0], light.color[1], light.color[2], 0.0],
@@ -710,12 +721,13 @@ pub(super) fn sync_lantern_glows(
         // background. A small radius change makes the normal pulse readable;
         // test mode amplifies the same relation without touching JSON data.
         let ratio = (light.intensity / light.base_intensity.max(f32::EPSILON)).clamp(0.0, 2.0);
-        let scale = if preview.enabled {
+        let pulse_scale = if preview.enabled {
             0.74 + ratio * 0.36
         } else {
             0.90 + ratio * 0.10
         };
-        transform.scale = Vec3::splat(scale);
+        let radius_scale = light.radius / light.base_radius.max(f32::EPSILON);
+        transform.scale = Vec3::splat(pulse_scale * radius_scale * profile.glow_scale());
     }
 }
 
@@ -1145,6 +1157,7 @@ mod membrane_detail_tests {
             position: Vec2::new(20.0, 0.0),
             color: [1.0, 0.3, 0.1],
             radius: 100.0,
+            base_radius: 100.0,
             intensity: 1.0,
             base_intensity: 1.0,
             enabled: true,
@@ -1164,6 +1177,7 @@ mod membrane_detail_tests {
             position: Vec2::new(10.0, 0.0),
             color: [1.0, 1.0, 1.0],
             radius: 100.0,
+            base_radius: 100.0,
             intensity: 2.0,
             base_intensity: 2.0,
             enabled: false,

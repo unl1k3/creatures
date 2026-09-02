@@ -110,6 +110,9 @@ pub(super) struct LightDefinition {
     pub(super) position: Vec2,
     pub(super) color: [f32; 3],
     pub(super) radius: f32,
+    /// Authored radius retained while runtime lighting profiles scale a
+    /// lamp's effective reach consistently across every level.
+    pub(super) base_radius: f32,
     pub(super) intensity: f32,
     /// Authored intensity retained while runtime lantern pulses update the
     /// current `intensity` field.
@@ -556,10 +559,12 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
                 )));
             }
             let intensity = positive_number(&format!("light {index} intensity"), light.intensity)?;
+            let radius = positive_number(&format!("light {index} radius"), light.radius)?;
             Ok(LightDefinition {
                 position: finite_point(&format!("light {index} position"), light.position)?,
                 color: light.color,
-                radius: positive_number(&format!("light {index} radius"), light.radius)?,
+                radius,
+                base_radius: radius,
                 intensity,
                 base_intensity: intensity,
                 enabled: light.enabled,

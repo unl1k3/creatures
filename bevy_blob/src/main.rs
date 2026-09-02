@@ -28,12 +28,12 @@ use blob::{Blob, DEFAULT_CREATURE_SCALE, Platform, REFERENCE_RADIUS};
 use camera::selected_camera_target;
 use camera::{GameCamera, follow_camera};
 use environment::{
-    AvianContactDiagnostics, Level, LevelDebugOverlay, LightPulsePreview, RouteProgress,
-    TestScenario, WastewaterEffects, advance_route_progress, animate_level_lights,
+    AvianContactDiagnostics, Level, LevelDebugOverlay, LightPulsePreview, LightingProfile,
+    RouteProgress, TestScenario, WastewaterEffects, advance_route_progress, animate_level_lights,
     draw_level_chains, resolve_avian_environment, resolve_blob_chain_contacts,
-    sample_avian_contacts, setup_environment, simulate_counterbalances, simulate_level_hazards,
-    switch_test_scenario, sync_chain_lighting, toggle_level_debug, toggle_light_pulse_preview,
-    update_parallax_layers,
+    sample_avian_contacts, select_lighting_profile, setup_environment, simulate_counterbalances,
+    simulate_level_hazards, switch_test_scenario, sync_chain_lighting, toggle_level_debug,
+    toggle_light_pulse_preview, update_parallax_layers,
 };
 use hud::{arrange_auxiliary_windows, setup_legend, toggle_legend, update_metrics};
 #[cfg(test)]
@@ -55,7 +55,7 @@ use rendering::{
 use shield::{ShieldWorld, simulate_shields, spider_climb_anchor_direction};
 use std::{
     collections::HashMap,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use vitality::{
     DeathCause, LifeState, Vitality, VitalityWorld, WASTEWATER_DAMAGE_PER_SECOND, simulate_vitality,
@@ -144,6 +144,15 @@ struct BackgroundMusic {
     enabled: bool,
 }
 
+/// Every gameplay cue is finite. `DESPAWN` releases the playback entity after
+/// it ends, while the explicit cap also protects the game from a malformed or
+/// unexpectedly long decoded effect. Ambient music is intentionally excluded.
+const MAX_EFFECT_PLAYBACK: Duration = Duration::from_millis(1_350);
+
+fn one_shot_playback() -> PlaybackSettings {
+    PlaybackSettings::DESPAWN.with_duration(MAX_EFFECT_PLAYBACK)
+}
+
 #[derive(Component)]
 struct AmbientMusic;
 
@@ -173,7 +182,10 @@ fn main() {
         .insert_resource(Time::<Fixed>::from_hz(120.0))
         .init_resource::<InkStylePreview>()
         .init_resource::<LightPulsePreview>()
-        .insert_resource(BackgroundMusic { enabled: true })
+        .init_resource::<LightingProfile>()
+        // The sewer ambience is opt-in: gameplay starts quietly and B enables
+        // the loop when the player wants it.
+        .insert_resource(BackgroundMusic { enabled: false })
         .add_message::<BlobSoundEvent>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -250,6 +262,7 @@ fn main() {
             )
                 .chain(),
         )
+        .add_systems(Update, select_lighting_profile.before(switch_test_scenario))
         .add_systems(Update, sync_ink_atmosphere.after(sync_ink_preview))
         .add_systems(Update, play_blob_sound_events.after(start_phagocytosis))
         .add_systems(Update, toggle_background_music)
@@ -272,11 +285,20 @@ fn main() {
 }
 
 /// Starts the authored sewer ambience once for the whole application.
-fn setup_ambient_music(mut commands: Commands, asset_server: Res<AssetServer>) {
+fn setup_ambient_music(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    music: Res<BackgroundMusic>,
+) {
+    let volume = if music.enabled {
+        Volume::Linear(0.22)
+    } else {
+        Volume::SILENT
+    };
     commands.spawn((
         AmbientMusic,
         AudioPlayer::new(asset_server.load("audio/music/underworld-echoes.mp3")),
-        PlaybackSettings::LOOP.with_volume(Volume::Linear(0.22)),
+        PlaybackSettings::LOOP.with_volume(volume),
     ));
 }
 
@@ -375,7 +397,7 @@ fn play_blob_sound_events(
             if *chain_cooldown <= 0.0 {
                 commands.spawn((
                     AudioPlayer::new(blob_audio.chain_impact.clone()),
-                    PlaybackSettings::ONCE
+                    one_shot_playback()
                         .with_volume(Volume::Linear((0.10 + strength * 0.15).clamp(0.10, 0.25))),
                 ));
                 *chain_cooldown = 0.16;
@@ -386,7 +408,7 @@ fn play_blob_sound_events(
             if let Some(motif) = blob_audio.death_motifs.get(*family) {
                 commands.spawn((
                     AudioPlayer::new(motif.clone()),
-                    PlaybackSettings::ONCE.with_volume(Volume::Linear(0.86)),
+                    one_shot_playback().with_volume(Volume::Linear(0.86)),
                 ));
             }
             continue;
@@ -395,7 +417,7 @@ fn play_blob_sound_events(
             if *acid_cooldown <= 0.0 {
                 commands.spawn((
                     AudioPlayer::new(blob_audio.acid_impact.clone()),
-                    PlaybackSettings::ONCE.with_volume(Volume::Linear(0.22)),
+                    one_shot_playback().with_volume(Volume::Linear(0.22)),
                 ));
                 *acid_cooldown = 0.18;
             }
@@ -405,7 +427,7 @@ fn play_blob_sound_events(
             if *mechanism_cooldown <= 0.0 {
                 commands.spawn((
                     AudioPlayer::new(blob_audio.mechanism_move.clone()),
-                    PlaybackSettings::ONCE.with_volume(Volume::Linear(0.20)),
+                    one_shot_playback().with_volume(Volume::Linear(0.20)),
                 ));
                 *mechanism_cooldown = 0.52;
             }
@@ -414,52 +436,52 @@ fn play_blob_sound_events(
         let (sound, settings) = match event {
             BlobSoundEvent::Probe => (
                 blob_audio.probe.clone(),
-                PlaybackSettings::ONCE.with_volume(Volume::Linear(0.28)),
+                one_shot_playback().with_volume(Volume::Linear(0.28)),
             ),
             BlobSoundEvent::Engulf => (
                 blob_audio.engulf.clone(),
-                PlaybackSettings::ONCE.with_volume(Volume::Linear(0.40)),
+                one_shot_playback().with_volume(Volume::Linear(0.40)),
             ),
             BlobSoundEvent::Expel => (
                 blob_audio.expel.clone(),
-                PlaybackSettings::ONCE.with_volume(Volume::Linear(0.58)),
+                one_shot_playback().with_volume(Volume::Linear(0.58)),
             ),
             BlobSoundEvent::NutrientImpact { strength } => (
                 blob_audio.nutrient_impact.clone(),
-                PlaybackSettings::ONCE
+                one_shot_playback()
                     .with_volume(Volume::Linear((0.10 + strength * 0.20).clamp(0.10, 0.30))),
             ),
             BlobSoundEvent::NutrientWater { strength } => (
                 blob_audio.nutrient_water.clone(),
-                PlaybackSettings::ONCE
+                one_shot_playback()
                     .with_volume(Volume::Linear((0.12 + strength * 0.18).clamp(0.12, 0.28))),
             ),
             BlobSoundEvent::AmbientDrop => (
                 blob_audio.ambient_drop.clone(),
-                PlaybackSettings::ONCE.with_volume(Volume::Linear(0.13)),
+                one_shot_playback().with_volume(Volume::Linear(0.13)),
             ),
             BlobSoundEvent::AmbientBubble => (
                 blob_audio.ambient_bubble.clone(),
-                PlaybackSettings::ONCE.with_volume(Volume::Linear(0.10)),
+                one_shot_playback().with_volume(Volume::Linear(0.10)),
             ),
             BlobSoundEvent::ChainImpact { .. } => unreachable!("handled above"),
             BlobSoundEvent::Death { .. } => unreachable!("handled above"),
             BlobSoundEvent::JumpRelease { charge } => (
                 blob_audio.jump_release.clone(),
-                PlaybackSettings::ONCE
+                one_shot_playback()
                     .with_volume(Volume::Linear((0.14 + charge * 0.28).clamp(0.14, 0.42))),
             ),
             BlobSoundEvent::ShieldDeploy => (
                 blob_audio.shield_deploy.clone(),
-                PlaybackSettings::ONCE.with_volume(Volume::Linear(0.26)),
+                one_shot_playback().with_volume(Volume::Linear(0.26)),
             ),
             BlobSoundEvent::ShieldRetract => (
                 blob_audio.shield_retract.clone(),
-                PlaybackSettings::ONCE.with_volume(Volume::Linear(0.20)),
+                one_shot_playback().with_volume(Volume::Linear(0.20)),
             ),
             BlobSoundEvent::AcidBurst => (
                 blob_audio.acid_burst.clone(),
-                PlaybackSettings::ONCE.with_volume(Volume::Linear(0.30)),
+                one_shot_playback().with_volume(Volume::Linear(0.30)),
             ),
             BlobSoundEvent::AcidImpact | BlobSoundEvent::MechanismMove => {
                 unreachable!("handled above")
@@ -592,7 +614,7 @@ fn simulate_blob(
         if charge_before_step <= 0.01 && active_blob.body.charge > 0.01 {
             commands.spawn((
                 AudioPlayer::new(blob_audio.charge.clone()),
-                PlaybackSettings::ONCE.with_volume(Volume::Linear(0.65)),
+                one_shot_playback().with_volume(Volume::Linear(0.65)),
             ));
         }
         if charge_before_step > 0.05 && active_blob.body.charge <= 0.01 {
@@ -634,7 +656,7 @@ fn simulate_blob(
                 } else {
                     blob_audio.roll.clone()
                 }),
-                PlaybackSettings::ONCE
+                one_shot_playback()
                     .with_speed(if spine_motion {
                         0.92 + speed_ratio * 0.16
                     } else {
@@ -649,9 +671,11 @@ fn simulate_blob(
             blob_audio.rolling_cooldowns.insert(
                 active_blob.id,
                 if spine_motion {
-                    0.18
+                    0.28
                 } else {
-                    0.30 - speed_ratio * 0.14
+                    // The roll source lasts 0.21 s (slightly longer at low
+                    // pitch), so it must finish before its next contact cue.
+                    0.38 - speed_ratio * 0.12
                 },
             );
         }
@@ -666,9 +690,9 @@ fn simulate_blob(
             let volume = (impact_speed / 1_500.0).clamp(0.18, 0.52);
             commands.spawn((
                 AudioPlayer::new(blob_audio.land.clone()),
-                PlaybackSettings::ONCE.with_volume(Volume::Linear(volume)),
+                one_shot_playback().with_volume(Volume::Linear(volume)),
             ));
-            blob_audio.landing_cooldowns.insert(active_blob.id, 0.14);
+            blob_audio.landing_cooldowns.insert(active_blob.id, 0.28);
         }
         for (nutrient, mut transform, mut velocity) in &mut nutrient_bodies {
             if !nutrition.is_free_index(nutrient.index) {
@@ -735,7 +759,7 @@ fn simulate_blob(
                 );
                 commands.spawn((
                     AudioPlayer::new(blob_audio.water_impact.clone()),
-                    PlaybackSettings::ONCE
+                    one_shot_playback()
                         .with_volume(Volume::Linear((0.18 + impact_strength * 0.28).min(0.55))),
                 ));
             }
@@ -779,7 +803,7 @@ fn simulate_blob(
                     } else {
                         blob_audio.water_move_bare.clone()
                     }),
-                    PlaybackSettings::ONCE
+                    one_shot_playback()
                         .with_speed(if spines_in_water {
                             0.84 + audio_rotation_ratio * 0.34
                         } else {
@@ -811,7 +835,7 @@ fn simulate_blob(
         vitality.merge(children, parent);
         commands.spawn((
             AudioPlayer::new(blob_audio.merge.clone()),
-            PlaybackSettings::ONCE
+            one_shot_playback()
                 .with_speed(0.72)
                 .with_volume(Volume::Linear(0.34)),
         ));

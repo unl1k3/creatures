@@ -77,17 +77,21 @@ pub(super) fn blob_vertex_light(
     lights: &[LightDefinition],
     center_vertex: bool,
 ) -> [f32; 4] {
+    if uses_base_colors(lights) {
+        return [1.0, 1.0, 1.0, 1.0];
+    }
     // A low cool ambient keeps the unlit side readable without flattening
     // the warm contribution of nearby lamps.
-    let mut rgb = Vec3::new(0.065, 0.085, 0.095);
+    // Almost-black neutral ambience: the sewer is readable, but the lanterns
+    // must remain the visible source of warmth instead of washing the scene.
+    let mut rgb = Vec3::new(0.050, 0.062, 0.065);
     for light in lights.iter().filter(|light| light.enabled) {
         let toward_light = light.position - position;
         let distance = toward_light.length();
         if distance >= light.radius {
             continue;
         }
-        let radial = 1.0 - distance / light.radius;
-        let attenuation = radial * radial * (3.0 - 2.0 * radial);
+        let attenuation = lantern_attenuation(distance, light.radius);
         let light_direction = toward_light.normalize_or_zero();
         let normal_light = outward_normal.dot(light_direction);
         let response = if center_vertex {
@@ -121,18 +125,42 @@ pub(super) fn blob_vertex_light(
 /// surface normal. The light is sampled per mesh vertex so the paper-and-ink
 /// platforms can fall into shadow between the lantern pools.
 pub(super) fn scenery_vertex_light(position: Vec2, lights: &[LightDefinition]) -> [f32; 4] {
-    let mut rgb = Vec3::new(0.06, 0.075, 0.08);
+    if uses_base_colors(lights) {
+        return [1.0, 1.0, 1.0, 1.0];
+    }
+    let mut rgb = Vec3::new(0.045, 0.055, 0.058);
     for light in lights.iter().filter(|light| light.enabled) {
         let distance = light.position.distance(position);
         if distance >= light.radius {
             continue;
         }
-        let radial = 1.0 - distance / light.radius;
-        let attenuation = radial * radial * (3.0 - 2.0 * radial);
+        let attenuation = lantern_attenuation(distance, light.radius);
         rgb += Vec3::from_array(light.color) * attenuation * light.intensity * 0.78;
     }
     let mapped = rgb / (Vec3::ONE + rgb) * 1.42;
     [mapped.x.min(1.0), mapped.y.min(1.0), mapped.z.min(1.0), 1.0]
+}
+
+/// Profile 0 retains authored palette values instead of using the dark sewer
+/// ambience. It is represented by enabled lamps with zero runtime intensity,
+/// so disabled JSON lights still behave as ordinary disabled fixtures.
+pub(crate) fn uses_base_colors(lights: &[LightDefinition]) -> bool {
+    let mut has_enabled_light = false;
+    for light in lights.iter().filter(|light| light.enabled) {
+        has_enabled_light = true;
+        if light.intensity > f32::EPSILON {
+            return false;
+        }
+    }
+    has_enabled_light
+}
+
+/// A compact, physically inspired falloff shared by blobs and scenery. The
+/// previous smoothstep curve stayed bright through most of the radius, making
+/// every lantern read as a large uniform coloured circle.
+fn lantern_attenuation(distance: f32, radius: f32) -> f32 {
+    let radial = (1.0 - distance / radius.max(f32::EPSILON)).clamp(0.0, 1.0);
+    radial.powf(1.45) * (0.78 + radial * 0.22)
 }
 
 /// Applies scene lighting to an authored dynamic colour without changing its
@@ -143,6 +171,9 @@ pub(crate) fn light_dynamic_rgba(
     position: Vec2,
     lights: &[LightDefinition],
 ) -> [f32; 4] {
+    if uses_base_colors(lights) {
+        return base;
+    }
     let light = scenery_vertex_light(position, lights);
     [
         base[0] * (0.22 + light[0] * 1.02),

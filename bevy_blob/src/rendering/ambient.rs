@@ -547,7 +547,9 @@ pub(crate) fn simulate_ambient_drops(
                 );
                 if *sound_cooldown <= 0.0 {
                     sound_events.write(BlobSoundEvent::AmbientDrop);
-                    *sound_cooldown = 0.18;
+                    // The recorded drop lasts about a third of a second;
+                    // avoid layering a second one before it finishes.
+                    *sound_cooldown = 0.36;
                 }
             }
             commands.entity(entity).despawn();

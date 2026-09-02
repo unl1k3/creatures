@@ -168,12 +168,12 @@ fn append_rotation_edge_mark(
     let mark_center = boundary - outward * radial_radius * 0.62;
     let first_vertex = positions.len() as u32;
     let light = blob_vertex_light(boundary, outward, lights, false);
-    let grime = crate::palette::BLOB_GRIME;
+    let mark = crate::palette::BLOB_ROTATION_MARK;
     let shade = [
-        (grime[0] * (0.76 + light[0] * 0.34)).min(1.0),
-        (grime[1] * (0.76 + light[1] * 0.34)).min(1.0),
-        (grime[2] * (0.76 + light[2] * 0.34)).min(1.0),
-        0.96 * visibility,
+        (mark[0] * (0.76 + light[0] * 0.34)).min(1.0),
+        (mark[1] * (0.76 + light[1] * 0.34)).min(1.0),
+        (mark[2] * (0.76 + light[2] * 0.34)).min(1.0),
+        mark[3] * visibility,
     ];
     positions.push([mark_center.x, mark_center.y, 0.0]);
     colors.push([shade[0], shade[1], shade[2], 0.76 * visibility]);

@@ -13,7 +13,7 @@ const METRICS_LAYER: usize = 2;
 // WindowResolution describes the client area and excludes native borders and
 // title bars. Keep enough logical space for those decorations on every OS.
 const NATIVE_WINDOW_GAP: f32 = 64.0;
-const CONTROLS: &str = "CONTROLS\n\nA / D or arrows   Roll and move\nHold Down         Charge jump\nRelease Down      Jump\nHold C            Probe for nutrient\nQ                 Pseudo-spine shield\nSpace             Radial acid burst\nX                 Split selected blob\nTab               Select next blob\nE                 Rejoin siblings\nR                 Reset game\nP                 Pause / resume\nB                 Toggle background music\nM                 Toggle ink style preview\nV                 Toggle test rain\nY                 Strong lantern pulse test\n\nLEVELS\n1                 Sewer entrance\n2                 Supports lab\n3                 Curves lab\n4                 Low passage lab\n5                 Impact lab\n6                 Split bridge lab\n7                 Small fragment seams\n8                 Nutrient wall regression\n9                 Coral basin regression\n0                 Physics overlay\n\nI / J / K / L     Move debug camera\nU / O             Debug camera zoom\nF                 Return and follow blob\nH                 Show / hide this window\nEsc               Exit";
+const CONTROLS: &str = "CONTROLS\n\nA / D or arrows   Roll and move\nHold Down         Charge jump\nRelease Down      Jump\nHold C            Probe for nutrient\nQ                 Pseudo-spine shield\nSpace             Radial acid burst\nX                 Split selected blob\nTab               Select next blob\nE                 Rejoin siblings\nR                 Reset game\nP                 Pause / resume\nB                 Toggle background music\nM                 Toggle ink style preview\nV                 Toggle test rain\nY                 Strong lantern pulse test\nShift+0..4        Lighting profile\n\nLEVELS\n1                 Sewer entrance\n2                 Supports lab\n3                 Curves lab\n4                 Low passage lab\n5                 Impact lab\n6                 Split bridge lab\n7                 Small fragment seams\n8                 Nutrient wall regression\n9                 Coral basin regression\n0                 Physics overlay\n\nI / J / K / L     Move debug camera\nU / O             Debug camera zoom\nF                 Return and follow blob\nH                 Show / hide this window\nEsc               Exit";
 
 #[derive(Resource)]
 pub(super) struct LegendState {
@@ -184,6 +184,7 @@ pub(super) fn update_metrics(
     acid: Res<AcidWorld>,
     vitality_world: Res<VitalityWorld>,
     nutrition: Res<NutritionWorld>,
+    lighting: Res<crate::environment::LightingProfile>,
     avian_contacts: Res<AvianContactDiagnostics>,
     mut metrics: Single<&mut Text2d, With<MetricsText>>,
 ) {
@@ -209,7 +210,8 @@ pub(super) fn update_metrics(
         .map(|progress| format!("{:5.1}%", progress * 100.0))
         .unwrap_or_else(|| "   -- ".to_string());
     metrics.0 = format!(
-        "METRICS\n\nFPS          {fps:5.1}\nFrame        {frame_time:5.2} ms\nPhysics      120 Hz\nBlobs        {}\nPoints       {}\nSize         {:5.1}%\nState        {state}\nEnergy       {:5.1}%\nDigestion    {digestion}\nCapacity     {:5.1}%\nHealth       {:5.1}%\nTrauma       {:5.1}%\nImpact       {:5.0}\nShield       {:5.1}%\nAcid drops   {}\nAvian touch  {} / {}\nAgreement    {:5.1}%\nContact pts  {}\nSurfaces     {}\nGround pts   {}\nMax depth    {:5.2}\nSpan         {:5.1}\nFixture fix  {}\nLateral fix  {}\nShared skip  {}",
+        "METRICS\n\nFPS          {fps:5.1}\nFrame        {frame_time:5.2} ms\nPhysics      120 Hz\nLighting     {}\nBlobs        {}\nPoints       {}\nSize         {:5.1}%\nState        {state}\nEnergy       {:5.1}%\nDigestion    {digestion}\nCapacity     {:5.1}%\nHealth       {:5.1}%\nTrauma       {:5.1}%\nImpact       {:5.0}\nShield       {:5.1}%\nAcid drops   {}\nAvian touch  {} / {}\nAgreement    {:5.1}%\nContact pts  {}\nSurfaces     {}\nGround pts   {}\nMax depth    {:5.2}\nSpan         {:5.1}\nFixture fix  {}\nLateral fix  {}\nShared skip  {}",
+        lighting.label(),
         blobs.active.len(),
         selected.body.particles.len(),
         selected.body.rest_radius / INITIAL_RADIUS * 100.0,

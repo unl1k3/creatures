@@ -114,6 +114,122 @@ pub(super) struct Level {
     pub(super) counterbalances: Vec<CounterbalanceDefinition>,
 }
 
+/// Selects one of the retained lighting studies. Profiles change rendering
+/// only: colliders, gameplay and the authored positions of lamps are intact.
+#[derive(Resource, Default)]
+pub(super) struct LightingProfile {
+    index: u8,
+}
+
+impl LightingProfile {
+    const COUNT: u8 = 5;
+
+    pub(super) fn label(&self) -> &'static str {
+        match self.index {
+            0 => "0 — base colors, unlit",
+            1 => "1 — early broad light",
+            2 => "2 — diffuse atmosphere",
+            3 => "3 — dark pools",
+            _ => "4 — natural lanterns",
+        }
+    }
+
+    pub(super) fn glow_scale(&self) -> f32 {
+        self.settings().glow_scale
+    }
+
+    pub(super) fn uses_base_colors(&self) -> bool {
+        self.index == 0
+    }
+
+    fn settings(&self) -> LightingProfileSettings {
+        match self.index {
+            // Retains the ink artwork so geometry stays readable while the
+            // absence of local lamp light is being compared.
+            0 => LightingProfileSettings::new(0.0, 1.0, 0.0, 0.0),
+            1 => LightingProfileSettings::new(1.18, 1.22, 1.42, 0.0),
+            2 => LightingProfileSettings::new(0.92, 1.0, 1.08, 0.55),
+            3 => LightingProfileSettings::new(0.68, 0.76, 0.72, 0.68),
+            _ => LightingProfileSettings::new(1.0, 1.0, 1.0, 1.0),
+        }
+    }
+
+    fn select(&mut self, index: u8) -> bool {
+        let index = index.min(Self::COUNT - 1);
+        if self.index == index {
+            return false;
+        }
+        self.index = index;
+        true
+    }
+
+    fn apply_to_lights(&self, lights: &mut [LightDefinition]) {
+        let settings = self.settings();
+        for light in lights {
+            light.radius = light.base_radius * settings.radius_scale;
+            light.intensity = light.base_intensity * settings.intensity_scale;
+        }
+    }
+}
+
+/// Deterministic multipliers reconstructed from the major lighting passes.
+#[derive(Clone, Copy)]
+struct LightingProfileSettings {
+    intensity_scale: f32,
+    radius_scale: f32,
+    glow_scale: f32,
+    pulse_scale: f32,
+}
+
+impl LightingProfileSettings {
+    const fn new(
+        intensity_scale: f32,
+        radius_scale: f32,
+        glow_scale: f32,
+        pulse_scale: f32,
+    ) -> Self {
+        Self {
+            intensity_scale,
+            radius_scale,
+            glow_scale,
+            pulse_scale,
+        }
+    }
+}
+
+/// Shift+0 through Shift+4 switches lighting studies. Ink meshes bake vertex
+/// colour at creation, so they are rebuilt after a profile change.
+pub(super) fn select_lighting_profile(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut commands: Commands,
+    mut profile: ResMut<LightingProfile>,
+    mut level: ResMut<Level>,
+    ink_shapes: Query<Entity, With<crate::rendering::InkPreviewShape>>,
+) {
+    if !keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
+        return;
+    }
+    let requested = [
+        (0, KeyCode::Digit0),
+        (1, KeyCode::Digit1),
+        (2, KeyCode::Digit2),
+        (3, KeyCode::Digit3),
+        (4, KeyCode::Digit4),
+    ]
+    .into_iter()
+    .find_map(|(index, key)| keyboard.just_pressed(key).then_some(index));
+    let Some(requested) = requested else {
+        return;
+    };
+    if !profile.select(requested) {
+        return;
+    }
+    profile.apply_to_lights(&mut level.lights);
+    for entity in &ink_shapes {
+        commands.entity(entity).despawn();
+    }
+}
+
 /// Y enables a deliberately exaggerated lantern rhythm. It is a visual test
 /// aid; normal play keeps the same independent, much subtler pulse.
 #[derive(Resource, Default)]
@@ -136,13 +252,16 @@ pub(super) fn toggle_light_pulse_preview(
 pub(super) fn animate_level_lights(
     time: Res<Time>,
     preview: Res<LightPulsePreview>,
+    profile: Res<LightingProfile>,
     mut level: ResMut<Level>,
 ) {
     let elapsed = time.elapsed_secs();
+    let profile_settings = profile.settings();
     for (index, light) in level.lights.iter_mut().enumerate() {
         if !light.enabled {
             continue;
         }
+        light.radius = light.base_radius * profile_settings.radius_scale;
         let phase = index as f32 * 1.91 + light.position.x * 0.013 + light.position.y * 0.007;
         let (slow_strength, flutter_strength, lower, upper) = if preview.enabled {
             // High contrast makes it easy to verify both the local lighting
@@ -154,7 +273,10 @@ pub(super) fn animate_level_lights(
         let slow = (elapsed * (0.78 + index as f32 * 0.052) + phase).sin() * slow_strength;
         let flutter =
             (elapsed * (2.15 + index as f32 * 0.13) + phase * 1.7).sin() * flutter_strength;
-        light.intensity = light.base_intensity * (1.0 + slow + flutter).clamp(lower, upper);
+        light.intensity = light.base_intensity
+            * profile_settings.intensity_scale
+            * (1.0 + slow * profile_settings.pulse_scale + flutter * profile_settings.pulse_scale)
+                .clamp(lower, upper);
     }
 }
 
@@ -663,11 +785,16 @@ fn v_valley_fixtures(center: Vec2, width: f32, depth: f32) -> Vec<Vec<Vec2>> {
 
 pub(super) fn setup_environment(
     mut commands: Commands,
+    profile: Option<Res<LightingProfile>>,
     asset_server: Option<Res<AssetServer>>,
     meshes: Option<ResMut<Assets<Mesh>>>,
     materials: Option<ResMut<Assets<ColorMaterial>>>,
 ) {
-    let level = Level::prototype();
+    let mut level = Level::prototype();
+    profile
+        .as_deref()
+        .unwrap_or(&LightingProfile::default())
+        .apply_to_lights(&mut level.lights);
     spawn_level_colliders(&mut commands, &level);
     spawn_level_artwork(&mut commands, asset_server.as_deref(), &level);
     if let (Some(mut meshes), Some(mut materials)) = (meshes, materials) {
@@ -686,7 +813,10 @@ pub(super) fn toggle_level_debug(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut overlay: ResMut<LevelDebugOverlay>,
 ) {
-    if keyboard.just_pressed(KeyCode::Digit0) || keyboard.just_pressed(KeyCode::Backquote) {
+    let selecting_lighting = keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    if !selecting_lighting
+        && (keyboard.just_pressed(KeyCode::Digit0) || keyboard.just_pressed(KeyCode::Backquote))
+    {
         overlay.visible = !overlay.visible;
         if overlay.visible {
             overlay.camera_detached = true;
@@ -1154,6 +1284,7 @@ pub(super) fn simulate_counterbalances(
 
 pub(super) fn switch_test_scenario(
     keyboard: Res<ButtonInput<KeyCode>>,
+    profile: Res<LightingProfile>,
     mut commands: Commands,
     colliders: Query<Entity, With<EnvironmentCollider>>,
     artwork: Query<Entity, With<LevelArtwork>>,
@@ -1169,6 +1300,9 @@ pub(super) fn switch_test_scenario(
     mut nutrition: ResMut<NutritionWorld>,
     nutrient_bodies: Query<Entity, With<NutrientPhysics>>,
 ) {
+    if keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
+        return;
+    }
     let requested = [
         (1, KeyCode::Digit1),
         (2, KeyCode::Digit2),
@@ -1197,7 +1331,8 @@ pub(super) fn switch_test_scenario(
     for entity in &nutrient_bodies {
         commands.entity(entity).despawn();
     }
-    let (new_level, spawn) = Level::test_scenario(requested);
+    let (mut new_level, spawn) = Level::test_scenario(requested);
+    profile.apply_to_lights(&mut new_level.lights);
     spawn_level_artwork(&mut commands, asset_server.as_deref(), &new_level);
     if let (Some(mut meshes), Some(mut materials)) = (meshes, materials) {
         spawn_level_chains(&mut commands, &new_level, &mut meshes, &mut materials);

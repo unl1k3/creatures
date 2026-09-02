@@ -124,7 +124,7 @@ pub(super) fn handle_blob_actions(
             vitality.split(parent_id, [first.id, second.id]);
             commands.spawn((
                 AudioPlayer::new(blob_audio.split.clone()),
-                PlaybackSettings::ONCE
+                one_shot_playback()
                     .with_speed(1.12)
                     .with_volume(Volume::Linear(0.44)),
             ));

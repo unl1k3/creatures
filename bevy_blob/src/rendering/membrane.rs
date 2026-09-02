@@ -57,9 +57,31 @@ pub(super) fn update_blob_outline_mesh(
     let mut outer_colors = Vec::with_capacity(count);
     let mut transition_colors = Vec::with_capacity(count);
     let mut inner_colors = Vec::with_capacity(count);
+    let base_colours_only = super::palette::uses_base_colors(lights);
     for (point, inward) in contour.points.iter().zip(&contour.inward_normals) {
         let illumination = blob_vertex_light(point.position, -*inward, lights, false);
         let energy = 0.72 + vitality.energy * 0.28;
+        if base_colours_only {
+            outer_colors.push([
+                base_rgb.x,
+                base_rgb.y,
+                base_rgb.z,
+                if selected { 0.94 } else { 0.84 },
+            ]);
+            transition_colors.push([
+                base_rgb.x * 0.58,
+                base_rgb.y * 0.58,
+                base_rgb.z * 0.58,
+                if selected { 0.58 } else { 0.48 },
+            ]);
+            inner_colors.push([
+                base_rgb.x * 0.30,
+                base_rgb.y * 0.30,
+                base_rgb.z * 0.30,
+                0.22,
+            ]);
+            continue;
+        }
         outer_colors.push([
             (base_rgb.x * (0.42 + illumination[0] * 0.92) * energy).min(1.0),
             (base_rgb.y * (0.42 + illumination[1] * 0.92) * energy).min(1.0),
