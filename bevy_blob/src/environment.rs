@@ -2,9 +2,9 @@ use super::*;
 use crate::BlobSoundEvent;
 use crate::blob::Particle;
 use crate::level_format::{
-    ChainDefinition, CounterbalanceDefinition, DropEmitterDefinition, ExpulsionPointDefinition,
-    HazardDefinition, LightDefinition, NutrientDefinition, ParsedLevel, SafetyBoundsDefinition,
-    VisualLayer, WastewaterAreaDefinition, parse_level,
+    ChainDefinition, CounterbalanceDefinition, ExpulsionPointDefinition, HazardDefinition,
+    LightDefinition, NutrientDefinition, ParsedLevel, SafetyBoundsDefinition, VisualLayer,
+    WastewaterAreaDefinition, parse_level,
 };
 use crate::nutrition::{NutrientPhysics, NutritionWorld, spawn_nutrient_bodies};
 use crate::palette as game_palette;
@@ -104,7 +104,6 @@ pub(super) struct Level {
     pub(super) route: Vec<Vec2>,
     visual_layers: Vec<VisualLayer>,
     decorations: Vec<VisualLayer>,
-    pub(super) drop_emitters: Vec<DropEmitterDefinition>,
     pub(super) wastewater_areas: Vec<WastewaterAreaDefinition>,
     pub(super) nutrients: Vec<NutrientDefinition>,
     pub(super) lights: Vec<LightDefinition>,
@@ -453,7 +452,6 @@ impl Level {
             hazards: parsed.hazards,
             chains: parsed.chains,
             decorations: parsed.decorations,
-            drop_emitters: parsed.drop_emitters,
             wastewater_areas: parsed.wastewater_areas,
             counterbalances: parsed.counterbalances,
         }
@@ -484,7 +482,6 @@ impl Level {
             route: Vec::new(),
             visual_layers: Vec::new(),
             decorations: Vec::new(),
-            drop_emitters: Vec::new(),
             wastewater_areas: Vec::new(),
             nutrients: Vec::new(),
             lights: Vec::new(),
@@ -543,7 +540,6 @@ impl Level {
                     ],
                     visual_layers: Vec::new(),
                     decorations: Vec::new(),
-                    drop_emitters: Vec::new(),
                     wastewater_areas: Vec::new(),
                     nutrients: Vec::new(),
                     lights: Vec::new(),
@@ -592,7 +588,6 @@ impl Level {
                     ],
                     visual_layers: Vec::new(),
                     decorations: Vec::new(),
-                    drop_emitters: Vec::new(),
                     wastewater_areas: Vec::new(),
                     nutrients: Vec::new(),
                     lights: Vec::new(),
@@ -627,7 +622,6 @@ impl Level {
                     ],
                     visual_layers: Vec::new(),
                     decorations: Vec::new(),
-                    drop_emitters: Vec::new(),
                     wastewater_areas: Vec::new(),
                     nutrients: Vec::new(),
                     lights: Vec::new(),
@@ -671,7 +665,6 @@ impl Level {
                     ],
                     visual_layers: Vec::new(),
                     decorations: Vec::new(),
-                    drop_emitters: Vec::new(),
                     wastewater_areas: Vec::new(),
                     nutrients: Vec::new(),
                     lights: Vec::new(),
@@ -705,7 +698,6 @@ impl Level {
                     ],
                     visual_layers: Vec::new(),
                     decorations: Vec::new(),
-                    drop_emitters: Vec::new(),
                     wastewater_areas: Vec::new(),
                     nutrients: Vec::new(),
                     lights: Vec::new(),
@@ -1848,7 +1840,6 @@ mod tests {
         assert_eq!(level.expulsion_points.len(), 1);
         assert_eq!(level.hazards.len(), 1);
         assert_eq!(level.decorations.len(), 1);
-        assert_eq!(level.drop_emitters.len(), 7);
     }
 
     #[test]

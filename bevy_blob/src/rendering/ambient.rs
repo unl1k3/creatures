@@ -22,7 +22,7 @@ pub(crate) struct WastewaterEffectMaterials(HashMap<[u8; 3], Handle<ColorMateria
 #[derive(Resource)]
 pub(crate) struct AmbientDropState {
     scenario: Option<u8>,
-    timers: Vec<f32>,
+    normal_delay: f32,
     random: u64,
     rain_enabled: bool,
     rain_delay: f32,
@@ -32,7 +32,7 @@ impl Default for AmbientDropState {
     fn default() -> Self {
         Self {
             scenario: None,
-            timers: Vec::new(),
+            normal_delay: 0.0,
             random: 0xa2d4_7c81_39ef_165b,
             rain_enabled: false,
             rain_delay: 0.0,
@@ -513,7 +513,7 @@ pub(crate) fn simulate_ambient_drops(
             commands.entity(entity).despawn();
         }
         state.scenario = None;
-        state.timers.clear();
+        state.normal_delay = 0.0;
         return;
     }
 
@@ -573,57 +573,54 @@ pub(crate) fn simulate_ambient_drops(
         transform.scale = Vec3::new(scale, scale * 1.35, 1.0);
     }
 
-    if state.scenario != Some(scenario.0) || state.timers.len() != level.drop_emitters.len() {
+    if state.scenario != Some(scenario.0) {
         state.scenario = Some(scenario.0);
-        state.timers = level
-            .drop_emitters
-            .iter()
-            .map(|emitter| -emitter.initial_delay)
-            .collect();
+        state.normal_delay = 0.6 + state.unit_random() * 1.4;
     }
 
-    for (index, emitter) in level.drop_emitters.iter().enumerate() {
-        state.timers[index] += dt;
-        if state.timers[index] < 0.0 {
-            continue;
-        }
-        state.timers[index] -= emitter.interval;
-        let camera_position = camera.translation.truncate();
-        // Query the geometry under the rendered outlet, not under its raw
-        // background coordinate. This lets a drop stay vertical in its layer
-        // and still reach the platform visible directly below it.
-        let emitter_world = emitter.position + parallax_offset(camera_position, emitter.parallax);
-        let surface = first_surface_below(emitter_world, &level);
-        let terminal_world_y = surface
-            .unwrap_or_else(|| level.center().y - level.size().y * 0.5 - emitter.radius * 4.0);
-        let material = materials.add(ColorMaterial::from(palette::color(light_dynamic_rgba(
-            palette::AMBIENT_DROP,
-            emitter.position,
-            &level.lights,
-        ))));
-        commands.spawn((
-            AmbientDrop {
-                velocity: Vec2::ZERO,
-                position: emitter.position,
-                gravity: emitter.gravity,
-                radius: emitter.radius,
-                terminal_world_y,
-                splash_on_impact: surface.is_some(),
-                depth: emitter.depth,
-                parallax: emitter.parallax,
-            },
-            Mesh2d(assets.mesh.clone()),
-            MeshMaterial2d(material.clone()),
-            AmbientLightTint { material },
-            Transform {
-                translation: (emitter.position
-                    + parallax_offset(camera.translation.truncate(), emitter.parallax))
-                .extend(emitter.depth),
-                scale: Vec3::new(emitter.radius * 1.35, emitter.radius, 1.0),
-                ..default()
-            },
-        ));
+    state.normal_delay -= dt;
+    if state.normal_delay > 0.0 {
+        return;
     }
+    // Sparse rain is entirely procedural: each drop receives a new time,
+    // horizontal coordinate, size and fall acceleration. JSON levels contain
+    // no invisible rain positions to maintain.
+    state.normal_delay += 1.45 + state.unit_random() * 2.35;
+    let camera_position = camera.translation.truncate();
+    let (rain_left, rain_right) = rain_horizontal_bounds(&level);
+    let radius = 2.2 + state.unit_random() * 1.25;
+    let position = Vec2::new(
+        rain_left + (rain_right - rain_left) * state.unit_random(),
+        rain_start_y(camera_position, &level),
+    );
+    let surface = first_surface_below(position, &level);
+    let terminal_world_y =
+        surface.unwrap_or_else(|| level.center().y - level.size().y * 0.5 - radius * 4.0);
+    let material = materials.add(ColorMaterial::from(palette::color(light_dynamic_rgba(
+        palette::AMBIENT_DROP,
+        position,
+        &level.lights,
+    ))));
+    commands.spawn((
+        AmbientDrop {
+            velocity: Vec2::new(0.0, -24.0 - state.unit_random() * 42.0),
+            position,
+            gravity: 370.0 + state.unit_random() * 110.0,
+            radius,
+            terminal_world_y,
+            splash_on_impact: surface.is_some(),
+            depth: -4.8,
+            parallax: 1.0,
+        },
+        Mesh2d(assets.mesh.clone()),
+        MeshMaterial2d(material.clone()),
+        AmbientLightTint { material },
+        Transform {
+            translation: position.extend(-4.8),
+            scale: Vec3::new(radius * 1.35, radius, 1.0),
+            ..default()
+        },
+    ));
 }
 
 /// Toggles a visual rain test. The drops stay inside the playable side walls
@@ -653,20 +650,9 @@ pub(crate) fn trigger_drop_shower(
     state.rain_delay += 0.38;
 
     const DROP_COUNT: usize = 12;
-    const VIEW_TOP_OFFSET: f32 = 390.0;
     let camera_position = camera.translation.truncate();
-    let start_y =
-        (camera_position.y + VIEW_TOP_OFFSET).min(level.center().y + level.size().y * 0.5 - 28.0);
-    let horizontal_bounds = level.safety_bounds.map_or(
-        (
-            level.center().x - level.size().x * 0.5,
-            level.center().x + level.size().x * 0.5,
-        ),
-        |bounds| (bounds.min.x, bounds.max.x),
-    );
-    // Keep the stream away from the physical wall colliders themselves.
-    let rain_left = horizontal_bounds.0 + 42.0;
-    let rain_right = (horizontal_bounds.1 - 42.0).max(rain_left + 1.0);
+    let start_y = rain_start_y(camera_position, &level);
+    let (rain_left, rain_right) = rain_horizontal_bounds(&level);
 
     for index in 0..DROP_COUNT {
         let fraction = (index as f32 + 0.5) / DROP_COUNT as f32;
@@ -707,6 +693,28 @@ pub(crate) fn trigger_drop_shower(
             },
         ));
     }
+}
+
+/// Shared top edge for sparse ambient rain and the V storm. This keeps both
+/// modes visually coherent while their density and size stay distinct.
+fn rain_start_y(camera_position: Vec2, level: &Level) -> f32 {
+    const VIEW_TOP_OFFSET: f32 = 390.0;
+    (camera_position.y + VIEW_TOP_OFFSET).min(level.center().y + level.size().y * 0.5 - 28.0)
+}
+
+/// The side walls are physical boundaries, not rain sources. Keep every drop
+/// inside them so it never appears to enter from behind the foreground art.
+fn rain_horizontal_bounds(level: &Level) -> (f32, f32) {
+    let horizontal_bounds = level.safety_bounds.map_or(
+        (
+            level.center().x - level.size().x * 0.5,
+            level.center().x + level.size().x * 0.5,
+        ),
+        |bounds| (bounds.min.x, bounds.max.x),
+    );
+    let left = horizontal_bounds.0 + 42.0;
+    let right = (horizontal_bounds.1 - 42.0).max(left + 1.0);
+    (left, right)
 }
 
 fn spawn_dry_surface_splash(

@@ -22,7 +22,6 @@ pub(super) struct ParsedLevel {
     pub(super) hazards: Vec<HazardDefinition>,
     pub(super) chains: Vec<ChainDefinition>,
     pub(super) decorations: Vec<VisualLayer>,
-    pub(super) drop_emitters: Vec<DropEmitterDefinition>,
     pub(super) wastewater_areas: Vec<WastewaterAreaDefinition>,
     pub(super) counterbalances: Vec<CounterbalanceDefinition>,
 }
@@ -42,18 +41,6 @@ pub(super) struct VisualLayer {
     pub(super) depth: f32,
     /// Screen movement relative to the camera: 1.0 is world-locked, lower
     /// values recede into the distance and values above 1.0 are foreground.
-    pub(super) parallax: f32,
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct DropEmitterDefinition {
-    pub(super) position: Vec2,
-    pub(super) interval: f32,
-    pub(super) initial_delay: f32,
-    pub(super) radius: f32,
-    pub(super) gravity: f32,
-    pub(super) depth: f32,
-    /// Rendering depth factor; 1.0 keeps the drop in world space.
     pub(super) parallax: f32,
 }
 
@@ -184,8 +171,6 @@ struct LevelDocument {
     #[serde(default)]
     decorations: Vec<VisualLayerDocument>,
     #[serde(default)]
-    drop_emitters: Vec<DropEmitterDocument>,
-    #[serde(default)]
     wastewater_areas: Vec<WastewaterAreaDocument>,
     #[serde(default)]
     counterbalances: Vec<CounterbalanceDocument>,
@@ -255,20 +240,6 @@ struct VisualLayerDocument {
 
 fn default_parallax() -> f32 {
     1.0
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DropEmitterDocument {
-    position: Point,
-    interval: f32,
-    #[serde(default)]
-    initial_delay: f32,
-    radius: f32,
-    gravity: f32,
-    depth: f32,
-    #[serde(default = "default_parallax")]
-    parallax: f32,
 }
 
 #[derive(Deserialize)]
@@ -426,43 +397,6 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
         })
         .collect::<Result<Vec<_>, LevelFormatError>>()?;
     let decorations = parse_visual_layers(document.decorations, "decoration")?;
-    let drop_emitters = document
-        .drop_emitters
-        .into_iter()
-        .enumerate()
-        .map(|(index, emitter)| {
-            let initial_delay = finite_number(
-                &format!("drop emitter {index} initial_delay"),
-                emitter.initial_delay,
-            )?;
-            if initial_delay < 0.0 {
-                return Err(LevelFormatError(format!(
-                    "drop emitter {index} initial_delay cannot be negative"
-                )));
-            }
-            Ok(DropEmitterDefinition {
-                position: finite_point(
-                    &format!("drop emitter {index} position"),
-                    emitter.position,
-                )?,
-                interval: positive_number(
-                    &format!("drop emitter {index} interval"),
-                    emitter.interval,
-                )?,
-                initial_delay,
-                radius: positive_number(&format!("drop emitter {index} radius"), emitter.radius)?,
-                gravity: positive_number(
-                    &format!("drop emitter {index} gravity"),
-                    emitter.gravity,
-                )?,
-                depth: finite_number(&format!("drop emitter {index} depth"), emitter.depth)?,
-                parallax: finite_number(
-                    &format!("drop emitter {index} parallax"),
-                    emitter.parallax,
-                )?,
-            })
-        })
-        .collect::<Result<Vec<_>, LevelFormatError>>()?;
     let wastewater_areas = document
         .wastewater_areas
         .into_iter()
@@ -655,7 +589,6 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
         hazards,
         chains,
         decorations,
-        drop_emitters,
         wastewater_areas,
         counterbalances,
     })
@@ -781,14 +714,6 @@ mod tests {
                     { "shape": "polygon", "id": "ramp", "points": [{ "x": 0, "y": 0 }, { "x": 50, "y": 0 }, { "x": 50, "y": 30 }] }
                 ],
                 "visual_layers": [{ "image": "levels/test/background.png", "position": { "x": 0, "y": 0 }, "size": { "x": 1000, "y": 800 }, "depth": -20 }],
-                "drop_emitters": [{
-                    "position": { "x": 20, "y": 30 },
-                    "interval": 2.5,
-                    "initial_delay": 0.4,
-                    "radius": 3,
-                    "gravity": 420,
-                    "depth": -5
-                }],
                 "chains": [{
                     "id": "test_chain",
                     "anchor": { "x": 40, "y": 90 },
@@ -818,7 +743,6 @@ mod tests {
         assert_eq!(level.platforms.len(), 1);
         assert_eq!(level.fixtures.len(), 1);
         assert_eq!(level.visual_layers.len(), 1);
-        assert_eq!(level.drop_emitters.len(), 1);
         assert_eq!(level.chains.len(), 1);
         assert_eq!(level.chains[0].id, "test_chain");
         assert_eq!(level.wastewater_areas.len(), 1);
@@ -829,7 +753,6 @@ mod tests {
                 .max_active,
             12
         );
-        assert_eq!(level.drop_emitters[0].gravity, 420.0);
         assert_eq!(level.wastewater_areas[0].immune_family, Some(1));
     }
 
