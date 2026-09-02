@@ -17,6 +17,7 @@ pub(super) struct ParsedLevel {
     pub(super) route: Vec<Vec2>,
     pub(super) visual_layers: Vec<VisualLayer>,
     pub(super) ice_platforms: Vec<usize>,
+    pub(super) glue_platforms: Vec<usize>,
     pub(super) nutrients: Vec<NutrientDefinition>,
     pub(super) expulsion_points: Vec<ExpulsionPointDefinition>,
     pub(super) hazards: Vec<HazardDefinition>,
@@ -227,6 +228,7 @@ enum SurfaceDocument {
     #[default]
     Stone,
     Ice,
+    Glue,
 }
 
 #[derive(Deserialize)]
@@ -329,6 +331,7 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
         .transpose()?;
     let mut platforms = Vec::new();
     let mut ice_platforms = Vec::new();
+    let mut glue_platforms = Vec::new();
     let mut fixtures = Vec::new();
     for collider in document.colliders {
         match collider {
@@ -346,6 +349,9 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
                 });
                 if matches!(surface, SurfaceDocument::Ice) {
                     ice_platforms.push(platform_index);
+                }
+                if matches!(surface, SurfaceDocument::Glue) {
+                    glue_platforms.push(platform_index);
                 }
             }
             ColliderDocument::Polygon { id, points } => {
@@ -554,6 +560,7 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
         route,
         visual_layers,
         ice_platforms,
+        glue_platforms,
         nutrients,
         expulsion_points,
         hazards,

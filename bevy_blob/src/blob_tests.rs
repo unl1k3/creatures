@@ -449,7 +449,7 @@ mod tests {
                 half_size: Vec2::new(50.0, 10.0),
             },
         ];
-        blob.solve_collisions(&platforms, &[]);
+        blob.solve_collisions(&platforms, &[], &[]);
         assert!(
             blob.particles[0].position.y < -10.0,
             "particle entered the attached-platform seam: {:?}",

@@ -12,7 +12,7 @@
     { "shape": "rectangle", "id": "floor_left", "position": { "x": -220, "y": -370 }, "size": { "x": 222, "y": 38 } },
     { "shape": "rectangle", "id": "floor_ice", "position": { "x": 0, "y": -370 }, "size": { "x": 222, "y": 38 }, "surface": "ice" },
     { "shape": "rectangle", "id": "floor_right", "position": { "x": 220, "y": -370 }, "size": { "x": 222, "y": 38 } },
-    { "shape": "rectangle", "id": "platform_1", "position": { "x": -250, "y": -150 }, "size": { "x": 260, "y": 28 } },
+    { "shape": "rectangle", "id": "platform_1", "position": { "x": -250, "y": -150 }, "size": { "x": 260, "y": 28 }, "surface": "glue" },
     { "shape": "rectangle", "id": "platform_2", "position": { "x": 210, "y": 65 }, "size": { "x": 300, "y": 28 } },
     { "shape": "rectangle", "id": "platform_3", "position": { "x": -180, "y": 290 }, "size": { "x": 260, "y": 28 } },
     { "shape": "rectangle", "id": "platform_4", "position": { "x": 210, "y": 510 }, "size": { "x": 280, "y": 28 } },

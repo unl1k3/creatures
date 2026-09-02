@@ -76,7 +76,10 @@ pub struct Blob {
     support_normal_sum: Vec2,
     support_contact_count: usize,
     ground_traction: f32,
+    ground_idle_damping: f32,
     ice_traction: f32,
+    on_glue: bool,
+    ground_is_glue: bool,
     charge_direction: f32,
     was_charging: bool,
     jump_armed: bool,
@@ -130,7 +133,10 @@ impl Blob {
             support_normal_sum: Vec2::ZERO,
             support_contact_count: 0,
             ground_traction: 1.0,
+            ground_idle_damping: 0.72,
             ice_traction: 0.0,
+            on_glue: false,
+            ground_is_glue: false,
             charge_direction: 0.0,
             was_charging: false,
             jump_armed: false,
@@ -599,6 +605,7 @@ impl Blob {
             charging,
             platforms,
             &[],
+            &[],
             fixtures,
             vigor,
             animate_idle,
@@ -613,6 +620,10 @@ impl Blob {
         self.ice_traction = traction.clamp(0.0, 1.0);
     }
 
+    pub fn on_glue(&self) -> bool {
+        self.on_glue
+    }
+
     /// As [`Self::step_with_vigor`], with a list of low-traction platform
     /// indices in the supplied collision slice. Keeping this parallel list
     /// avoids making the core `Platform` geometry depend on presentation data.
@@ -623,6 +634,7 @@ impl Blob {
         charging: bool,
         platforms: &[Platform],
         ice_platform_indices: &[usize],
+        glue_platform_indices: &[usize],
         fixtures: &[Vec<Vec2>],
         vigor: f32,
         animate_idle: bool,
@@ -635,7 +647,12 @@ impl Blob {
         }
         let jump_normal = self.support_normal.normalize_or(Vec2::Y);
         let previous_ground_traction = self.ground_traction;
+        let previous_ground_idle_damping = self.ground_idle_damping;
+        let previous_ground_is_glue = self.ground_is_glue;
         self.ground_traction = 1.0;
+        self.ground_idle_damping = 0.72;
+        self.on_glue = false;
+        self.ground_is_glue = false;
         let jump_tangent = jump_normal.perp();
         let right_tangent = if jump_tangent.x >= 0.0 {
             jump_tangent
@@ -729,6 +746,10 @@ impl Blob {
             })
             .unwrap_or(Vec2::NEG_Y);
         let jump_size_factor = jump_size_factor(self.rest_radius);
+        // Glue also dissipates the stored compression before it becomes a
+        // launch. This is read from the prior support frame, so a sustained
+        // charge on the adhesive surface is consistently weaker.
+        let jump_surface_factor = if previous_ground_is_glue { 0.42 } else { 1.0 };
         for particle in &mut self.particles {
             let mut velocity = particle.position - particle.previous;
             if !animate_idle {
@@ -752,8 +773,15 @@ impl Blob {
                 velocity.x += (target_velocity_x - center_velocity.x).clamp(-steering, steering)
                     * rim_progress;
             } else {
-                let target_velocity_x = horizontal * maximum_speed * dt;
-                velocity.x += (target_velocity_x - center_velocity.x).clamp(-steering, steering);
+                if previous_ground_is_glue {
+                    // No direct slide on adhesive sludge. The membrane may
+                    // advance only through the slow angular contact below.
+                    velocity.x *= 0.18;
+                } else {
+                    let target_velocity_x = horizontal * maximum_speed * dt;
+                    velocity.x +=
+                        (target_velocity_x - center_velocity.x).clamp(-steering, steering);
+                }
             }
 
             if self.grounded {
@@ -762,17 +790,36 @@ impl Blob {
                     // Ice does not cancel the body's attempt to roll. Without
                     // spines this becomes visible spin and slip, while the
                     // separate traction terms below still prevent propulsion.
-                    (-horizontal * GROUND_ROLL_RATE + idle_rock_rate) * dt;
+                    (-horizontal
+                        * GROUND_ROLL_RATE
+                        * if previous_ground_is_glue {
+                            (previous_ground_traction * 2.0).min(0.18)
+                        } else {
+                            1.0
+                        }
+                        + idle_rock_rate)
+                        * dt;
                 let angular_correction =
                     (target_angular_displacement - angular_displacement) * 0.34;
                 velocity += offset.perp() * angular_correction;
+
+                if previous_ground_is_glue {
+                    // Adhesion couples the slow roll to a matching forward
+                    // advance: x = r * theta. The retained factor accounts
+                    // for the soft membrane flattening at the contact patch.
+                    // It is not inertia; releasing input is still stopped by
+                    // the glue damping on the next fixed step.
+                    velocity.x += -target_angular_displacement * self.rest_radius * 0.72;
+                }
 
                 // Extra traction near the floor transfers the torque through
                 // the membrane instead of pulling from the centre.
                 let lower_weight =
                     ((center.y - particle.position.y) / self.rest_radius).clamp(0.0, 1.0);
-                velocity.x +=
-                    horizontal * steering * lower_weight * 0.65 * previous_ground_traction;
+                if !previous_ground_is_glue {
+                    velocity.x +=
+                        horizontal * steering * lower_weight * 0.65 * previous_ground_traction;
+                }
             } else if spider_cling.is_some() {
                 let offset = particle.position - center;
                 let tangential_input = horizontal;
@@ -790,7 +837,7 @@ impl Blob {
             }
             if horizontal == 0.0 {
                 velocity.x *= if self.grounded {
-                    0.72 + (1.0 - previous_ground_traction) * 0.24
+                    previous_ground_idle_damping
                 } else {
                     0.992
                 };
@@ -822,7 +869,9 @@ impl Blob {
                 let lower_weight = ((center - particle.position).dot(jump_normal) / self.rest_edge)
                     .clamp(0.0, 2.5)
                     / 2.5;
-                let jump_speed = jump_speed_for_charge(self.charge, self.rest_radius) * vigor;
+                let jump_speed = jump_speed_for_charge(self.charge, self.rest_radius)
+                    * vigor
+                    * jump_surface_factor;
                 let impulse = jump_speed * dt;
                 // Small fragments jump faster, so their non-uniform impulse
                 // must be reduced to avoid folding the membrane through its
@@ -860,13 +909,13 @@ impl Blob {
             self.solve_area();
             self.limit_collapse();
             self.limit_stretch();
-            self.solve_collisions(platforms, ice_platform_indices);
+            self.solve_collisions(platforms, ice_platform_indices, glue_platform_indices);
             self.solve_fixture_collisions(fixtures);
             if self.repair_self_intersection() {
                 // The recovered contour may overlap the surface that caused
                 // the fold. Project it once more, then guarantee that the
                 // frame ends with a valid membrane topology.
-                self.solve_collisions(platforms, ice_platform_indices);
+                self.solve_collisions(platforms, ice_platform_indices, glue_platform_indices);
                 self.solve_fixture_collisions(fixtures);
                 self.repair_self_intersection();
             }
@@ -877,10 +926,10 @@ impl Blob {
         // Shape recovery and self-intersection repair can move a point after
         // an iteration's collision pass. End every frame with environment
         // projection so no membrane vertex remains embedded in level geometry.
-        self.solve_collisions(platforms, ice_platform_indices);
+        self.solve_collisions(platforms, ice_platform_indices, glue_platform_indices);
         self.solve_fixture_collisions(fixtures);
         if self.repair_self_intersection() {
-            self.solve_collisions(platforms, ice_platform_indices);
+            self.solve_collisions(platforms, ice_platform_indices, glue_platform_indices);
             self.solve_fixture_collisions(fixtures);
         }
         if let Some(anchor_x) = idle_anchor_x {
@@ -907,7 +956,7 @@ impl Blob {
             self.solve_area();
             self.limit_collapse();
             self.limit_stretch();
-            self.solve_collisions(platforms, ice_platform_indices);
+            self.solve_collisions(platforms, ice_platform_indices, glue_platform_indices);
             self.solve_fixture_collisions(fixtures);
             self.repair_self_intersection();
         }
@@ -1176,7 +1225,12 @@ impl Blob {
         true
     }
 
-    fn solve_collisions(&mut self, platforms: &[Platform], ice_platform_indices: &[usize]) {
+    fn solve_collisions(
+        &mut self,
+        platforms: &[Platform],
+        ice_platform_indices: &[usize],
+        glue_platform_indices: &[usize],
+    ) {
         // Keep contact thickness constant while tonicity changes. A growing
         // collision envelope would move a resting corpse on its own.
         let skin = (5.0 * self.size_scale()).max(MIN_COLLISION_SKIN);
@@ -1228,6 +1282,22 @@ impl Blob {
                         self.grounded = true;
                         if ice_platform_indices.contains(&platform_index) {
                             self.ground_traction = self.ground_traction.min(self.ice_traction);
+                            self.ground_idle_damping = self.ground_idle_damping.max(0.96);
+                        }
+                        if glue_platform_indices.contains(&platform_index) {
+                            // Adhesive sludge resists both translation and
+                            // roll, regardless of whether the spines are out.
+                            // A small fragment offers less contact area to
+                            // spread force through, so it is proportionally
+                            // more stuck than the parent creature.
+                            let size_ratio =
+                                (self.rest_radius / DEFAULT_GAMEPLAY_RADIUS).clamp(0.25, 1.0);
+                            let glue_traction = 0.035 + size_ratio * 0.045;
+                            let glue_damping = 0.05 + size_ratio * 0.05;
+                            self.ground_traction = self.ground_traction.min(glue_traction);
+                            self.ground_idle_damping = self.ground_idle_damping.min(glue_damping);
+                            self.on_glue = true;
+                            self.ground_is_glue = true;
                         }
                         support_sum += Vec2::Y;
                         support_count += 1;

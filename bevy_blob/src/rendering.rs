@@ -282,6 +282,7 @@ pub(super) fn sync_ink_preview(
             platform_index,
             platform,
             level.ice_platforms.contains(&platform_index),
+            level.glue_platforms.contains(&platform_index),
             &brick_texture,
             &level.lights,
             level
@@ -530,6 +531,7 @@ fn spawn_ink_platform(
     platform_index: usize,
     platform: &Platform,
     is_ice: bool,
+    is_glue: bool,
     brick_texture: &Handle<Image>,
     lights: &[LightDefinition],
     counterbalance_platform: Option<usize>,
@@ -562,6 +564,8 @@ fn spawn_ink_platform(
         texture: Some(brick_texture.clone()),
         color: if is_ice {
             game_palette::color(game_palette::ICE_SURFACE)
+        } else if is_glue {
+            game_palette::color(game_palette::GLUE_SURFACE)
         } else {
             Color::WHITE
         },

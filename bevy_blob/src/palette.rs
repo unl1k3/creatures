@@ -15,6 +15,8 @@ pub(crate) const SEWER_FOG: [f32; 4] = [0.20, 0.34, 0.36, 0.12];
 pub(crate) const DISTANT_INFRASTRUCTURE: [f32; 4] = [0.045, 0.075, 0.085, 0.28];
 /// Pale cold wash over the ink-brick pattern used by low-traction ice.
 pub(crate) const ICE_SURFACE: [f32; 4] = [0.58, 0.78, 0.82, 1.0];
+/// Dull resin wash used by adhesive platforms without breaking ink contrast.
+pub(crate) const GLUE_SURFACE: [f32; 4] = [0.62, 0.49, 0.20, 1.0];
 
 pub(crate) const BLOB_FAMILIES: [[f32; 3]; 6] = [
     // Root cyan, then deliberately distant hues for descendant families.

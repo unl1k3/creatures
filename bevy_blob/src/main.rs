@@ -536,6 +536,7 @@ fn simulate_blob(
         .collect();
     let mut collision_platforms = Vec::with_capacity(level.platforms.len());
     let mut ice_collision_platforms = Vec::new();
+    let mut glue_collision_platforms = Vec::new();
     for (level_index, platform) in level.platforms.iter().copied().enumerate() {
         if airborne_counterweight_plates.contains(&level_index) {
             continue;
@@ -544,6 +545,9 @@ fn simulate_blob(
         collision_platforms.push(platform);
         if level.ice_platforms.contains(&level_index) {
             ice_collision_platforms.push(collision_index);
+        }
+        if level.glue_platforms.contains(&level_index) {
+            glue_collision_platforms.push(collision_index);
         }
     }
     let rejoin_directions = rejoin_roll_directions(&blobs, &collision_platforms);
@@ -611,11 +615,17 @@ fn simulate_blob(
                 && keyboard.pressed(KeyCode::ArrowDown),
             &collision_platforms,
             &ice_collision_platforms,
+            &glue_collision_platforms,
             &level.fixtures,
             vigor,
             alive,
             true,
         );
+        if active_blob.body.on_glue() && movement.abs() > 0.01 {
+            // Working against adhesive sludge is tiring whether the spines
+            // are deployed or not; spines improve control, not efficiency.
+            let _ = vitality.spend(active_blob.id, time.delta_secs() * 0.030);
+        }
         if charge_before_step <= 0.01 && active_blob.body.charge > 0.01 {
             commands.spawn((
                 AudioPlayer::new(blob_audio.charge.clone()),
