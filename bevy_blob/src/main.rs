@@ -28,12 +28,11 @@ use blob::{Blob, DEFAULT_CREATURE_SCALE, Platform, REFERENCE_RADIUS};
 use camera::selected_camera_target;
 use camera::{GameCamera, follow_camera};
 use environment::{
-    AvianContactDiagnostics, Level, LevelDebugOverlay, LightPulsePreview, LightingProfile,
-    RouteProgress, TestScenario, WastewaterEffects, advance_route_progress, animate_level_lights,
-    draw_level_chains, resolve_avian_environment, resolve_blob_chain_contacts,
-    sample_avian_contacts, select_lighting_profile, setup_environment, simulate_counterbalances,
-    simulate_level_hazards, switch_test_scenario, sync_chain_lighting, toggle_level_debug,
-    toggle_light_pulse_preview, update_parallax_layers,
+    AvianContactDiagnostics, Level, LevelDebugOverlay, RouteProgress, TestScenario,
+    WastewaterEffects, advance_route_progress, draw_level_chains, resolve_avian_environment,
+    resolve_blob_chain_contacts, sample_avian_contacts, setup_environment,
+    simulate_counterbalances, simulate_level_hazards, switch_test_scenario, sync_chain_lighting,
+    toggle_level_debug, update_parallax_layers,
 };
 use hud::{arrange_auxiliary_windows, setup_legend, toggle_legend, update_metrics};
 #[cfg(test)]
@@ -49,8 +48,7 @@ use rendering::{
     InkStylePreview, draw_world, setup_ambient_drop_assets, simulate_ambient_drops,
     simulate_wastewater, simulate_wastewater_bubbles, simulate_wastewater_impacts,
     sync_blob_meshes, sync_counterbalance_visuals, sync_ink_atmosphere, sync_ink_preview,
-    sync_lantern_glows, sync_route_markers, toggle_foreground, toggle_ink_style,
-    trigger_drop_shower,
+    sync_route_markers, toggle_foreground, toggle_ink_style, trigger_drop_shower,
 };
 use shield::{ShieldWorld, simulate_shields, spider_climb_anchor_direction};
 use std::{
@@ -181,8 +179,6 @@ fn main() {
         .insert_resource(ClearColor(palette::color(palette::IVORY)))
         .insert_resource(Time::<Fixed>::from_hz(120.0))
         .init_resource::<InkStylePreview>()
-        .init_resource::<LightPulsePreview>()
-        .init_resource::<LightingProfile>()
         // The sewer ambience is opt-in: gameplay starts quietly and B enables
         // the loop when the player wants it.
         .insert_resource(BackgroundMusic { enabled: false })
@@ -262,7 +258,6 @@ fn main() {
             )
                 .chain(),
         )
-        .add_systems(Update, select_lighting_profile.before(switch_test_scenario))
         .add_systems(Update, sync_ink_atmosphere.after(sync_ink_preview))
         .add_systems(Update, play_blob_sound_events.after(start_phagocytosis))
         .add_systems(Update, toggle_background_music)
@@ -271,9 +266,6 @@ fn main() {
             (
                 toggle_pause,
                 toggle_foreground,
-                toggle_light_pulse_preview,
-                animate_level_lights,
-                sync_lantern_glows,
                 sync_chain_lighting,
                 draw_level_chains,
                 // Ink platforms may be rebuilt when the scenario changes;
@@ -542,15 +534,18 @@ fn simulate_blob(
             (!has_rider && has_airborne_blob_above).then_some(balance.plate_platform)
         })
         .collect();
-    let collision_platforms: Vec<Platform> = level
-        .platforms
-        .iter()
-        .copied()
-        .enumerate()
-        .filter_map(|(index, platform)| {
-            (!airborne_counterweight_plates.contains(&index)).then_some(platform)
-        })
-        .collect();
+    let mut collision_platforms = Vec::with_capacity(level.platforms.len());
+    let mut ice_collision_platforms = Vec::new();
+    for (level_index, platform) in level.platforms.iter().copied().enumerate() {
+        if airborne_counterweight_plates.contains(&level_index) {
+            continue;
+        }
+        let collision_index = collision_platforms.len();
+        collision_platforms.push(platform);
+        if level.ice_platforms.contains(&level_index) {
+            ice_collision_platforms.push(collision_index);
+        }
+    }
     let rejoin_directions = rejoin_roll_directions(&blobs, &collision_platforms);
     let selected = blobs.selected;
     for (index, active_blob) in blobs.active.iter_mut().enumerate() {
@@ -567,6 +562,15 @@ fn simulate_blob(
                 .apply_internal_bulge(position, radius, strength);
         }
         let shield_extension = shields.extension(active_blob.id);
+        active_blob
+            .body
+            .set_ice_traction(if shield_extension > 0.05 {
+                // Spines bite shallowly into the ice: enough grip to roll, but
+                // substantially less than an ordinary stone platform.
+                0.28
+            } else {
+                0.0
+            });
         let movement = if alive {
             rejoin_directions
                 .as_ref()
@@ -596,7 +600,7 @@ fn simulate_blob(
             .body
             .set_spider_cling(spider_anchor.map(|anchor| (anchor.direction, anchor.wall_top)));
         let charge_before_step = active_blob.body.charge;
-        active_blob.body.step_with_vigor(
+        active_blob.body.step_with_vigor_on_ice(
             time.delta_secs(),
             movement,
             rejoin_directions.is_none()
@@ -606,6 +610,7 @@ fn simulate_blob(
                 && shield_extension < 0.05
                 && keyboard.pressed(KeyCode::ArrowDown),
             &collision_platforms,
+            &ice_collision_platforms,
             &level.fixtures,
             vigor,
             alive,

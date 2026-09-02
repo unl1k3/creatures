@@ -16,8 +16,8 @@ pub(super) struct ParsedLevel {
     pub(super) fixtures: Vec<Vec<Vec2>>,
     pub(super) route: Vec<Vec2>,
     pub(super) visual_layers: Vec<VisualLayer>,
+    pub(super) ice_platforms: Vec<usize>,
     pub(super) nutrients: Vec<NutrientDefinition>,
-    pub(super) lights: Vec<LightDefinition>,
     pub(super) expulsion_points: Vec<ExpulsionPointDefinition>,
     pub(super) hazards: Vec<HazardDefinition>,
     pub(super) chains: Vec<ChainDefinition>,
@@ -97,13 +97,7 @@ pub(super) struct LightDefinition {
     pub(super) position: Vec2,
     pub(super) color: [f32; 3],
     pub(super) radius: f32,
-    /// Authored radius retained while runtime lighting profiles scale a
-    /// lamp's effective reach consistently across every level.
-    pub(super) base_radius: f32,
     pub(super) intensity: f32,
-    /// Authored intensity retained while runtime lantern pulses update the
-    /// current `intensity` field.
-    pub(super) base_intensity: f32,
     pub(super) enabled: bool,
 }
 
@@ -160,8 +154,6 @@ struct LevelDocument {
     visual_layers: Vec<VisualLayerDocument>,
     #[serde(default)]
     nutrients: Vec<NutrientDocument>,
-    #[serde(default)]
-    lights: Vec<LightDocument>,
     #[serde(default)]
     expulsion_points: Vec<ExpulsionPointDocument>,
     #[serde(default)]
@@ -220,11 +212,21 @@ enum ColliderDocument {
         id: String,
         position: Point,
         size: Point,
+        #[serde(default)]
+        surface: SurfaceDocument,
     },
     Polygon {
         id: String,
         points: Vec<Point>,
     },
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SurfaceDocument {
+    #[default]
+    Stone,
+    Ice,
 }
 
 #[derive(Deserialize)]
@@ -271,21 +273,6 @@ struct BubbleSettingsDocument {
 struct NutrientDocument {
     position: Point,
     radius: f32,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LightDocument {
-    position: Point,
-    color: [f32; 3],
-    radius: f32,
-    intensity: f32,
-    #[serde(default = "enabled_by_default")]
-    enabled: bool,
-}
-
-const fn enabled_by_default() -> bool {
-    true
 }
 
 #[derive(Deserialize)]
@@ -341,15 +328,25 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
         })
         .transpose()?;
     let mut platforms = Vec::new();
+    let mut ice_platforms = Vec::new();
     let mut fixtures = Vec::new();
     for collider in document.colliders {
         match collider {
-            ColliderDocument::Rectangle { id, position, size } => {
+            ColliderDocument::Rectangle {
+                id,
+                position,
+                size,
+                surface,
+            } => {
                 validate_text("collider id", &id)?;
+                let platform_index = platforms.len();
                 platforms.push(Platform {
                     center: finite_point(&format!("collider '{id}' position"), position)?,
                     half_size: positive_size(&format!("collider '{id}' size"), size)? * 0.5,
                 });
+                if matches!(surface, SurfaceDocument::Ice) {
+                    ice_platforms.push(platform_index);
+                }
             }
             ColliderDocument::Polygon { id, points } => {
                 validate_text("collider id", &id)?;
@@ -478,33 +475,6 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
             })
         })
         .collect::<Result<Vec<_>, LevelFormatError>>()?;
-    let lights = document
-        .lights
-        .into_iter()
-        .enumerate()
-        .map(|(index, light)| {
-            if light
-                .color
-                .iter()
-                .any(|channel| !channel.is_finite() || !(0.0..=1.0).contains(channel))
-            {
-                return Err(LevelFormatError(format!(
-                    "light {index} color channels must be between 0 and 1"
-                )));
-            }
-            let intensity = positive_number(&format!("light {index} intensity"), light.intensity)?;
-            let radius = positive_number(&format!("light {index} radius"), light.radius)?;
-            Ok(LightDefinition {
-                position: finite_point(&format!("light {index} position"), light.position)?,
-                color: light.color,
-                radius,
-                base_radius: radius,
-                intensity,
-                base_intensity: intensity,
-                enabled: light.enabled,
-            })
-        })
-        .collect::<Result<Vec<_>, LevelFormatError>>()?;
     let expulsion_points = document
         .expulsion_points
         .into_iter()
@@ -583,8 +553,8 @@ pub(super) fn parse_level(source: &str) -> Result<ParsedLevel, LevelFormatError>
         fixtures,
         route,
         visual_layers,
+        ice_platforms,
         nutrients,
-        lights,
         expulsion_points,
         hazards,
         chains,

@@ -75,6 +75,8 @@ pub struct Blob {
     support_normal: Vec2,
     support_normal_sum: Vec2,
     support_contact_count: usize,
+    ground_traction: f32,
+    ice_traction: f32,
     charge_direction: f32,
     was_charging: bool,
     jump_armed: bool,
@@ -127,6 +129,8 @@ impl Blob {
             support_normal: Vec2::Y,
             support_normal_sum: Vec2::ZERO,
             support_contact_count: 0,
+            ground_traction: 1.0,
+            ice_traction: 0.0,
             charge_direction: 0.0,
             was_charging: false,
             jump_armed: false,
@@ -577,6 +581,7 @@ impl Blob {
         self.step_with_vigor(dt, horizontal, charging, platforms, &[], 1.0, true, true);
     }
 
+    #[cfg(test)]
     pub fn step_with_vigor(
         &mut self,
         dt: f32,
@@ -588,12 +593,49 @@ impl Blob {
         animate_idle: bool,
         retain_tonicity: bool,
     ) {
+        self.step_with_vigor_on_ice(
+            dt,
+            horizontal,
+            charging,
+            platforms,
+            &[],
+            fixtures,
+            vigor,
+            animate_idle,
+            retain_tonicity,
+        );
+    }
+
+    /// Sets the traction available when the membrane rests on an ice surface.
+    /// A bare gel body cannot push against ice; deployed pseudo-spines supply
+    /// a deliberately small grip without making the surface behave as stone.
+    pub fn set_ice_traction(&mut self, traction: f32) {
+        self.ice_traction = traction.clamp(0.0, 1.0);
+    }
+
+    /// As [`Self::step_with_vigor`], with a list of low-traction platform
+    /// indices in the supplied collision slice. Keeping this parallel list
+    /// avoids making the core `Platform` geometry depend on presentation data.
+    pub fn step_with_vigor_on_ice(
+        &mut self,
+        dt: f32,
+        horizontal: f32,
+        charging: bool,
+        platforms: &[Platform],
+        ice_platform_indices: &[usize],
+        fixtures: &[Vec<Vec2>],
+        vigor: f32,
+        animate_idle: bool,
+        retain_tonicity: bool,
+    ) {
         self.last_impact_speed = 0.0;
         self.launch_grace = (self.launch_grace - dt).max(0.0);
         if self.support_contact_count > 0 {
             self.support_normal = self.support_normal_sum.normalize_or(Vec2::Y);
         }
         let jump_normal = self.support_normal.normalize_or(Vec2::Y);
+        let previous_ground_traction = self.ground_traction;
+        self.ground_traction = 1.0;
         let jump_tangent = jump_normal.perp();
         let right_tangent = if jump_tangent.x >= 0.0 {
             jump_tangent
@@ -664,7 +706,12 @@ impl Blob {
             GROUND_ACCELERATION
         } else {
             AIR_ACCELERATION
-        } * vigor;
+        } * vigor
+            * if has_support {
+                previous_ground_traction
+            } else {
+                1.0
+            };
         let maximum_speed = if has_support {
             MAX_GROUND_SPEED
         } else {
@@ -712,6 +759,9 @@ impl Blob {
             if self.grounded {
                 let offset = particle.position - center;
                 let target_angular_displacement =
+                    // Ice does not cancel the body's attempt to roll. Without
+                    // spines this becomes visible spin and slip, while the
+                    // separate traction terms below still prevent propulsion.
                     (-horizontal * GROUND_ROLL_RATE + idle_rock_rate) * dt;
                 let angular_correction =
                     (target_angular_displacement - angular_displacement) * 0.34;
@@ -721,7 +771,8 @@ impl Blob {
                 // the membrane instead of pulling from the centre.
                 let lower_weight =
                     ((center.y - particle.position.y) / self.rest_radius).clamp(0.0, 1.0);
-                velocity.x += horizontal * steering * lower_weight * 0.65;
+                velocity.x +=
+                    horizontal * steering * lower_weight * 0.65 * previous_ground_traction;
             } else if spider_cling.is_some() {
                 let offset = particle.position - center;
                 let tangential_input = horizontal;
@@ -738,7 +789,11 @@ impl Blob {
                 velocity = center_velocity + relative_velocity * INTERNAL_DAMPING_AIR;
             }
             if horizontal == 0.0 {
-                velocity.x *= if self.grounded { 0.72 } else { 0.992 };
+                velocity.x *= if self.grounded {
+                    0.72 + (1.0 - previous_ground_traction) * 0.24
+                } else {
+                    0.992
+                };
             }
             velocity.x = velocity.x.clamp(
                 -MAX_PARTICLE_HORIZONTAL_SPEED * dt,
@@ -805,13 +860,13 @@ impl Blob {
             self.solve_area();
             self.limit_collapse();
             self.limit_stretch();
-            self.solve_collisions(platforms);
+            self.solve_collisions(platforms, ice_platform_indices);
             self.solve_fixture_collisions(fixtures);
             if self.repair_self_intersection() {
                 // The recovered contour may overlap the surface that caused
                 // the fold. Project it once more, then guarantee that the
                 // frame ends with a valid membrane topology.
-                self.solve_collisions(platforms);
+                self.solve_collisions(platforms, ice_platform_indices);
                 self.solve_fixture_collisions(fixtures);
                 self.repair_self_intersection();
             }
@@ -822,10 +877,10 @@ impl Blob {
         // Shape recovery and self-intersection repair can move a point after
         // an iteration's collision pass. End every frame with environment
         // projection so no membrane vertex remains embedded in level geometry.
-        self.solve_collisions(platforms);
+        self.solve_collisions(platforms, ice_platform_indices);
         self.solve_fixture_collisions(fixtures);
         if self.repair_self_intersection() {
-            self.solve_collisions(platforms);
+            self.solve_collisions(platforms, ice_platform_indices);
             self.solve_fixture_collisions(fixtures);
         }
         if let Some(anchor_x) = idle_anchor_x {
@@ -852,7 +907,7 @@ impl Blob {
             self.solve_area();
             self.limit_collapse();
             self.limit_stretch();
-            self.solve_collisions(platforms);
+            self.solve_collisions(platforms, ice_platform_indices);
             self.solve_fixture_collisions(fixtures);
             self.repair_self_intersection();
         }
@@ -1121,7 +1176,7 @@ impl Blob {
         true
     }
 
-    fn solve_collisions(&mut self, platforms: &[Platform]) {
+    fn solve_collisions(&mut self, platforms: &[Platform], ice_platform_indices: &[usize]) {
         // Keep contact thickness constant while tonicity changes. A growing
         // collision envelope would move a resting corpse on its own.
         let skin = (5.0 * self.size_scale()).max(MIN_COLLISION_SKIN);
@@ -1129,7 +1184,7 @@ impl Blob {
         let mut support_sum = Vec2::ZERO;
         let mut support_count = 0;
         for particle in &mut self.particles {
-            for platform in platforms {
+            for (platform_index, platform) in platforms.iter().enumerate() {
                 let min = platform.center - platform.half_size - Vec2::splat(skin);
                 let max = platform.center + platform.half_size + Vec2::splat(skin);
                 let inside = particle.position.x >= min.x
@@ -1171,6 +1226,9 @@ impl Blob {
                         particle.position.y = max.y;
                         damp_normal_velocity(particle, Vec2::Y, 0.0);
                         self.grounded = true;
+                        if ice_platform_indices.contains(&platform_index) {
+                            self.ground_traction = self.ground_traction.min(self.ice_traction);
+                        }
                         support_sum += Vec2::Y;
                         support_count += 1;
                     }

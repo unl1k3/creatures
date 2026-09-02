@@ -31,17 +31,38 @@ pub(super) fn update_blob_mesh_with_load(
     let mut colors = Vec::with_capacity(membrane.len() + 1);
     positions.push([center.x, center.y, 0.0]);
     uvs.push([0.5, 0.5]);
-    colors.push(blob_vertex_light(center, Vec2::Y, lights, true));
+    let base_colours_only = super::palette::uses_base_colors(lights);
+    let volume_light = volume_light_direction(center, lights);
+    let center_light = blob_vertex_light(center, Vec2::Y, lights, true);
+    // The centre remains the thickest part of the gelatin.  Brightening it
+    // slightly while the rim falls away turns the existing 2D fan into a
+    // stable faux-volume without adding a shader or physics-only geometry.
+    colors.push(if base_colours_only {
+        center_light
+    } else {
+        scale_rgb(center_light, 1.08)
+    });
     for point in &membrane {
         positions.push([point.position.x, point.position.y, 0.0]);
         let local = (point.position - center) / (blob.rest_radius * 2.0);
         uvs.push([0.5 + local.x, 0.5 + local.y]);
-        colors.push(blob_vertex_light(
+        let illumination = blob_vertex_light(
             point.position,
             (point.position - center).normalize_or(Vec2::Y),
             lights,
             false,
-        ));
+        );
+        let radial = (point.position - center).normalize_or(Vec2::Y);
+        // The virtual light is shared by every membrane point, so the bright
+        // lobe follows the level lanterns rather than jumping with particle
+        // indices as the soft body changes shape.
+        let facing = radial.dot(volume_light);
+        let rim_shade = 0.68 + ((facing + 1.0) * 0.5) * 0.24;
+        colors.push(if base_colours_only {
+            illumination
+        } else {
+            scale_rgb(illumination, rim_shade)
+        });
     }
 
     let mut indices = Vec::with_capacity(membrane.len() * 3);
@@ -70,6 +91,30 @@ pub(super) fn update_blob_mesh_with_load(
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     mesh.insert_indices(Indices::U32(indices));
+}
+
+/// Finds the weighted direction of nearby lamps. A fixed high-left fallback
+/// keeps the body readable in levels without authored lights.
+fn volume_light_direction(center: Vec2, lights: &[LightDefinition]) -> Vec2 {
+    let contribution = lights
+        .iter()
+        .filter(|light| light.enabled && light.intensity > f32::EPSILON)
+        .filter_map(|light| {
+            let toward_light = light.position - center;
+            let distance = toward_light.length();
+            (distance < light.radius).then(|| {
+                toward_light.normalize_or_zero() * (1.0 - distance / light.radius) * light.intensity
+            })
+        })
+        .sum::<Vec2>();
+    contribution.normalize_or(Vec2::new(-0.42, 0.91))
+}
+
+fn scale_rgb(mut color: [f32; 4], multiplier: f32) -> [f32; 4] {
+    color[0] = (color[0] * multiplier).min(1.0);
+    color[1] = (color[1] * multiplier).min(1.0);
+    color[2] = (color[2] * multiplier).min(1.0);
+    color
 }
 
 fn triangulate_appendage(

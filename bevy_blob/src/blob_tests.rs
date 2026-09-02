@@ -38,13 +38,7 @@ mod tests {
         let mut blob = Blob::new(Vec2::new(0.0, -28.0), 50.0);
         blob.add_velocity(Vec2::new(3.0, 0.0));
         for _ in 0..12 {
-            blob.apply_wastewater_forces_with_spine_drag(
-                12.0,
-                -120.0,
-                1.0 / 120.0,
-                1.0,
-                1.0,
-            )
+            blob.apply_wastewater_forces_with_spine_drag(12.0, -120.0, 1.0 / 120.0, 1.0, 1.0)
                 .expect("the blob remains immersed");
         }
 
@@ -80,7 +74,10 @@ mod tests {
             .sum::<f32>();
 
         assert!(width > height, "water should prevent a perfect circle");
-        assert!(angular_motion.abs() > 0.001, "water motion should induce a gentle roll");
+        assert!(
+            angular_motion.abs() > 0.001,
+            "water motion should induce a gentle roll"
+        );
     }
 
     #[test]
@@ -119,15 +116,17 @@ mod tests {
         blob.add_velocity(Vec2::new(5.0, 0.0));
 
         assert!(blob.contain_within_safety_bounds(Vec2::new(-50.0, -50.0), Vec2::new(49.0, 50.0)));
-        assert!(blob.particles.iter().all(|particle| {
-            particle.position.x <= 49.0
-                && particle.position.x >= -50.0
-        }));
-        assert!(blob
-            .particles
-            .iter()
-            .filter(|particle| particle.position.x >= 48.999)
-            .all(|particle| particle.previous.x == particle.position.x));
+        assert!(
+            blob.particles
+                .iter()
+                .all(|particle| { particle.position.x <= 49.0 && particle.position.x >= -50.0 })
+        );
+        assert!(
+            blob.particles
+                .iter()
+                .filter(|particle| particle.position.x >= 48.999)
+                .all(|particle| particle.previous.x == particle.position.x)
+        );
     }
 
     #[test]
@@ -154,9 +153,7 @@ mod tests {
             blob.step_with_vigor(dt, 0.0, false, &[platform], &[], 0.0, false, false);
         }
 
-        let contact_y = platform.center.y
-            + platform.half_size.y
-            + 5.0 * blob.size_scale();
+        let contact_y = platform.center.y + platform.half_size.y + 5.0 * blob.size_scale();
         let lowest = blob
             .particles
             .iter()
@@ -188,16 +185,7 @@ mod tests {
         blob.particles[lowest].position = Vec2::new(82.0, -50.0);
         blob.particles[lowest].previous = blob.particles[lowest].position;
 
-        blob.step_with_vigor(
-            1.0 / 120.0,
-            0.0,
-            false,
-            &[platform],
-            &[],
-            0.0,
-            false,
-            false,
-        );
+        blob.step_with_vigor(1.0 / 120.0, 0.0, false, &[platform], &[], 0.0, false, false);
 
         let minimum = platform.center - platform.half_size;
         let maximum = platform.center + platform.half_size;
@@ -231,10 +219,12 @@ mod tests {
                 true,
             );
         }
-        assert!(!blob
-            .particles
-            .iter()
-            .any(|particle| convex_penetration(particle.position, &fixture).is_some()));
+        assert!(
+            !blob
+                .particles
+                .iter()
+                .any(|particle| convex_penetration(particle.position, &fixture).is_some())
+        );
         assert!(!has_self_intersections(&blob.particles));
     }
 
@@ -438,12 +428,7 @@ mod tests {
         let maximum = Vec2::new(5.0, 15.0);
         assert_eq!(collision_entry_side(&particle, minimum, maximum), 1);
         assert_eq!(
-            collision_side_from_reference(
-                &particle,
-                Vec2::new(0.0, -40.0),
-                minimum,
-                maximum,
-            ),
+            collision_side_from_reference(&particle, Vec2::new(0.0, -40.0), minimum, maximum,),
             2,
             "the internal vertical seam must not override the lower surface"
         );
@@ -464,7 +449,7 @@ mod tests {
                 half_size: Vec2::new(50.0, 10.0),
             },
         ];
-        blob.solve_collisions(&platforms);
+        blob.solve_collisions(&platforms, &[]);
         assert!(
             blob.particles[0].position.y < -10.0,
             "particle entered the attached-platform seam: {:?}",

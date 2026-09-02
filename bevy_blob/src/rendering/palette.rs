@@ -77,6 +77,12 @@ pub(super) fn blob_vertex_light(
     lights: &[LightDefinition],
     center_vertex: bool,
 ) -> [f32; 4] {
+    // The sewer has no visible lamps. When there are no local lights, a
+    // broad diffuse illumination filters in from shafts and grates instead
+    // of leaving dynamic bodies nearly black.
+    if !has_enabled_lights(lights) {
+        return sewer_ambient_light(position);
+    }
     if uses_base_colors(lights) {
         return [1.0, 1.0, 1.0, 1.0];
     }
@@ -125,6 +131,9 @@ pub(super) fn blob_vertex_light(
 /// surface normal. The light is sampled per mesh vertex so the paper-and-ink
 /// platforms can fall into shadow between the lantern pools.
 pub(super) fn scenery_vertex_light(position: Vec2, lights: &[LightDefinition]) -> [f32; 4] {
+    if !has_enabled_lights(lights) {
+        return sewer_ambient_light(position);
+    }
     if uses_base_colors(lights) {
         return [1.0, 1.0, 1.0, 1.0];
     }
@@ -139,6 +148,26 @@ pub(super) fn scenery_vertex_light(position: Vec2, lights: &[LightDefinition]) -
     }
     let mapped = rgb / (Vec3::ONE + rgb) * 1.42;
     [mapped.x.min(1.0), mapped.y.min(1.0), mapped.z.min(1.0), 1.0]
+}
+
+/// Global, source-less illumination for the ink sewer. The playable shaft is
+/// open enough above to receive cool daylight through grates, while the basin
+/// remains damp and dim. It intentionally has no circular falloff or visible
+/// origin, so it cannot read as a misplaced lantern or a painted light beam.
+fn sewer_ambient_light(position: Vec2) -> [f32; 4] {
+    const BOTTOM: f32 = -568.0;
+    const HEIGHT: f32 = 3000.0;
+
+    let height = ((position.y - BOTTOM) / HEIGHT).clamp(0.0, 1.0);
+    let filtered_height = height * height * (3.0 - 2.0 * height);
+    let lower = Vec3::new(0.43, 0.48, 0.43);
+    let upper = Vec3::new(0.67, 0.72, 0.73);
+    let colour = lower.lerp(upper, filtered_height);
+    [colour.x, colour.y, colour.z, 1.0]
+}
+
+fn has_enabled_lights(lights: &[LightDefinition]) -> bool {
+    lights.iter().any(|light| light.enabled)
 }
 
 /// Profile 0 retains authored palette values instead of using the dark sewer

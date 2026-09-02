@@ -103,6 +103,7 @@ pub(super) struct Level {
     pub(super) spawn_position: Vec2,
     pub(super) route: Vec<Vec2>,
     visual_layers: Vec<VisualLayer>,
+    pub(super) ice_platforms: Vec<usize>,
     decorations: Vec<VisualLayer>,
     pub(super) wastewater_areas: Vec<WastewaterAreaDefinition>,
     pub(super) nutrients: Vec<NutrientDefinition>,
@@ -111,172 +112,6 @@ pub(super) struct Level {
     pub(super) hazards: Vec<HazardDefinition>,
     pub(super) chains: Vec<ChainDefinition>,
     pub(super) counterbalances: Vec<CounterbalanceDefinition>,
-}
-
-/// Selects one of the retained lighting studies. Profiles change rendering
-/// only: colliders, gameplay and the authored positions of lamps are intact.
-#[derive(Resource, Default)]
-pub(super) struct LightingProfile {
-    index: u8,
-}
-
-impl LightingProfile {
-    const COUNT: u8 = 5;
-
-    pub(super) fn label(&self) -> &'static str {
-        match self.index {
-            0 => "0 — base colors, unlit",
-            1 => "1 — early broad light",
-            2 => "2 — diffuse atmosphere",
-            3 => "3 — dark pools",
-            _ => "4 — natural lanterns",
-        }
-    }
-
-    pub(super) fn glow_scale(&self) -> f32 {
-        self.settings().glow_scale
-    }
-
-    pub(super) fn uses_base_colors(&self) -> bool {
-        self.index == 0
-    }
-
-    fn settings(&self) -> LightingProfileSettings {
-        match self.index {
-            // Retains the ink artwork so geometry stays readable while the
-            // absence of local lamp light is being compared.
-            0 => LightingProfileSettings::new(0.0, 1.0, 0.0, 0.0),
-            1 => LightingProfileSettings::new(1.18, 1.22, 1.42, 0.0),
-            2 => LightingProfileSettings::new(0.92, 1.0, 1.08, 0.55),
-            3 => LightingProfileSettings::new(0.68, 0.76, 0.72, 0.68),
-            _ => LightingProfileSettings::new(1.0, 1.0, 1.0, 1.0),
-        }
-    }
-
-    fn select(&mut self, index: u8) -> bool {
-        let index = index.min(Self::COUNT - 1);
-        if self.index == index {
-            return false;
-        }
-        self.index = index;
-        true
-    }
-
-    fn apply_to_lights(&self, lights: &mut [LightDefinition]) {
-        let settings = self.settings();
-        for light in lights {
-            light.radius = light.base_radius * settings.radius_scale;
-            light.intensity = light.base_intensity * settings.intensity_scale;
-        }
-    }
-}
-
-/// Deterministic multipliers reconstructed from the major lighting passes.
-#[derive(Clone, Copy)]
-struct LightingProfileSettings {
-    intensity_scale: f32,
-    radius_scale: f32,
-    glow_scale: f32,
-    pulse_scale: f32,
-}
-
-impl LightingProfileSettings {
-    const fn new(
-        intensity_scale: f32,
-        radius_scale: f32,
-        glow_scale: f32,
-        pulse_scale: f32,
-    ) -> Self {
-        Self {
-            intensity_scale,
-            radius_scale,
-            glow_scale,
-            pulse_scale,
-        }
-    }
-}
-
-/// Shift+0 through Shift+4 switches lighting studies. Ink meshes bake vertex
-/// colour at creation, so they are rebuilt after a profile change.
-pub(super) fn select_lighting_profile(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    mut commands: Commands,
-    mut profile: ResMut<LightingProfile>,
-    mut level: ResMut<Level>,
-    ink_shapes: Query<Entity, With<crate::rendering::InkPreviewShape>>,
-) {
-    if !keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
-        return;
-    }
-    let requested = [
-        (0, KeyCode::Digit0),
-        (1, KeyCode::Digit1),
-        (2, KeyCode::Digit2),
-        (3, KeyCode::Digit3),
-        (4, KeyCode::Digit4),
-    ]
-    .into_iter()
-    .find_map(|(index, key)| keyboard.just_pressed(key).then_some(index));
-    let Some(requested) = requested else {
-        return;
-    };
-    if !profile.select(requested) {
-        return;
-    }
-    profile.apply_to_lights(&mut level.lights);
-    for entity in &ink_shapes {
-        commands.entity(entity).despawn();
-    }
-}
-
-/// Y enables a deliberately exaggerated lantern rhythm. It is a visual test
-/// aid; normal play keeps the same independent, much subtler pulse.
-#[derive(Resource, Default)]
-pub(super) struct LightPulsePreview {
-    pub(super) enabled: bool,
-}
-
-pub(super) fn toggle_light_pulse_preview(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    mut preview: ResMut<LightPulsePreview>,
-) {
-    if keyboard.just_pressed(KeyCode::KeyY) {
-        preview.enabled = !preview.enabled;
-    }
-}
-
-/// Gives each authored lantern a small, deterministic pulse. The phase comes
-/// from its index and position, so a reset never makes all lights breathe in
-/// unison and no random state is needed in the level format.
-pub(super) fn animate_level_lights(
-    time: Res<Time>,
-    preview: Res<LightPulsePreview>,
-    profile: Res<LightingProfile>,
-    mut level: ResMut<Level>,
-) {
-    let elapsed = time.elapsed_secs();
-    let profile_settings = profile.settings();
-    for (index, light) in level.lights.iter_mut().enumerate() {
-        if !light.enabled {
-            continue;
-        }
-        light.radius = light.base_radius * profile_settings.radius_scale;
-        let phase = index as f32 * 1.91 + light.position.x * 0.013 + light.position.y * 0.007;
-        let (slow_strength, flutter_strength, lower, upper) = if preview.enabled {
-            // High contrast makes it easy to verify both the local lighting
-            // and the glow radius from a still camera position.
-            (0.42, 0.14, 0.42, 1.72)
-        } else {
-            (0.20, 0.06, 0.68, 1.34)
-        };
-        let slow = (elapsed * (0.78 + index as f32 * 0.052) + phase).sin() * slow_strength;
-        let flutter =
-            (elapsed * (2.15 + index as f32 * 0.13) + phase * 1.7).sin() * flutter_strength;
-        light.intensity = light.base_intensity
-            * profile_settings.intensity_scale
-            * (1.0 + slow * profile_settings.pulse_scale + flutter * profile_settings.pulse_scale)
-                .clamp(lower, upper);
-    }
 }
 
 #[derive(Resource, Default)]
@@ -446,8 +281,9 @@ impl Level {
             spawn_position: parsed.spawn,
             route: parsed.route,
             visual_layers: parsed.visual_layers,
+            ice_platforms: parsed.ice_platforms,
             nutrients: parsed.nutrients,
-            lights: parsed.lights,
+            lights: Vec::new(),
             expulsion_points: parsed.expulsion_points,
             hazards: parsed.hazards,
             chains: parsed.chains,
@@ -481,6 +317,7 @@ impl Level {
             spawn_position: Vec2::ZERO,
             route: Vec::new(),
             visual_layers: Vec::new(),
+            ice_platforms: Vec::new(),
             decorations: Vec::new(),
             wastewater_areas: Vec::new(),
             nutrients: Vec::new(),
@@ -539,6 +376,7 @@ impl Level {
                         Vec2::new(295.0, 110.0),
                     ],
                     visual_layers: Vec::new(),
+                    ice_platforms: Vec::new(),
                     decorations: Vec::new(),
                     wastewater_areas: Vec::new(),
                     nutrients: Vec::new(),
@@ -587,6 +425,7 @@ impl Level {
                         Vec2::new(-260.0, 320.0),
                     ],
                     visual_layers: Vec::new(),
+                    ice_platforms: Vec::new(),
                     decorations: Vec::new(),
                     wastewater_areas: Vec::new(),
                     nutrients: Vec::new(),
@@ -621,6 +460,7 @@ impl Level {
                         Vec2::new(355.0, -310.0),
                     ],
                     visual_layers: Vec::new(),
+                    ice_platforms: Vec::new(),
                     decorations: Vec::new(),
                     wastewater_areas: Vec::new(),
                     nutrients: Vec::new(),
@@ -664,6 +504,7 @@ impl Level {
                         Vec2::new(305.0, 650.0),
                     ],
                     visual_layers: Vec::new(),
+                    ice_platforms: Vec::new(),
                     decorations: Vec::new(),
                     wastewater_areas: Vec::new(),
                     nutrients: Vec::new(),
@@ -697,6 +538,7 @@ impl Level {
                         Vec2::new(-45.0, 170.0),
                     ],
                     visual_layers: Vec::new(),
+                    ice_platforms: Vec::new(),
                     decorations: Vec::new(),
                     wastewater_areas: Vec::new(),
                     nutrients: Vec::new(),
@@ -777,16 +619,11 @@ fn v_valley_fixtures(center: Vec2, width: f32, depth: f32) -> Vec<Vec<Vec2>> {
 
 pub(super) fn setup_environment(
     mut commands: Commands,
-    profile: Option<Res<LightingProfile>>,
     asset_server: Option<Res<AssetServer>>,
     meshes: Option<ResMut<Assets<Mesh>>>,
     materials: Option<ResMut<Assets<ColorMaterial>>>,
 ) {
-    let mut level = Level::prototype();
-    profile
-        .as_deref()
-        .unwrap_or(&LightingProfile::default())
-        .apply_to_lights(&mut level.lights);
+    let level = Level::prototype();
     spawn_level_colliders(&mut commands, &level);
     spawn_level_artwork(&mut commands, asset_server.as_deref(), &level);
     if let (Some(mut meshes), Some(mut materials)) = (meshes, materials) {
@@ -1276,7 +1113,6 @@ pub(super) fn simulate_counterbalances(
 
 pub(super) fn switch_test_scenario(
     keyboard: Res<ButtonInput<KeyCode>>,
-    profile: Res<LightingProfile>,
     mut commands: Commands,
     colliders: Query<Entity, With<EnvironmentCollider>>,
     artwork: Query<Entity, With<LevelArtwork>>,
@@ -1292,6 +1128,8 @@ pub(super) fn switch_test_scenario(
     mut nutrition: ResMut<NutritionWorld>,
     nutrient_bodies: Query<Entity, With<NutrientPhysics>>,
 ) {
+    // Number keys select levels; modified combinations are deliberately left
+    // unused so they cannot trigger a scenario while typing a shortcut.
     if keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
         return;
     }
@@ -1323,8 +1161,7 @@ pub(super) fn switch_test_scenario(
     for entity in &nutrient_bodies {
         commands.entity(entity).despawn();
     }
-    let (mut new_level, spawn) = Level::test_scenario(requested);
-    profile.apply_to_lights(&mut new_level.lights);
+    let (new_level, spawn) = Level::test_scenario(requested);
     spawn_level_artwork(&mut commands, asset_server.as_deref(), &new_level);
     if let (Some(mut meshes), Some(mut materials)) = (meshes, materials) {
         spawn_level_chains(&mut commands, &new_level, &mut meshes, &mut materials);
@@ -1833,10 +1670,10 @@ mod tests {
     }
 
     #[test]
-    fn prototype_loads_authored_objects_from_json() {
+    fn prototype_loads_authored_objects_without_local_lanterns() {
         let level = Level::prototype();
         assert_eq!(level.nutrients.len(), 3);
-        assert_eq!(level.lights.len(), 7);
+        assert!(level.lights.is_empty());
         assert_eq!(level.expulsion_points.len(), 1);
         assert_eq!(level.hazards.len(), 1);
         assert_eq!(level.decorations.len(), 1);

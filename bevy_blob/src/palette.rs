@@ -13,6 +13,8 @@ pub(crate) const INK: [f32; 4] = [0.035, 0.045, 0.055, 1.0];
 pub(crate) const SEWER_FOG: [f32; 4] = [0.20, 0.34, 0.36, 0.12];
 /// Faded infrastructure silhouettes behind the playable room.
 pub(crate) const DISTANT_INFRASTRUCTURE: [f32; 4] = [0.045, 0.075, 0.085, 0.28];
+/// Pale cold wash over the ink-brick pattern used by low-traction ice.
+pub(crate) const ICE_SURFACE: [f32; 4] = [0.58, 0.78, 0.82, 1.0];
 
 pub(crate) const BLOB_FAMILIES: [[f32; 3]; 6] = [
     // Root cyan, then deliberately distant hues for descendant families.

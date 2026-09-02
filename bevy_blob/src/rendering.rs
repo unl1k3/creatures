@@ -1,7 +1,5 @@
 use super::*;
-use crate::environment::{
-    ForegroundArtwork, LevelArtwork, LightPulsePreview, LightingProfile, ParallaxLayer,
-};
+use crate::environment::{ForegroundArtwork, LevelArtwork, ParallaxLayer};
 use crate::level_format::LightDefinition;
 use crate::palette as game_palette;
 use crate::shield::shield_spine_fans;
@@ -29,8 +27,6 @@ const PLATFORM_DEPTH_STEP: f32 = 0.001;
 // Rounded caps and authored polygon fixtures can meet the visual skin of a
 // rectangle. Draw them just above the slab texture to avoid coplanar overlap.
 const FIXTURE_TEXTURE_DEPTH: f32 = PLATFORM_TEXTURE_DEPTH + 0.01;
-const BACKGROUND_LIGHT_DEPTH: f32 = -19.5;
-const LIGHT_GLOW_SEGMENTS: usize = 20;
 
 #[derive(Resource)]
 pub(super) struct InkStylePreview {
@@ -62,12 +58,6 @@ pub(super) struct InkAtmosphereLayer {
 /// creates a collider or changes visibility of game entities.
 #[derive(Component)]
 struct InkFogBand;
-
-#[derive(Component)]
-pub(super) struct LanternGlow {
-    light_index: usize,
-    mesh: Handle<Mesh>,
-}
 
 /// Tags both visual layers of a platform that is moved by a counterbalance.
 #[derive(Component)]
@@ -129,12 +119,11 @@ pub(super) fn toggle_foreground(
     }
 }
 
-/// Makes the sewer feel deeper and colder as the player climbs.  This only
-/// tints painted scenery: the blob and interactive pieces still derive their
-/// brightness from the nearby authored lanterns.
+/// Makes the sewer feel deeper and colder as the player climbs. This only
+/// tints painted scenery; the gameplay meshes use the matching diffuse sewer
+/// ambience from the palette module.
 pub(super) fn sync_ink_atmosphere(
     ink_style: Res<InkStylePreview>,
-    lighting: Res<LightingProfile>,
     scenario: Res<TestScenario>,
     level: Res<Level>,
     camera: Single<&Transform, With<GameCamera>>,
@@ -150,21 +139,17 @@ pub(super) fn sync_ink_atmosphere(
     // poorly maintained upper shafts.
     let ascent = ascent * ascent * (3.0 - 2.0 * ascent);
     for (layer, mut sprite) in &mut layers {
-        sprite.color = if lighting.uses_base_colors() {
-            Color::WHITE
-        } else {
-            ink_atmosphere_tint(ascent, layer.foreground)
-        };
+        sprite.color = ink_atmosphere_tint(ascent, layer.foreground);
     }
 }
 
 fn ink_atmosphere_tint(ascent: f32, foreground: bool) -> Color {
     let (lower, upper) = if foreground {
         // Foreground stays slightly brighter so pipes and chains still form a
-        // readable silhouette when the upper room becomes very dark.
-        (Vec3::new(0.30, 0.31, 0.28), Vec3::new(0.18, 0.23, 0.25))
+        // readable silhouette against the diffuse light from the shafts.
+        (Vec3::new(0.57, 0.58, 0.52), Vec3::new(0.47, 0.55, 0.59))
     } else {
-        (Vec3::new(0.24, 0.27, 0.26), Vec3::new(0.13, 0.18, 0.22))
+        (Vec3::new(0.52, 0.55, 0.50), Vec3::new(0.42, 0.51, 0.57))
     };
     let tint = lower.lerp(upper, ascent);
     Color::srgb(tint.x, tint.y, tint.z)
@@ -296,6 +281,7 @@ pub(super) fn sync_ink_preview(
             scenario.0,
             platform_index,
             platform,
+            level.ice_platforms.contains(&platform_index),
             &brick_texture,
             &level.lights,
             level
@@ -358,38 +344,6 @@ pub(super) fn sync_ink_preview(
             Mesh2d(meshes.add(mesh)),
             MeshMaterial2d(fixture_material.clone()),
             Transform::from_xyz(0.0, 0.0, FIXTURE_TEXTURE_DEPTH),
-        ));
-    }
-
-    // A soft warm disc lies above the darkened illustration but behind every
-    // playable surface. It makes the lantern positions legible even where no
-    // platform happens to sample their light pool.
-    for (light_index, light) in level
-        .lights
-        .iter()
-        .enumerate()
-        .filter(|(_, light)| light.enabled)
-    {
-        // A lantern illuminates its immediate masonry strongly, then gives
-        // way to darkness. The former very wide disc made its source look
-        // like a graphic overlay rather than a local lamp.
-        let glow_radius = light.radius * 0.54;
-        let mesh = meshes.add(create_lantern_glow_mesh(
-            glow_radius,
-            light.color,
-            light.intensity,
-        ));
-        commands.spawn((
-            InkPreviewShape {
-                scenario: scenario.0,
-            },
-            LanternGlow {
-                light_index,
-                mesh: mesh.clone(),
-            },
-            Mesh2d(mesh),
-            MeshMaterial2d(materials.add(ColorMaterial::default())),
-            Transform::from_translation(light.position.extend(BACKGROUND_LIGHT_DEPTH)),
         ));
     }
 }
@@ -575,6 +529,7 @@ fn spawn_ink_platform(
     scenario: u8,
     platform_index: usize,
     platform: &Platform,
+    is_ice: bool,
     brick_texture: &Handle<Image>,
     lights: &[LightDefinition],
     counterbalance_platform: Option<usize>,
@@ -605,6 +560,11 @@ fn spawn_ink_platform(
     );
     let texture_material = materials.add(ColorMaterial {
         texture: Some(brick_texture.clone()),
+        color: if is_ice {
+            game_palette::color(game_palette::ICE_SURFACE)
+        } else {
+            Color::WHITE
+        },
         // Anchoring UV zero in world space keeps the pattern continuous where
         // two independently-authored structures meet or overlap.
         uv_transform: Affine2::from_scale_angle_translation(texture_scale, 0.0, texture_origin),
@@ -656,79 +616,6 @@ fn lit_rectangle_mesh(size: Vec2, center: Vec2, lights: &[LightDefinition]) -> M
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     mesh.insert_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3]));
     mesh
-}
-
-fn create_lantern_glow_mesh(radius: f32, color: [f32; 3], intensity: f32) -> Mesh {
-    let mut positions = Vec::with_capacity(LIGHT_GLOW_SEGMENTS + 2);
-    let mut colors = Vec::with_capacity(LIGHT_GLOW_SEGMENTS + 2);
-    let mut indices = Vec::with_capacity(LIGHT_GLOW_SEGMENTS * 3);
-    positions.push([0.0, 0.0, 0.0]);
-    colors.push([
-        color[0],
-        color[1],
-        color[2],
-        (0.24 * intensity).clamp(0.0, 0.36),
-    ]);
-    for index in 0..=LIGHT_GLOW_SEGMENTS {
-        let angle = index as f32 / LIGHT_GLOW_SEGMENTS as f32 * std::f32::consts::TAU;
-        let point = Vec2::from_angle(angle) * radius;
-        positions.push([point.x, point.y, 0.0]);
-        colors.push([color[0], color[1], color[2], 0.0]);
-    }
-    for index in 0..LIGHT_GLOW_SEGMENTS {
-        indices.extend_from_slice(&[0, index as u32 + 1, index as u32 + 2]);
-    }
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
-    );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-    mesh.insert_indices(Indices::U32(indices));
-    mesh
-}
-
-/// Applies the live lantern pulse to the soft glow behind the scene. The mesh
-/// stays allocated; updating only its vertex colours avoids visual popping.
-pub(super) fn sync_lantern_glows(
-    level: Res<Level>,
-    preview: Res<LightPulsePreview>,
-    profile: Res<LightingProfile>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut glows: Query<(&LanternGlow, &mut Transform), Without<CounterbalanceVisual>>,
-) {
-    for (glow, mut transform) in &mut glows {
-        let Some(light) = level.lights.get(glow.light_index) else {
-            continue;
-        };
-        let Some(mut mesh) = meshes.get_mut(&glow.mesh) else {
-            continue;
-        };
-        let mut colors = Vec::with_capacity(LIGHT_GLOW_SEGMENTS + 2);
-        colors.push([
-            light.color[0],
-            light.color[1],
-            light.color[2],
-            (0.24 * light.intensity * profile.glow_scale()).clamp(0.0, 0.36),
-        ]);
-        colors.extend(std::iter::repeat_n(
-            [light.color[0], light.color[1], light.color[2], 0.0],
-            LIGHT_GLOW_SEGMENTS + 1,
-        ));
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-
-        // Changing alpha alone is barely perceptible against the dark ink
-        // background. A small radius change makes the normal pulse readable;
-        // test mode amplifies the same relation without touching JSON data.
-        let ratio = (light.intensity / light.base_intensity.max(f32::EPSILON)).clamp(0.0, 2.0);
-        let pulse_scale = if preview.enabled {
-            0.74 + ratio * 0.36
-        } else {
-            0.90 + ratio * 0.10
-        };
-        let radius_scale = light.radius / light.base_radius.max(f32::EPSILON);
-        transform.scale = Vec3::splat(pulse_scale * radius_scale * profile.glow_scale());
-    }
 }
 
 // Scenario 0 is the startup instance of level 1; pressing 1 explicitly assigns 1.
@@ -1157,9 +1044,7 @@ mod membrane_detail_tests {
             position: Vec2::new(20.0, 0.0),
             color: [1.0, 0.3, 0.1],
             radius: 100.0,
-            base_radius: 100.0,
             intensity: 1.0,
-            base_intensity: 1.0,
             enabled: true,
         };
         let facing = blob_vertex_light(Vec2::ZERO, Vec2::X, &[light], false);
@@ -1177,9 +1062,7 @@ mod membrane_detail_tests {
             position: Vec2::new(10.0, 0.0),
             color: [1.0, 1.0, 1.0],
             radius: 100.0,
-            base_radius: 100.0,
             intensity: 2.0,
-            base_intensity: 2.0,
             enabled: false,
         };
 
