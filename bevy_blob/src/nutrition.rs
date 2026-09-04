@@ -26,11 +26,11 @@ use membrane::{
     circle_outside_blob_membrane, constrain_protrusion_load, membrane_anchor,
     membrane_lower_boundary, phagocytosis_path_clear,
 };
-pub(super) use physics::{NutrientPhysics, spawn_nutrient_bodies};
 use physics::{
-    free_nutrient_contact_radius, sync_free_nutrients_before_digestion,
+    FreeNutrientFrame, free_nutrient_contact_radius, sync_free_nutrients_before_digestion,
     sync_nutrient_bodies_after_digestion,
 };
+pub(super) use physics::{NutrientPhysics, spawn_nutrient_bodies};
 use render::update_nutrient_mesh;
 #[cfg(test)]
 use render::{append_nutrient_mesh, nutrient_palette};
@@ -119,10 +119,12 @@ pub(super) fn simulate_nutrition(
     let elapsed = time.elapsed_secs();
     let rolling_command = movement_command(&keyboard);
     sync_free_nutrients_before_digestion(
-        dt,
-        elapsed,
-        &blobs,
-        &level,
+        FreeNutrientFrame {
+            dt,
+            elapsed,
+            blobs: &blobs,
+            level: &level,
+        },
         &mut nutrition,
         &mut sound_events,
         &mut wastewater_effects,

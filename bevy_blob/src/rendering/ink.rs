@@ -3,6 +3,9 @@
 
 use super::*;
 
+type ForegroundVisibilityQuery<'w, 's> =
+    Query<'w, 's, &'static mut Visibility, Or<(With<ForegroundArtwork>, With<InkForeground>)>>;
+
 pub(crate) fn sync_counterbalance_visuals(
     level: Res<Level>,
     mut visuals: Query<(&CounterbalanceVisual, &mut Transform)>,
@@ -43,7 +46,7 @@ pub(crate) fn toggle_ink_style(
 /// G hides only decorative foreground artwork for collision testing.
 pub(crate) fn toggle_foreground(
     keyboard: Res<ButtonInput<KeyCode>>,
-    mut foreground: Query<&mut Visibility, Or<(With<ForegroundArtwork>, With<InkForeground>)>>,
+    mut foreground: ForegroundVisibilityQuery,
 ) {
     if !keyboard.just_pressed(KeyCode::KeyG) {
         return;

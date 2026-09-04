@@ -30,10 +30,28 @@ pub(crate) struct BlobStepProfile {
     pub(crate) retain_tonicity: bool,
 }
 
+impl BlobStepProfile {
+    #[cfg(test)]
+    pub(crate) const fn new(vigor: f32, animate_idle: bool, retain_tonicity: bool) -> Self {
+        Self {
+            vigor,
+            animate_idle,
+            retain_tonicity,
+        }
+    }
+}
+
 impl Blob {
     #[cfg(test)]
     pub fn step(&mut self, dt: f32, horizontal: f32, charging: bool, platforms: &[Platform]) {
-        self.step_with_vigor(dt, horizontal, charging, platforms, &[], 1.0, true, true);
+        self.step_with_vigor(
+            dt,
+            horizontal,
+            charging,
+            platforms,
+            &[],
+            BlobStepProfile::new(1.0, true, true),
+        );
     }
 
     #[cfg(test)]
@@ -44,9 +62,7 @@ impl Blob {
         charging: bool,
         platforms: &[Platform],
         fixtures: &[Vec<Vec2>],
-        vigor: f32,
-        animate_idle: bool,
-        retain_tonicity: bool,
+        profile: BlobStepProfile,
     ) {
         self.step_with_vigor_on_ice(
             dt,
@@ -60,11 +76,7 @@ impl Blob {
                 glue_platform_indices: &[],
                 fixtures,
             },
-            BlobStepProfile {
-                vigor,
-                animate_idle,
-                retain_tonicity,
-            },
+            profile,
         );
     }
 
@@ -100,12 +112,6 @@ impl Blob {
             horizontal,
             charging,
         } = input;
-        let BlobStepEnvironment {
-            platforms,
-            ice_platform_indices,
-            glue_platform_indices,
-            fixtures,
-        } = environment;
         let BlobStepProfile {
             vigor,
             animate_idle,
@@ -189,99 +195,6 @@ impl Blob {
             jump.apply_to_particle(particle, &jump_particle_frame);
         }
         self.finish_jump_step(charging, jump);
-
-        self.grounded = false;
-        for _ in 0..SOLVER_ITERATIONS {
-            self.solve_edges();
-            self.solve_curvature();
-            self.solve_area();
-            self.limit_collapse();
-            self.limit_stretch();
-            self.solve_collisions(platforms, ice_platform_indices, glue_platform_indices);
-            self.solve_fixture_collisions(fixtures);
-            if self.repair_self_intersection() {
-                // The recovered contour may overlap the surface that caused
-                // the fold. Project it once more, then guarantee that the
-                // frame ends with a valid membrane topology.
-                self.solve_collisions(platforms, ice_platform_indices, glue_platform_indices);
-                self.solve_fixture_collisions(fixtures);
-                self.repair_self_intersection();
-            }
-        }
-        if animate_idle {
-            self.solve_idle_shape();
-        }
-        // Shape recovery and self-intersection repair can move a point after
-        // an iteration's collision pass. End every frame with environment
-        // projection so no membrane vertex remains embedded in level geometry.
-        self.solve_collisions(platforms, ice_platform_indices, glue_platform_indices);
-        self.solve_fixture_collisions(fixtures);
-        if self.repair_self_intersection() {
-            self.solve_collisions(platforms, ice_platform_indices, glue_platform_indices);
-            self.solve_fixture_collisions(fixtures);
-        }
-        if let Some(anchor_x) = idle_anchor_x {
-            // Contact projection after a local breath can otherwise retain a
-            // tiny lateral correction. A resting creature may deform, but it
-            // must not slowly walk across the platform by itself.
-            self.translate(Vec2::X * (anchor_x - self.center().x));
-        }
-        // Small fragments cover a larger fraction of their radius in one
-        // fixed step. Give their contact constraints extra passes without
-        // re-running input or jump impulses.
-        let maximum_travel = self
-            .particles
-            .iter()
-            .map(|particle| (particle.position - particle.previous).length())
-            .fold(0.0_f32, f32::max);
-        let contact_step = (self.rest_radius * 0.22).max(3.0);
-        let adaptive_passes = (maximum_travel / contact_step)
-            .ceil()
-            .clamp(1.0, MAX_ADAPTIVE_CONTACT_PASSES as f32) as usize;
-        for _ in 1..adaptive_passes {
-            self.solve_edges();
-            self.solve_curvature();
-            self.solve_area();
-            self.limit_collapse();
-            self.limit_stretch();
-            self.solve_collisions(platforms, ice_platform_indices, glue_platform_indices);
-            self.solve_fixture_collisions(fixtures);
-            self.repair_self_intersection();
-        }
-        self.last_impact_speed /= dt.max(0.000_001);
-    }
-
-    /// Removes rolling velocity without changing centre-of-mass translation.
-    /// The body can still deform in flight, but it no longer inherits a spin
-    /// that was generated by ground traction.
-    pub(super) fn remove_angular_velocity(&mut self) {
-        let center = self.center();
-        let center_velocity = self
-            .particles
-            .iter()
-            .map(|particle| particle.position - particle.previous)
-            .sum::<Vec2>()
-            / self.particles.len() as f32;
-        let (angular_momentum, inertia) =
-            self.particles
-                .iter()
-                .fold((0.0, 0.0), |(momentum, inertia), particle| {
-                    let offset = particle.position - center;
-                    let relative_velocity = particle.position - particle.previous - center_velocity;
-                    (
-                        momentum + offset.perp_dot(relative_velocity),
-                        inertia + offset.length_squared(),
-                    )
-                });
-        if inertia <= 0.001 {
-            return;
-        }
-        let angular_displacement = angular_momentum / inertia;
-        for particle in &mut self.particles {
-            let offset = particle.position - center;
-            let velocity = particle.position - particle.previous;
-            let without_spin = velocity - offset.perp() * angular_displacement;
-            particle.previous = particle.position - without_spin;
-        }
+        self.solve_movement_constraints(environment, animate_idle, idle_anchor_x, dt);
     }
 }

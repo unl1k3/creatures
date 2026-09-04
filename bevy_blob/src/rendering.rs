@@ -113,7 +113,7 @@ pub(super) use body::create_blob_mesh;
 use body::{create_blob_mesh_with_load, update_blob_mesh_with_load};
 pub(super) use contour::charge_indicator_radius;
 use contour::{RenderedBlobContour, RenderedMembranePoint, rendered_membrane_points};
-use membrane::update_blob_outline_mesh;
+use membrane::{MembraneRenderContext, update_blob_outline_mesh};
 #[cfg(test)]
 pub(super) use palette::blob_family_color;
 #[cfg(test)]
@@ -187,16 +187,18 @@ mod membrane_detail_tests {
         );
         update_blob_outline_mesh(
             &mut mesh,
-            &blob,
-            None,
-            true,
-            None,
-            Vitality::default(),
-            &[],
-            0,
-            0.0,
-            1.0,
-            &[],
+            MembraneRenderContext {
+                blob: &blob,
+                load: None,
+                selected: true,
+                parent_id: None,
+                vitality: Vitality::default(),
+                lights: &[],
+                blob_id: 0,
+                shield_extension: 0.0,
+                shield_energy: 1.0,
+                platforms: &[],
+            },
         );
 
         assert_eq!(

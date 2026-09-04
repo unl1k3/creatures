@@ -1,45 +1,85 @@
 //! Lifecycle synchronization for blob render entities.
 
 use super::*;
+use bevy::ecs::system::SystemParam;
 use std::collections::HashSet;
+
+type BlobBodies<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static mut BlobMesh,
+        &'static Mesh2d,
+        &'static MeshMaterial2d<ColorMaterial>,
+    ),
+    (With<BlobMesh>, Without<BlobOutlineMesh>),
+>;
+
+type BlobOutlines<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static mut BlobOutlineMesh,
+        &'static Mesh2d,
+        &'static MeshMaterial2d<ColorMaterial>,
+    ),
+    (With<BlobOutlineMesh>, Without<BlobMesh>),
+>;
+
+type BlobVacuoles<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static BlobVacuoleMesh, &'static Mesh2d),
+    (
+        With<BlobVacuoleMesh>,
+        Without<BlobMesh>,
+        Without<BlobOutlineMesh>,
+    ),
+>;
+
+/// Read-only biological state and mutable render assets for blob visuals.
+#[derive(SystemParam)]
+pub(crate) struct BlobRenderParams<'w> {
+    blobs: Res<'w, BlobWorld>,
+    level: Res<'w, Level>,
+    time: Res<'w, Time>,
+    vitality: Res<'w, VitalityWorld>,
+    nutrition: Res<'w, NutritionWorld>,
+    shields: Res<'w, ShieldWorld>,
+    meshes: ResMut<'w, Assets<Mesh>>,
+    materials: ResMut<'w, Assets<ColorMaterial>>,
+}
+
+/// The three independent entity layers composing each rendered blob.
+#[derive(SystemParam)]
+pub(crate) struct BlobRenderEntities<'w, 's> {
+    bodies: BlobBodies<'w, 's>,
+    outlines: BlobOutlines<'w, 's>,
+    vacuoles: BlobVacuoles<'w, 's>,
+}
 
 pub(crate) fn sync_blob_meshes(
     mut commands: Commands,
-    blobs: Res<BlobWorld>,
-    level: Res<Level>,
-    time: Res<Time>,
-    vitality_world: Res<VitalityWorld>,
-    nutrition: Res<NutritionWorld>,
-    shields: Res<ShieldWorld>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-    mut rendered: Query<
-        (
-            Entity,
-            &mut BlobMesh,
-            &Mesh2d,
-            &MeshMaterial2d<ColorMaterial>,
-        ),
-        (With<BlobMesh>, Without<BlobOutlineMesh>),
-    >,
-    mut outlines: Query<
-        (
-            Entity,
-            &mut BlobOutlineMesh,
-            &Mesh2d,
-            &MeshMaterial2d<ColorMaterial>,
-        ),
-        (With<BlobOutlineMesh>, Without<BlobMesh>),
-    >,
-    mut vacuoles: Query<
-        (Entity, &BlobVacuoleMesh, &Mesh2d),
-        (
-            With<BlobVacuoleMesh>,
-            Without<BlobMesh>,
-            Without<BlobOutlineMesh>,
-        ),
-    >,
+    params: BlobRenderParams,
+    entities: BlobRenderEntities,
 ) {
+    let BlobRenderParams {
+        blobs,
+        level,
+        time,
+        vitality,
+        nutrition,
+        shields,
+        mut meshes,
+        mut materials,
+    } = params;
+    let BlobRenderEntities {
+        mut bodies,
+        mut outlines,
+        mut vacuoles,
+    } = entities;
     let active_ids = blobs
         .active
         .iter()
@@ -47,7 +87,7 @@ pub(crate) fn sync_blob_meshes(
         .collect::<HashSet<_>>();
     let mut rendered_ids = HashSet::new();
 
-    for (entity, mut marker, mesh_handle, material_handle) in &mut rendered {
+    for (entity, mut marker, mesh_handle, material_handle) in &mut bodies {
         let Some(active_blob) = blobs.active.iter().find(|blob| blob.id == marker.blob_id) else {
             commands.entity(entity).despawn();
             continue;
@@ -66,7 +106,7 @@ pub(crate) fn sync_blob_meshes(
             .active
             .get(blobs.selected)
             .is_some_and(|blob| blob.id == active_blob.id);
-        let vitality = vitality_world.get(active_blob.id);
+        let vitality = vitality.get(active_blob.id);
         let energy_band = (vitality.energy * 20.0).round() as u8;
         if marker.parent_id != active_blob.parent_id
             || marker.selected != selected
@@ -97,7 +137,7 @@ pub(crate) fn sync_blob_meshes(
             nutrition.internal_load(active_blob.id),
             &level.lights,
         ));
-        let vitality = vitality_world.get(active_blob.id);
+        let vitality = vitality.get(active_blob.id);
         let material = materials.add(ColorMaterial::from(blob_vital_color(
             active_blob.parent_id,
             selected,
@@ -128,20 +168,22 @@ pub(crate) fn sync_blob_meshes(
             .active
             .get(blobs.selected)
             .is_some_and(|blob| blob.id == active_blob.id);
-        let vitality = vitality_world.get(active_blob.id);
+        let vitality = vitality.get(active_blob.id);
         if let Some(mut mesh) = meshes.get_mut(&mesh_handle.0) {
             update_blob_outline_mesh(
                 &mut mesh,
-                &active_blob.body,
-                nutrition.internal_load(active_blob.id),
-                selected,
-                active_blob.parent_id,
-                vitality,
-                &level.lights,
-                active_blob.id,
-                shields.extension(active_blob.id),
-                shields.energy(active_blob.id),
-                &level.platforms,
+                MembraneRenderContext {
+                    blob: &active_blob.body,
+                    load: nutrition.internal_load(active_blob.id),
+                    selected,
+                    parent_id: active_blob.parent_id,
+                    vitality,
+                    lights: &level.lights,
+                    blob_id: active_blob.id,
+                    shield_extension: shields.extension(active_blob.id),
+                    shield_energy: shields.energy(active_blob.id),
+                    platforms: &level.platforms,
+                },
             );
         }
         if marker.selected != selected || marker.life_state != vitality.state {
@@ -158,23 +200,25 @@ pub(crate) fn sync_blob_meshes(
             .active
             .get(blobs.selected)
             .is_some_and(|blob| blob.id == active_blob.id);
-        let vitality = vitality_world.get(active_blob.id);
+        let vitality = vitality.get(active_blob.id);
         let mut mesh = Mesh::new(
             PrimitiveTopology::TriangleList,
             RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
         );
         update_blob_outline_mesh(
             &mut mesh,
-            &active_blob.body,
-            nutrition.internal_load(active_blob.id),
-            selected,
-            active_blob.parent_id,
-            vitality,
-            &level.lights,
-            active_blob.id,
-            shields.extension(active_blob.id),
-            shields.energy(active_blob.id),
-            &level.platforms,
+            MembraneRenderContext {
+                blob: &active_blob.body,
+                load: nutrition.internal_load(active_blob.id),
+                selected,
+                parent_id: active_blob.parent_id,
+                vitality,
+                lights: &level.lights,
+                blob_id: active_blob.id,
+                shield_extension: shields.extension(active_blob.id),
+                shield_energy: shields.energy(active_blob.id),
+                platforms: &level.platforms,
+            },
         );
         commands.spawn((
             BlobOutlineMesh {
@@ -201,7 +245,7 @@ pub(crate) fn sync_blob_meshes(
                 &mut mesh,
                 active_blob,
                 elapsed,
-                vitality_world.get(active_blob.id).is_alive(),
+                vitality.get(active_blob.id).is_alive(),
                 &level.lights,
             );
         }
@@ -219,7 +263,7 @@ pub(crate) fn sync_blob_meshes(
             &mut mesh,
             active_blob,
             elapsed,
-            vitality_world.get(active_blob.id).is_alive(),
+            vitality.get(active_blob.id).is_alive(),
             &level.lights,
         );
         commands.spawn((

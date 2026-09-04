@@ -65,9 +65,7 @@ mod tests {
                 false,
                 &level.platforms,
                 &level.fixtures,
-                1.0,
-                true,
-                true,
+                BlobStepProfile::new(1.0, true, true),
             );
         }
 
@@ -92,9 +90,7 @@ mod tests {
                     false,
                     &level.platforms,
                     &level.fixtures,
-                    1.0,
-                    true,
-                    true,
+                    BlobStepProfile::new(1.0, true, true),
                 );
             }
             resolve_blob_collisions(&mut children);
@@ -112,9 +108,7 @@ mod tests {
                     false,
                     &level.platforms,
                     &level.fixtures,
-                    1.0,
-                    true,
-                    true,
+                    BlobStepProfile::new(1.0, true, true),
                 );
             }
             resolve_blob_collisions(&mut children);
@@ -534,16 +528,44 @@ mod tests {
         let dt = 1.0 / 120.0;
 
         for _ in 0..45 {
-            blob.step_with_vigor(dt, 0.0, false, &platforms, &[], 1.0, true, true);
+            blob.step_with_vigor(
+                dt,
+                0.0,
+                false,
+                &platforms,
+                &[],
+                BlobStepProfile::new(1.0, true, true),
+            );
         }
         for _ in 0..90 {
-            blob.step_with_vigor(dt, 0.0, true, &platforms, &[], 1.0, true, true);
+            blob.step_with_vigor(
+                dt,
+                0.0,
+                true,
+                &platforms,
+                &[],
+                BlobStepProfile::new(1.0, true, true),
+            );
         }
-        blob.step_with_vigor(dt, 0.0, false, &platforms, &[], 1.0, true, true);
+        blob.step_with_vigor(
+            dt,
+            0.0,
+            false,
+            &platforms,
+            &[],
+            BlobStepProfile::new(1.0, true, true),
+        );
 
         let mut reached_ceiling = false;
         for _ in 0..180 {
-            blob.step_with_vigor(dt, 0.0, false, &platforms, &[], 1.0, true, true);
+            blob.step_with_vigor(
+                dt,
+                0.0,
+                false,
+                &platforms,
+                &[],
+                BlobStepProfile::new(1.0, true, true),
+            );
             reached_ceiling |= blob.center().y + radius >= overhead.center.y - overhead.half_size.y;
             assert!(blob.particles.iter().all(|particle| {
                 let inside_x = (particle.position.x - overhead.center.x).abs()

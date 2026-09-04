@@ -1,6 +1,24 @@
 //! Procedural wastewater bubbles, bursts, and impact splashes.
 
 use super::*;
+use bevy::ecs::system::SystemParam;
+
+type BubbleBodies<'w, 's> =
+    Query<'w, 's, (Entity, &'static WastewaterBubble, &'static mut Transform)>;
+
+/// Runtime state and rendering assets used by the wastewater bubble system.
+#[derive(SystemParam)]
+pub(crate) struct BubbleSimulation<'w, 's> {
+    time: Res<'w, Time>,
+    scenario: Res<'w, TestScenario>,
+    level: Res<'w, Level>,
+    assets: Res<'w, AmbientDropAssets>,
+    effect_materials: ResMut<'w, WastewaterEffectMaterials>,
+    materials: ResMut<'w, Assets<ColorMaterial>>,
+    effects: ResMut<'w, WastewaterEffects>,
+    state: ResMut<'w, WastewaterBubbleState>,
+    bubbles: BubbleBodies<'w, 's>,
+}
 
 pub(crate) fn simulate_wastewater_impacts(
     mut commands: Commands,
@@ -35,17 +53,20 @@ pub(crate) fn simulate_wastewater_impacts(
 
 pub(crate) fn simulate_wastewater_bubbles(
     mut commands: Commands,
-    time: Res<Time>,
-    scenario: Res<TestScenario>,
-    level: Res<Level>,
-    assets: Res<AmbientDropAssets>,
-    mut effect_materials: ResMut<WastewaterEffectMaterials>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-    mut effects: ResMut<WastewaterEffects>,
-    mut state: ResMut<WastewaterBubbleState>,
-    mut bubbles: Query<(Entity, &WastewaterBubble, &mut Transform)>,
+    simulation: BubbleSimulation,
     mut sound_events: MessageWriter<BlobSoundEvent>,
 ) {
+    let BubbleSimulation {
+        time,
+        scenario,
+        level,
+        assets,
+        mut effect_materials,
+        mut materials,
+        mut effects,
+        mut state,
+        mut bubbles,
+    } = simulation;
     let dt = time.delta_secs().min(1.0 / 20.0);
     let visible = !level.wastewater_areas.is_empty();
     if !visible {

@@ -120,8 +120,8 @@ fn digestive_penalty_recovers_as_absorption_progresses() {
 
 #[test]
 fn engulfing_and_expulsion_are_not_instantaneous() {
-    assert!(ENGULF_DURATION > 0.5);
-    assert!(EXPULSION_DURATION > 0.3);
+    const { assert!(ENGULF_DURATION > 0.5) };
+    const { assert!(EXPULSION_DURATION > 0.3) };
 }
 
 #[test]

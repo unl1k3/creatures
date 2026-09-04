@@ -1,6 +1,19 @@
 //! Gizmo-based world, mechanism, and debug visualization.
 
 use super::*;
+use bevy::ecs::system::SystemParam;
+
+/// Read-only gameplay state consumed by gizmo-based world rendering.
+#[derive(SystemParam)]
+pub(crate) struct WorldDrawingState<'w> {
+    blobs: Res<'w, BlobWorld>,
+    vitality: Res<'w, VitalityWorld>,
+    level: Res<'w, Level>,
+    debug_overlay: Res<'w, LevelDebugOverlay>,
+    route_progress: Res<'w, RouteProgress>,
+    nutrition: Res<'w, NutritionWorld>,
+    ink_style: Res<'w, InkStylePreview>,
+}
 
 /// Draws a thin, slightly twisted ink rope instead of a single debug line.
 fn draw_ink_rope(gizmos: &mut Gizmos, start: Vec2, end: Vec2, ink: Color) {
@@ -33,16 +46,16 @@ fn draw_ink_rope(gizmos: &mut Gizmos, start: Vec2, end: Vec2, ink: Color) {
     }
 }
 
-pub(crate) fn draw_world(
-    mut gizmos: Gizmos,
-    blobs: Res<BlobWorld>,
-    vitality_world: Res<VitalityWorld>,
-    level: Res<Level>,
-    debug_overlay: Res<LevelDebugOverlay>,
-    route_progress: Res<RouteProgress>,
-    nutrition: Res<NutritionWorld>,
-    ink_style: Res<InkStylePreview>,
-) {
+pub(crate) fn draw_world(mut gizmos: Gizmos, state: WorldDrawingState) {
+    let WorldDrawingState {
+        blobs,
+        vitality: vitality_world,
+        level,
+        debug_overlay,
+        route_progress,
+        nutrition,
+        ink_style,
+    } = state;
     // Counterbalances are rendered as ink mechanisms, not as debug volumes.
     for balance in &level.counterbalances {
         if let (Some(plate), Some(gate)) = (

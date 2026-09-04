@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn acid_is_reserved_for_large_enough_blobs() {
-        assert!(MIN_ACID_RADIUS > INITIAL_RADIUS * 0.5);
+        const { assert!(MIN_ACID_RADIUS > INITIAL_RADIUS * 0.5) };
         assert_eq!(acid_drop_count(MIN_ACID_RADIUS), 5);
         assert!(acid_drop_count(INITIAL_RADIUS) >= 12);
     }

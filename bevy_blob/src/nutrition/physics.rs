@@ -12,6 +12,14 @@ pub(crate) struct NutrientPhysics {
     pub(crate) index: usize,
 }
 
+/// Read-only inputs shared by every free nutrient during one fixed step.
+pub(super) struct FreeNutrientFrame<'a> {
+    pub(super) dt: f32,
+    pub(super) elapsed: f32,
+    pub(super) blobs: &'a BlobWorld,
+    pub(super) level: &'a Level,
+}
+
 /// Rebuilds the Avian bodies that own free nutrient and residue motion.
 /// Scenario changes call this after replacing the JSON-derived definitions.
 pub(crate) fn spawn_nutrient_bodies(commands: &mut Commands, definitions: &[NutrientDefinition]) {
@@ -120,10 +128,7 @@ pub(super) fn resolve_free_nutrient_penetration(
 /// Synchronizes Avian's already-solved free-body motion into the biological
 /// state and applies water forces for the following physics step.
 pub(super) fn sync_free_nutrients_before_digestion(
-    dt: f32,
-    elapsed: f32,
-    blobs: &BlobWorld,
-    level: &Level,
+    frame: FreeNutrientFrame<'_>,
     nutrition: &mut NutritionWorld,
     sound_events: &mut MessageWriter<BlobSoundEvent>,
     wastewater_effects: &mut WastewaterEffects,
@@ -153,8 +158,8 @@ pub(super) fn sync_free_nutrients_before_digestion(
             &mut position,
             &mut velocity,
             contact_radius,
-            level,
-            blobs,
+            frame.level,
+            frame.blobs,
         );
         if structure_impact >= 110.0 {
             sound_events.write(BlobSoundEvent::NutrientImpact {
@@ -170,9 +175,9 @@ pub(super) fn sync_free_nutrients_before_digestion(
             nutrient.position,
             contact_radius,
             &mut velocity,
-            dt,
-            elapsed,
-            level,
+            frame.dt,
+            frame.elapsed,
+            frame.level,
         );
         if let Some((area_index, surface_y)) = surface {
             if !nutrient.was_submerged {

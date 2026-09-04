@@ -1,6 +1,44 @@
 //! Runtime lifecycle and gameplay systems for the active level.
 
 use super::*;
+#[cfg(feature = "dev-tools")]
+use bevy::ecs::system::SystemParam;
+
+#[cfg(feature = "dev-tools")]
+type ScenarioEntityFilter = Or<(
+    With<EnvironmentCollider>,
+    With<LevelArtwork>,
+    With<LevelChain>,
+    With<NutrientPhysics>,
+)>;
+
+/// Render assets required when rebuilding a development scenario.
+#[cfg(feature = "dev-tools")]
+#[derive(SystemParam)]
+pub(crate) struct ScenarioAssets<'w> {
+    asset_server: Option<Res<'w, AssetServer>>,
+    meshes: Option<ResMut<'w, Assets<Mesh>>>,
+    materials: Option<ResMut<'w, Assets<ColorMaterial>>>,
+}
+
+/// Mutable gameplay state reset as one atomic scenario transition.
+#[cfg(feature = "dev-tools")]
+#[derive(SystemParam)]
+pub(crate) struct ScenarioState<'w> {
+    scenario: ResMut<'w, TestScenario>,
+    route_progress: ResMut<'w, RouteProgress>,
+    level: ResMut<'w, Level>,
+    blobs: ResMut<'w, BlobWorld>,
+    vitality: ResMut<'w, VitalityWorld>,
+    nutrition: ResMut<'w, NutritionWorld>,
+}
+
+/// All transient entities owned by the currently loaded scenario.
+#[cfg(feature = "dev-tools")]
+#[derive(SystemParam)]
+pub(crate) struct ScenarioEntities<'w, 's> {
+    all: Query<'w, 's, Entity, ScenarioEntityFilter>,
+}
 
 /// Spawns the embedded production level and initializes its runtime state.
 pub(crate) fn setup_environment(
@@ -29,19 +67,9 @@ pub(crate) fn setup_environment(
 pub(crate) fn switch_test_scenario(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
-    colliders: Query<Entity, With<EnvironmentCollider>>,
-    artwork: Query<Entity, With<LevelArtwork>>,
-    chains: Query<Entity, With<LevelChain>>,
-    asset_server: Option<Res<AssetServer>>,
-    meshes: Option<ResMut<Assets<Mesh>>>,
-    materials: Option<ResMut<Assets<ColorMaterial>>>,
-    mut scenario: ResMut<TestScenario>,
-    mut route_progress: ResMut<RouteProgress>,
-    mut level: ResMut<Level>,
-    mut blobs: ResMut<BlobWorld>,
-    mut vitality: ResMut<VitalityWorld>,
-    mut nutrition: ResMut<NutritionWorld>,
-    nutrient_bodies: Query<Entity, With<NutrientPhysics>>,
+    assets: ScenarioAssets,
+    mut state: ScenarioState,
+    entities: ScenarioEntities,
 ) {
     // Modified number keys remain available for unrelated shortcuts.
     if keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
@@ -64,32 +92,25 @@ pub(crate) fn switch_test_scenario(
         return;
     };
 
-    for entity in &colliders {
-        commands.entity(entity).despawn();
-    }
-    for entity in &artwork {
-        commands.entity(entity).despawn();
-    }
-    for entity in &chains {
-        commands.entity(entity).despawn();
-    }
-    for entity in &nutrient_bodies {
+    for entity in &entities.all {
         commands.entity(entity).despawn();
     }
 
     let (new_level, spawn) = Level::test_scenario(requested);
-    spawn_level_artwork(&mut commands, asset_server.as_deref(), &new_level);
-    if let (Some(mut meshes), Some(mut materials)) = (meshes, materials) {
+    spawn_level_artwork(&mut commands, assets.asset_server.as_deref(), &new_level);
+    if let (Some(mut meshes), Some(mut materials)) = (assets.meshes, assets.materials) {
         spawn_level_chains(&mut commands, &new_level, &mut meshes, &mut materials);
     }
     spawn_level_colliders(&mut commands, &new_level);
-    *level = new_level;
-    scenario.0 = requested;
-    route_progress.next = 1;
-    reset_world_at(&mut blobs, spawn);
-    vitality.reset();
-    nutrition.reset_from_definitions(&level.nutrients);
-    spawn_nutrient_bodies(&mut commands, &level.nutrients);
+    *state.level = new_level;
+    state.scenario.0 = requested;
+    state.route_progress.next = 1;
+    reset_world_at(&mut state.blobs, spawn);
+    state.vitality.reset();
+    state
+        .nutrition
+        .reset_from_definitions(&state.level.nutrients);
+    spawn_nutrient_bodies(&mut commands, &state.level.nutrients);
 }
 
 /// Applies continuous damage to blobs intersecting authored hazard volumes.

@@ -3,6 +3,7 @@ use crate::palette;
 use bevy::{
     camera::{ClearColorConfig, RenderTarget, visibility::RenderLayers},
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
+    ecs::system::SystemParam,
     sprite::{Anchor, Text2dShadow},
     text::{FontWeight, TextBackgroundColor},
     window::{EnabledButtons, PrimaryWindow, WindowPosition, WindowRef, WindowResolution},
@@ -28,6 +29,55 @@ pub(super) struct MetricsWindow;
 
 #[derive(Component)]
 pub(super) struct MetricsText;
+
+type PrimaryGameWindow<'w, 's> = Single<
+    'w,
+    's,
+    &'static Window,
+    (
+        With<PrimaryWindow>,
+        Without<ControlsWindow>,
+        Without<MetricsWindow>,
+    ),
+>;
+type ControlsPanelWindow<'w, 's> = Single<
+    'w,
+    's,
+    &'static mut Window,
+    (
+        With<ControlsWindow>,
+        Without<PrimaryWindow>,
+        Without<MetricsWindow>,
+    ),
+>;
+type MetricsPanelWindow<'w, 's> = Single<
+    'w,
+    's,
+    &'static mut Window,
+    (
+        With<MetricsWindow>,
+        Without<PrimaryWindow>,
+        Without<ControlsWindow>,
+    ),
+>;
+
+#[derive(SystemParam)]
+pub(super) struct AuxiliaryWindows<'w, 's> {
+    primary: PrimaryGameWindow<'w, 's>,
+    controls: ControlsPanelWindow<'w, 's>,
+    metrics: MetricsPanelWindow<'w, 's>,
+}
+
+#[derive(SystemParam)]
+pub(super) struct MetricsSources<'w> {
+    diagnostics: Res<'w, DiagnosticsStore>,
+    blobs: Res<'w, BlobWorld>,
+    shields: Res<'w, ShieldWorld>,
+    acid: Res<'w, AcidWorld>,
+    vitality: Res<'w, VitalityWorld>,
+    nutrition: Res<'w, NutritionWorld>,
+    contacts: Res<'w, AvianContactDiagnostics>,
+}
 
 pub(super) fn setup_legend(mut commands: Commands) {
     commands.insert_resource(LegendState { visible: true });
@@ -118,33 +168,12 @@ pub(super) fn setup_legend(mut commands: Commands) {
     ));
 }
 
-pub(super) fn arrange_auxiliary_windows(
-    primary: Single<
-        &Window,
-        (
-            With<PrimaryWindow>,
-            Without<ControlsWindow>,
-            Without<MetricsWindow>,
-        ),
-    >,
-    mut controls: Single<
-        &mut Window,
-        (
-            With<ControlsWindow>,
-            Without<PrimaryWindow>,
-            Without<MetricsWindow>,
-        ),
-    >,
-    mut metrics: Single<
-        &mut Window,
-        (
-            With<MetricsWindow>,
-            Without<PrimaryWindow>,
-            Without<ControlsWindow>,
-        ),
-    >,
-    mut layout_frames: Local<u8>,
-) {
+pub(super) fn arrange_auxiliary_windows(windows: AuxiliaryWindows, mut layout_frames: Local<u8>) {
+    let AuxiliaryWindows {
+        primary,
+        mut controls,
+        mut metrics,
+    } = windows;
     // Winit may report the final DPI scale a few frames after creating native
     // windows. Reapply the layout briefly so all three windows use that scale.
     if *layout_frames >= 30 || primary.physical_width() == 0 {
@@ -178,58 +207,55 @@ pub(super) fn toggle_legend(
 }
 
 pub(super) fn update_metrics(
-    diagnostics: Res<DiagnosticsStore>,
-    blobs: Res<BlobWorld>,
-    shields: Res<ShieldWorld>,
-    acid: Res<AcidWorld>,
-    vitality_world: Res<VitalityWorld>,
-    nutrition: Res<NutritionWorld>,
-    avian_contacts: Res<AvianContactDiagnostics>,
+    sources: MetricsSources,
     mut metrics: Single<&mut Text2d, With<MetricsText>>,
 ) {
-    let fps = diagnostics
+    let fps = sources
+        .diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|diagnostic| diagnostic.smoothed())
         .unwrap_or(0.0);
-    let frame_time = diagnostics
+    let frame_time = sources
+        .diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
         .and_then(|diagnostic| diagnostic.smoothed())
         .unwrap_or(0.0);
-    let Some(selected) = blobs.active.get(blobs.selected) else {
+    let Some(selected) = sources.blobs.active.get(sources.blobs.selected) else {
         return;
     };
-    let vitality = vitality_world.get(selected.id);
+    let vitality = sources.vitality.get(selected.id);
     let state = match vitality.state {
         LifeState::Alive => "alive",
         LifeState::Corpse(DeathCause::Wasting) => "corpse: wasting",
         LifeState::Corpse(DeathCause::Trauma) => "corpse: trauma",
     };
-    let digestion = nutrition
+    let digestion = sources
+        .nutrition
         .digestion_progress(selected.id)
         .map(|progress| format!("{:5.1}%", progress * 100.0))
         .unwrap_or_else(|| "   -- ".to_string());
     metrics.0 = format!(
         "METRICS\n\nFPS          {fps:5.1}\nFrame        {frame_time:5.2} ms\nPhysics      120 Hz\nLighting     diffuse sewer\nBlobs        {}\nPoints       {}\nSize         {:5.1}%\nState        {state}\nEnergy       {:5.1}%\nDigestion    {digestion}\nCapacity     {:5.1}%\nHealth       {:5.1}%\nTrauma       {:5.1}%\nImpact       {:5.0}\nShield       {:5.1}%\nAcid drops   {}\nAvian touch  {} / {}\nAgreement    {:5.1}%\nContact pts  {}\nSurfaces     {}\nGround pts   {}\nMax depth    {:5.2}\nSpan         {:5.1}\nFixture fix  {}\nLateral fix  {}\nShared skip  {}",
-        blobs.active.len(),
+        sources.blobs.active.len(),
         selected.body.particles.len(),
         selected.body.rest_radius / INITIAL_RADIUS * 100.0,
         vitality.energy * 100.0,
-        nutrition.capability_factor(selected.id) * 100.0,
+        sources.nutrition.capability_factor(selected.id) * 100.0,
         vitality.health * 100.0,
         vitality.trauma.min(1.0) * 100.0,
         vitality.last_impact,
-        shields.energy(selected.id) * 100.0,
-        acid.drops.len(),
-        avian_contacts.avian_contacts,
-        avian_contacts.legacy_contacts,
-        avian_contacts.agreement * 100.0,
-        avian_contacts.selected_particles,
-        avian_contacts.selected_surfaces,
-        avian_contacts.selected_ground_contacts,
-        avian_contacts.selected_max_depth,
-        avian_contacts.selected_contact_span,
-        avian_contacts.fixture_corrections,
-        avian_contacts.lateral_fixture_corrections,
-        avian_contacts.shared_edge_corrections,
+        sources.shields.energy(selected.id) * 100.0,
+        sources.acid.drops.len(),
+        sources.contacts.avian_contacts,
+        sources.contacts.legacy_contacts,
+        sources.contacts.agreement * 100.0,
+        sources.contacts.selected_particles,
+        sources.contacts.selected_surfaces,
+        sources.contacts.selected_ground_contacts,
+        sources.contacts.selected_max_depth,
+        sources.contacts.selected_contact_span,
+        sources.contacts.fixture_corrections,
+        sources.contacts.lateral_fixture_corrections,
+        sources.contacts.shared_edge_corrections,
     );
 }

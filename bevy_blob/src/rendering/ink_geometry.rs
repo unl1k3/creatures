@@ -2,6 +2,18 @@
 
 use super::*;
 
+/// Authored and derived properties needed to draw one platform slab.
+struct InkPlatformSpec<'a> {
+    scenario: u8,
+    index: usize,
+    platform: &'a Platform,
+    is_ice: bool,
+    is_glue: bool,
+    brick_texture: &'a Handle<Image>,
+    lights: &'a [LightDefinition],
+    moves_with_counterbalance: bool,
+}
+
 /// Builds the visible collision silhouettes from the level's authored
 /// platforms and convex fixtures. It never creates or changes physics bodies.
 pub(super) fn spawn_ink_level_geometry(
@@ -35,21 +47,19 @@ pub(super) fn spawn_ink_level_geometry(
             commands,
             meshes,
             materials,
-            scenario,
-            platform_index,
-            platform,
-            level.ice_platforms.contains(&platform_index),
-            level.glue_platforms.contains(&platform_index),
-            &brick_texture,
-            &level.lights,
-            level
-                .counterbalances
-                .iter()
-                .any(|balance| {
+            InkPlatformSpec {
+                scenario,
+                index: platform_index,
+                platform,
+                is_ice: level.ice_platforms.contains(&platform_index),
+                is_glue: level.glue_platforms.contains(&platform_index),
+                brick_texture: &brick_texture,
+                lights: &level.lights,
+                moves_with_counterbalance: level.counterbalances.iter().any(|balance| {
                     balance.gate_platform == platform_index
                         || balance.plate_platform == platform_index
-                })
-                .then_some(platform_index),
+                }),
+            },
         );
     }
     let fixture_material = materials.add(ColorMaterial {
@@ -140,15 +150,18 @@ fn spawn_ink_platform(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<ColorMaterial>,
-    scenario: u8,
-    platform_index: usize,
-    platform: &Platform,
-    is_ice: bool,
-    is_glue: bool,
-    brick_texture: &Handle<Image>,
-    lights: &[LightDefinition],
-    counterbalance_platform: Option<usize>,
+    spec: InkPlatformSpec<'_>,
 ) {
+    let InkPlatformSpec {
+        scenario,
+        index: platform_index,
+        platform,
+        is_ice,
+        is_glue,
+        brick_texture,
+        lights,
+        moves_with_counterbalance,
+    } = spec;
     // Level 1's ordinary horizontal platforms are 28 world units tall. The
     // artwork's 40-pixel tile is calibrated to their visible inner height so
     // it displays exactly its authored two rows there. All other rectangles
@@ -197,7 +210,7 @@ fn spawn_ink_platform(
                 .extend(PLATFORM_TEXTURE_DEPTH + platform_index as f32 * PLATFORM_DEPTH_STEP),
         ),
     ));
-    if let Some(platform_index) = counterbalance_platform {
+    if moves_with_counterbalance {
         fill.insert(CounterbalanceVisual { platform_index });
     }
 }

@@ -1,6 +1,23 @@
 use super::palette::blob_family_rgb;
 use super::*;
 
+/// Mutable vertex streams shared by all internal blob details.
+struct DetailMeshBuffers<'a> {
+    positions: &'a mut Vec<[f32; 3]>,
+    colors: &'a mut Vec<[f32; 4]>,
+    indices: &'a mut Vec<u32>,
+}
+
+/// Geometry and lighting references used to place the grime patches.
+struct GrimeContext<'a> {
+    active_blob: &'a ActiveBlob,
+    alive: bool,
+    lights: &'a [LightDefinition],
+    center: Vec2,
+    material_rotation: Vec2,
+    polygon: &'a [Vec2],
+}
+
 pub(super) fn update_blob_vacuole_mesh(
     mesh: &mut Mesh,
     active_blob: &ActiveBlob,
@@ -112,25 +129,23 @@ pub(super) fn update_blob_vacuole_mesh(
         }
     }
 
+    let mut buffers = DetailMeshBuffers {
+        positions: &mut positions,
+        colors: &mut colors,
+        indices: &mut indices,
+    };
     append_grime_mottles(
-        &mut positions,
-        &mut colors,
-        &mut indices,
-        active_blob,
-        alive,
-        lights,
-        center,
-        material_rotation,
-        &polygon,
+        &mut buffers,
+        GrimeContext {
+            active_blob,
+            alive,
+            lights,
+            center,
+            material_rotation,
+            polygon: &polygon,
+        },
     );
-    append_rotation_edge_mark(
-        &mut positions,
-        &mut colors,
-        &mut indices,
-        active_blob,
-        alive,
-        lights,
-    );
+    append_rotation_edge_mark(&mut buffers, active_blob, alive, lights);
 
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
@@ -141,9 +156,7 @@ pub(super) fn update_blob_vacuole_mesh(
 /// Unlike the interior grime it is deliberately prominent: it gives the
 /// player an intuitive reference for rolling and water-induced rotation.
 fn append_rotation_edge_mark(
-    positions: &mut Vec<[f32; 3]>,
-    colors: &mut Vec<[f32; 4]>,
-    indices: &mut Vec<u32>,
+    buffers: &mut DetailMeshBuffers<'_>,
     active_blob: &ActiveBlob,
     alive: bool,
     lights: &[LightDefinition],
@@ -166,7 +179,7 @@ fn append_rotation_edge_mark(
     // Pull the patch slightly inward so it seats into, rather than floats
     // outside, the translucent membrane.
     let mark_center = boundary - outward * radial_radius * 0.62;
-    let first_vertex = positions.len() as u32;
+    let first_vertex = buffers.positions.len() as u32;
     let light = blob_vertex_light(boundary, outward, lights, false);
     let mark = crate::palette::BLOB_ROTATION_MARK;
     let shade = [
@@ -175,8 +188,10 @@ fn append_rotation_edge_mark(
         (mark[2] * (0.76 + light[2] * 0.34)).min(1.0),
         mark[3] * visibility,
     ];
-    positions.push([mark_center.x, mark_center.y, 0.0]);
-    colors.push([shade[0], shade[1], shade[2], 0.76 * visibility]);
+    buffers.positions.push([mark_center.x, mark_center.y, 0.0]);
+    buffers
+        .colors
+        .push([shade[0], shade[1], shade[2], 0.76 * visibility]);
     for segment in 0..SEGMENTS {
         let angle = segment as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
         let irregular = 0.90
@@ -185,11 +200,11 @@ fn append_rotation_edge_mark(
         let point = mark_center
             + tangent * angle.cos() * tangent_radius * irregular
             + outward * angle.sin() * radial_radius * irregular;
-        positions.push([point.x, point.y, 0.0]);
-        colors.push(shade);
+        buffers.positions.push([point.x, point.y, 0.0]);
+        buffers.colors.push(shade);
     }
     for segment in 0..SEGMENTS {
-        indices.extend_from_slice(&[
+        buffers.indices.extend_from_slice(&[
             first_vertex,
             first_vertex + 1 + segment as u32,
             first_vertex + 1 + ((segment + 1) % SEGMENTS) as u32,
@@ -200,17 +215,15 @@ fn append_rotation_edge_mark(
 /// Adds a few irregular dirt patches under the vacuoles. Their anchors use
 /// the membrane material orientation, so they rotate with the blob rather
 /// than sliding across it during ordinary translation.
-fn append_grime_mottles(
-    positions: &mut Vec<[f32; 3]>,
-    colors: &mut Vec<[f32; 4]>,
-    indices: &mut Vec<u32>,
-    active_blob: &ActiveBlob,
-    alive: bool,
-    lights: &[LightDefinition],
-    center: Vec2,
-    material_rotation: Vec2,
-    polygon: &[Vec2],
-) {
+fn append_grime_mottles(buffers: &mut DetailMeshBuffers<'_>, context: GrimeContext<'_>) {
+    let GrimeContext {
+        active_blob,
+        alive,
+        lights,
+        center,
+        material_rotation,
+        polygon,
+    } = context;
     const SEGMENTS: usize = 7;
     let blob = &active_blob.body;
     let count = ((blob.rest_radius / 22.0).round() as usize).clamp(2, 4);
@@ -223,7 +236,7 @@ fn append_grime_mottles(
             (blob.rest_radius * (0.085 + random_unit(active_blob.id, seed, 2) * 0.075)).max(1.25);
         let desired = center + material_rotation.rotate(Vec2::from_angle(angle) * distance);
         let mottle_center = fit_circle_inside_polygon(center, desired, radius * 1.55, polygon);
-        let first_vertex = positions.len() as u32;
+        let first_vertex = buffers.positions.len() as u32;
         let light = blob_vertex_light(mottle_center, Vec2::Y, lights, true);
         let grime = crate::palette::BLOB_GRIME;
         let shade = [
@@ -232,8 +245,12 @@ fn append_grime_mottles(
             grime[2] * (0.58 + light[2] * 0.42),
             grime[3] * visibility,
         ];
-        positions.push([mottle_center.x, mottle_center.y, 0.0]);
-        colors.push([shade[0], shade[1], shade[2], shade[3] * 0.70]);
+        buffers
+            .positions
+            .push([mottle_center.x, mottle_center.y, 0.0]);
+        buffers
+            .colors
+            .push([shade[0], shade[1], shade[2], shade[3] * 0.70]);
         let tilt = angle * 1.41;
         for segment in 0..SEGMENTS {
             let arc = segment as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
@@ -244,11 +261,13 @@ fn append_grime_mottles(
                 arc.cos() * radius * 1.38,
                 arc.sin() * radius * 0.76,
             )) * irregular;
-            positions.push([mottle_center.x + local.x, mottle_center.y + local.y, 0.0]);
-            colors.push(shade);
+            buffers
+                .positions
+                .push([mottle_center.x + local.x, mottle_center.y + local.y, 0.0]);
+            buffers.colors.push(shade);
         }
         for segment in 0..SEGMENTS {
-            indices.extend_from_slice(&[
+            buffers.indices.extend_from_slice(&[
                 first_vertex,
                 first_vertex + 1 + segment as u32,
                 first_vertex + 1 + ((segment + 1) % SEGMENTS) as u32,

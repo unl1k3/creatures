@@ -6,6 +6,7 @@ mod liquid;
 mod locomotion;
 mod movement;
 mod shape;
+mod solver;
 mod topology;
 
 #[cfg(test)]

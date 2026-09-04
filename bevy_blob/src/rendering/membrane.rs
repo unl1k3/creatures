@@ -1,18 +1,32 @@
 use super::*;
 
-pub(super) fn update_blob_outline_mesh(
-    mesh: &mut Mesh,
-    blob: &Blob,
-    load: Option<(Vec2, f32, f32, f32, usize, f32)>,
-    selected: bool,
-    parent_id: Option<u64>,
-    vitality: Vitality,
-    lights: &[LightDefinition],
-    blob_id: u64,
-    shield_extension: f32,
-    shield_energy: f32,
-    platforms: &[Platform],
-) {
+/// Complete visual state needed to rebuild one blob membrane mesh.
+pub(super) struct MembraneRenderContext<'a> {
+    pub(super) blob: &'a Blob,
+    pub(super) load: Option<(Vec2, f32, f32, f32, usize, f32)>,
+    pub(super) selected: bool,
+    pub(super) parent_id: Option<u64>,
+    pub(super) vitality: Vitality,
+    pub(super) lights: &'a [LightDefinition],
+    pub(super) blob_id: u64,
+    pub(super) shield_extension: f32,
+    pub(super) shield_energy: f32,
+    pub(super) platforms: &'a [Platform],
+}
+
+pub(super) fn update_blob_outline_mesh(mesh: &mut Mesh, context: MembraneRenderContext<'_>) {
+    let MembraneRenderContext {
+        blob,
+        load,
+        selected,
+        parent_id,
+        vitality,
+        lights,
+        blob_id,
+        shield_extension,
+        shield_energy,
+        platforms,
+    } = context;
     let contour = RenderedBlobContour::new(blob, load);
     let count = contour.points.len();
     // Keep the membrane proportional to the creature. The old fixed minimum

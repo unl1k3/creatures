@@ -199,14 +199,12 @@ pub(super) fn simulate_vitality(
             .active
             .get(blobs.selected)
             .is_some_and(|blob| !vitality_world.is_alive(blob.id))
-        {
-            if let Some(next_living) = blobs
+            && let Some(next_living) = blobs
                 .active
                 .iter()
                 .position(|blob| vitality_world.is_alive(blob.id))
-            {
-                blobs.selected = next_living;
-            }
+        {
+            blobs.selected = next_living;
         }
     }
 }

@@ -1,5 +1,6 @@
 use super::*;
 use bevy::audio::Volume;
+use bevy::ecs::system::SystemParam;
 
 pub(super) fn exit_on_escape(
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -40,28 +41,53 @@ pub(super) fn cycle_selection(
     }
 }
 
+/// Resources modified by discrete blob actions such as reset, split and merge.
+#[derive(SystemParam)]
+pub(super) struct BlobActionParams<'w> {
+    keyboard: Res<'w, ButtonInput<KeyCode>>,
+    fixed_time: Res<'w, Time<Fixed>>,
+    level: Res<'w, Level>,
+    blobs: ResMut<'w, BlobWorld>,
+    split_rng: ResMut<'w, SplitRng>,
+    acid: ResMut<'w, AcidWorld>,
+    shields: ResMut<'w, ShieldWorld>,
+    vitality: ResMut<'w, VitalityWorld>,
+    route_progress: ResMut<'w, RouteProgress>,
+    nutrition: ResMut<'w, NutritionWorld>,
+    blob_audio: Res<'w, BlobAudio>,
+}
+
+/// Dynamic nutrient entities rebuilt during a complete world reset.
+#[derive(SystemParam)]
+pub(super) struct BlobActionEntities<'w, 's> {
+    nutrients: Query<'w, 's, Entity, With<NutrientPhysics>>,
+}
+
 pub(super) fn handle_blob_actions(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    fixed_time: Res<Time<Fixed>>,
-    level: Res<Level>,
-    mut blobs: ResMut<BlobWorld>,
-    mut split_rng: ResMut<SplitRng>,
-    mut acid: ResMut<AcidWorld>,
-    mut shields: ResMut<ShieldWorld>,
-    mut vitality: ResMut<VitalityWorld>,
-    mut route_progress: ResMut<RouteProgress>,
-    mut nutrition: ResMut<NutritionWorld>,
-    blob_audio: Res<BlobAudio>,
+    params: BlobActionParams,
+    entities: BlobActionEntities,
     mut commands: Commands,
-    nutrient_bodies: Query<Entity, With<NutrientPhysics>>,
 ) {
+    let BlobActionParams {
+        keyboard,
+        fixed_time,
+        level,
+        mut blobs,
+        mut split_rng,
+        mut acid,
+        mut shields,
+        mut vitality,
+        mut route_progress,
+        mut nutrition,
+        blob_audio,
+    } = params;
     if keyboard.just_pressed(KeyCode::KeyR) {
         reset_world_at(&mut blobs, level.spawn_position);
         acid.reset();
         shields.reset();
         vitality.reset();
         route_progress.next = 1;
-        for entity in &nutrient_bodies {
+        for entity in &entities.nutrients {
             commands.entity(entity).despawn();
         }
         nutrition.reset_from_definitions(&level.nutrients);
