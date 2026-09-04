@@ -1,6 +1,7 @@
 //! Lifecycle synchronization for blob render entities.
 
 use super::*;
+use std::collections::HashSet;
 
 pub(crate) fn sync_blob_meshes(
     mut commands: Commands,

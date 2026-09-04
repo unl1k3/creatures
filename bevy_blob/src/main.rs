@@ -19,7 +19,6 @@ mod vitality;
 use acid::{AcidWorld, draw_acid, fire_acid, simulate_acid};
 pub(crate) use audio::*;
 use avian2d::collision::collider::contact_query::contact_manifolds;
-use avian2d::prelude::LinearVelocity;
 use avian2d::prelude::PhysicsPlugins;
 use avian2d::prelude::{Collider, ContactManifold, Gravity};
 use bevy::{
@@ -28,7 +27,10 @@ use bevy::{
     prelude::*,
     window::{ExitCondition, WindowPosition, WindowResolution},
 };
-use blob::{Blob, DEFAULT_CREATURE_SCALE, Platform, REFERENCE_RADIUS};
+use blob::{
+    Blob, BlobStepEnvironment, BlobStepInput, BlobStepProfile, DEFAULT_CREATURE_SCALE, Platform,
+    REFERENCE_RADIUS,
+};
 pub(crate) use blob_world::*;
 #[cfg(test)]
 use camera::selected_camera_target;
@@ -66,9 +68,7 @@ use std::{
     collections::HashMap,
     time::{SystemTime, UNIX_EPOCH},
 };
-use vitality::{
-    DeathCause, LifeState, Vitality, VitalityWorld, WASTEWATER_DAMAGE_PER_SECOND, simulate_vitality,
-};
+use vitality::{DeathCause, LifeState, Vitality, VitalityWorld, simulate_vitality};
 
 fn main() {
     App::new()
