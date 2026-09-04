@@ -4,6 +4,7 @@
 //! auxiliary effects. This module owns the central per-blob movement cycle.
 
 use super::*;
+use bevy::audio::Volume;
 
 pub(crate) fn simulate_blob(
     time: Res<Time<Fixed>>,
@@ -182,6 +183,33 @@ pub(crate) fn simulate_blob(
             <= 0.0;
         let spine_motion =
             shield_extension > 0.05 && (active_blob.body.grounded || spider_anchor.is_some());
+        let on_ice = active_blob.body.on_ice() && !spine_motion;
+        let rotational_surface_speed = angular_rate * active_blob.body.rest_radius;
+        // A rotating body that does not carry its centre along is slipping
+        // against the ice. Once rotation and translation agree, it reads as
+        // an ordinary roll and must keep the classic movement sound.
+        let ice_self_slide = on_ice
+            && rotational_surface_speed >= 14.0
+            && surface_speed < rotational_surface_speed * 0.85;
+        let ice_inertial_motion = on_ice && surface_speed >= 18.0;
+        if ice_self_slide {
+            let ice_slide_sound = blob_audio.ice_slide.clone();
+            blob_audio
+                .ice_slide_loops
+                .entry(active_blob.id)
+                .or_insert_with(|| {
+                    commands
+                        .spawn((
+                            AudioPlayer::new(ice_slide_sound),
+                            PlaybackSettings::LOOP
+                                .with_speed(0.98)
+                                .with_volume(Volume::Linear(0.20)),
+                        ))
+                        .id()
+                });
+        } else if let Some(loop_entity) = blob_audio.ice_slide_loops.remove(&active_blob.id) {
+            commands.entity(loop_entity).despawn();
+        }
         // A normal roll has a dependable link between translation and its
         // sound. Deployed spines are different: their audible contact is tied
         // to the membrane turning against the surface, including a wall climb.
@@ -190,9 +218,20 @@ pub(crate) fn simulate_blob(
         } else {
             surface_speed
         };
-        let movement_threshold = if spine_motion { 0.04 } else { 48.0 };
+        let movement_threshold = if spine_motion {
+            0.04
+        } else if ice_self_slide {
+            // Inertia is the whole point of ice: a slide remains audible even
+            // after the player has released the movement key.
+            14.0
+        } else if on_ice {
+            20.0
+        } else {
+            48.0
+        };
         if (active_blob.body.grounded || spine_motion)
-            && movement.abs() > 0.01
+            && (movement.abs() > 0.01 || ice_inertial_motion)
+            && !ice_self_slide
             && active_blob.body.charge <= 0.01
             && movement_rate >= movement_threshold
             && roll_ready
@@ -213,6 +252,10 @@ pub(crate) fn simulate_blob(
                     })
                     .with_volume(Volume::Linear(if spine_motion {
                         0.09 + speed_ratio * 0.13
+                    } else if on_ice {
+                        // The sound remains the familiar roll, merely louder
+                        // so momentum on ice is legible to the player.
+                        0.14 + speed_ratio * 0.16
                     } else {
                         0.10 + speed_ratio * 0.16
                     })),
@@ -388,6 +431,19 @@ pub(crate) fn simulate_blob(
                 .with_speed(0.72)
                 .with_volume(Volume::Linear(0.34)),
         ));
+    }
+    // Rejoining can remove a blob between fixed frames. Its looped slide
+    // source is not a gameplay entity, so release it explicitly as well.
+    let stale_slide_ids: Vec<u64> = blob_audio
+        .ice_slide_loops
+        .keys()
+        .copied()
+        .filter(|id| !blobs.active.iter().any(|blob| blob.id == *id))
+        .collect();
+    for id in stale_slide_ids {
+        if let Some(loop_entity) = blob_audio.ice_slide_loops.remove(&id) {
+            commands.entity(loop_entity).despawn();
+        }
     }
     resolve_blob_collisions_with_vitality(&mut blobs.active, &vitality);
 }

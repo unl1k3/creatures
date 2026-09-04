@@ -1,5 +1,14 @@
 use bevy::prelude::*;
 
+mod contacts;
+mod liquid;
+mod shape;
+
+#[cfg(test)]
+use contacts::{
+    collision_entry_side, collision_side_from_reference, convex_penetration, swept_aabb_entry,
+};
+
 pub const PARTICLE_COUNT: usize = 24;
 pub const REFERENCE_RADIUS: f32 = 58.0;
 pub const DEFAULT_CREATURE_SCALE: f32 = 0.65;
@@ -78,6 +87,7 @@ pub struct Blob {
     ground_traction: f32,
     ground_idle_damping: f32,
     ice_traction: f32,
+    on_ice: bool,
     on_glue: bool,
     ground_is_glue: bool,
     charge_direction: f32,
@@ -135,6 +145,7 @@ impl Blob {
             ground_traction: 1.0,
             ground_idle_damping: 0.72,
             ice_traction: 0.0,
+            on_ice: false,
             on_glue: false,
             ground_is_glue: false,
             charge_direction: 0.0,
@@ -295,162 +306,6 @@ impl Blob {
             wall_direction: direction.signum(),
             wall_top,
         });
-    }
-
-    /// Applies a light-body buoyancy model to the deformable membrane.
-    ///
-    /// The water is not a solid collider: a partly immersed blob remains
-    /// controllable and can bob with the surface, while the uniform drag keeps
-    /// the solver stable instead of pinning individual membrane particles.
-    #[cfg(test)]
-    pub fn apply_wastewater_forces(
-        &mut self,
-        surface_y: f32,
-        bottom_y: f32,
-        dt: f32,
-    ) -> Option<WastewaterContact> {
-        self.apply_wastewater_forces_with_spine_drag(surface_y, bottom_y, dt, 0.0, 0.0)
-    }
-
-    /// Variant of the wastewater model used by the gameplay layer. Extended
-    /// spines remain attached to the membrane but increase hydrodynamic drag,
-    /// making lateral motion produce a more visible, controlled roll.
-    pub fn apply_wastewater_forces_with_spine_drag(
-        &mut self,
-        surface_y: f32,
-        bottom_y: f32,
-        dt: f32,
-        spine_extension: f32,
-        swim_direction: f32,
-    ) -> Option<WastewaterContact> {
-        let submerged_fraction = self
-            .particles
-            .iter()
-            .map(|particle| {
-                if particle.position.y <= bottom_y || particle.position.y >= surface_y {
-                    0.0
-                } else {
-                    ((surface_y - particle.position.y) / (self.rest_radius * 1.35)).clamp(0.0, 1.0)
-                }
-            })
-            .sum::<f32>()
-            / self.particles.len() as f32;
-        if submerged_fraction <= WATER_EXIT_FRACTION {
-            self.water_exit_elapsed += dt;
-            if self.water_exit_elapsed >= WATER_EXIT_GRACE {
-                self.water_submerged = false;
-            }
-            return None;
-        }
-        self.water_exit_elapsed = 0.0;
-
-        let entry_speed = (-self.velocity().y / dt.max(0.000_001)).max(0.0);
-        // The blob is slightly lighter than wastewater, settling with roughly
-        // half its membrane immersed. Damping the entire membrane prevents an
-        // impact from folding the contour under the waterline.
-        let drag_rate = if spine_extension > 0.05 {
-            WATER_SPINED_DRAG_RATE
-        } else {
-            WATER_BARE_DRAG_RATE
-        };
-        let retention = (-drag_rate * submerged_fraction.sqrt() * dt).exp();
-        self.damp_velocity(retention);
-        self.apply_water_motion_shape(
-            surface_y,
-            submerged_fraction,
-            spine_extension,
-            swim_direction,
-            dt,
-        );
-        // Verlet stores velocity as displacement per fixed step, so a force
-        // must be converted with dt². Using dt here turns buoyancy into a
-        // trampoline-like impulse at the first touch of the surface.
-        self.add_velocity(Vec2::Y * GRAVITY * 2.15 * submerged_fraction.powf(0.82) * dt * dt);
-        let entered = !self.water_submerged && submerged_fraction >= WATER_ENTRY_FRACTION;
-        if submerged_fraction >= WATER_ENTRY_FRACTION {
-            self.water_submerged = true;
-        }
-        Some(WastewaterContact {
-            surface_y,
-            submerged_fraction,
-            entered,
-            entry_speed,
-        })
-    }
-
-    /// Water resists translation but carries the membrane into a gentle roll.
-    /// The shape change is transient: springs still own the blob's neutral
-    /// contour once it leaves the liquid.
-    fn apply_water_motion_shape(
-        &mut self,
-        surface_y: f32,
-        submerged_fraction: f32,
-        spine_extension: f32,
-        swim_direction: f32,
-        dt: f32,
-    ) {
-        let center = self.center();
-        let center_velocity = self.velocity();
-        let angular_displacement = self
-            .particles
-            .iter()
-            .map(|particle| {
-                let offset = particle.position - center;
-                let relative_velocity = particle.position - particle.previous - center_velocity;
-                offset.perp_dot(relative_velocity) / offset.length_squared().max(1.0)
-            })
-            .sum::<f32>()
-            / self.particles.len() as f32;
-        let extension = spine_extension.clamp(0.0, 1.0);
-        let spine_drag = 1.0 + extension * WATER_SPINE_DRAG_MULTIPLIER;
-        let swimming = extension > 0.05 && swim_direction.abs() > 0.01;
-        let direction = swim_direction.signum();
-        // With spines deployed, the player chooses the roll direction. Using
-        // residual horizontal velocity here made a blob that had reached a
-        // wall keep rolling toward it after the input was reversed.
-        let target_rotation = if swimming {
-            -direction * WATER_SWIM_ROTATION * (0.35 + extension * 0.65)
-        } else {
-            -center_velocity.x * WATER_ROTATION_RATE * spine_drag
-        };
-        let rotation_correction =
-            (target_rotation - angular_displacement) * WATER_ROTATION_RESPONSE * submerged_fraction;
-        let flattening = WATER_FLATTENING * submerged_fraction;
-        // A short repeated contraction of the trailing immersed side is the
-        // blob's motor. The attached spines act as passive paddles against it.
-        let stroke =
-            (0.58 + 0.42 * (self.idle_phase * std::f32::consts::TAU * 1.7).sin()) * extension;
-        for particle in &mut self.particles {
-            let offset = particle.position - center;
-            let shape_target = center
-                + Vec2::new(
-                    offset.x * (1.0 + flattening * 0.45),
-                    offset.y * (1.0 - flattening),
-                );
-            // Applying the same shape offset to both Verlet positions makes
-            // this a visual body deformation, not an artificial velocity.
-            let shape_offset = (shape_target - particle.position) * 0.16;
-            particle.position += shape_offset;
-            particle.previous += shape_offset;
-            particle.previous -= offset.perp() * rotation_correction;
-
-            if swimming {
-                let immersed =
-                    ((surface_y - particle.position.y) / self.rest_radius).clamp(0.0, 1.0);
-                let trailing_side =
-                    ((-direction * offset.x / self.rest_radius) + 1.0).clamp(0.0, 1.0);
-                let paddle_weight = immersed * (0.30 + trailing_side * 0.70) * stroke;
-                // Forward impulse is distributed through the immersed membrane,
-                // while the unequal drag on the trailing side supplies torque.
-                particle.previous -=
-                    Vec2::X * direction * WATER_SWIM_THRUST * paddle_weight * dt * dt;
-                particle.previous -=
-                    offset.perp() * (-direction * WATER_SWIM_ROTATION * paddle_weight);
-                let contraction = Vec2::X * (-direction * trailing_side * stroke * 0.10);
-                particle.position += contraction;
-                particle.previous += contraction;
-            }
-        }
     }
 
     /// Stops membrane points at an out-of-play safety boundary without adding
@@ -640,6 +495,13 @@ impl Blob {
         self.on_glue
     }
 
+    /// True only while the membrane has a real supporting contact with ice.
+    /// This is deliberately separate from traction: spines can add grip
+    /// without changing which material produced the contact.
+    pub fn on_ice(&self) -> bool {
+        self.on_ice
+    }
+
     /// As [`Self::step_with_vigor`], with a list of low-traction platform
     /// indices in the supplied collision slice. Keeping this parallel list
     /// avoids making the core `Platform` geometry depend on presentation data.
@@ -667,6 +529,7 @@ impl Blob {
         let previous_ground_is_glue = self.ground_is_glue;
         self.ground_traction = 1.0;
         self.ground_idle_damping = 0.72;
+        self.on_ice = false;
         self.on_glue = false;
         self.ground_is_glue = false;
         let jump_tangent = jump_normal.perp();
@@ -1012,355 +875,9 @@ impl Blob {
             particle.previous = particle.position - without_spin;
         }
     }
-
-    fn solve_edges(&mut self) {
-        let count = self.particles.len();
-        let mut corrections = vec![Vec2::ZERO; count];
-        for index in 0..count {
-            let next = (index + 1) % count;
-            let delta = self.particles[next].position - self.particles[index].position;
-            let length = delta.length();
-            if length > 0.0001 {
-                let edge_tension = 0.20 + 0.28 * self.tonicity;
-                let limpness = 1.0 - self.tonicity;
-                let uneven_rest = self.edge_rest_lengths[index]
-                    * (1.0 + corpse_material_variation(index, 0) * 0.12 * limpness);
-                let uneven_tension =
-                    edge_tension * (1.0 + corpse_material_variation(index, 1) * 0.16 * limpness);
-                let correction = delta * ((length - uneven_rest) / length * uneven_tension);
-                corrections[index] += correction;
-                corrections[next] -= correction;
-            }
-        }
-        for (particle, correction) in self.particles.iter_mut().zip(corrections) {
-            particle.position += correction;
-            if self.tonicity < 0.5 {
-                particle.previous += correction;
-            }
-        }
-    }
-
-    fn solve_area(&mut self) {
-        let area = polygon_area(&self.particles);
-        if area.abs() < 0.001 {
-            return;
-        }
-        let center = self.center();
-        let current_area = area.abs();
-        let scale = (self.rest_area / current_area).sqrt();
-        let internal_pressure = 0.075 + 0.045 * self.tonicity;
-        let correction_scale = 1.0 + (scale - 1.0) * internal_pressure;
-        for particle in &mut self.particles {
-            let corrected = center + (particle.position - center) * correction_scale;
-            let correction = corrected - particle.position;
-            particle.position = corrected;
-            if self.tonicity < 0.5 {
-                particle.previous += correction;
-            }
-        }
-    }
-
-    /// Inflates one upper lobe, returns fully to rest, pauses, then selects a
-    /// different upper lobe. Nothing travels horizontally across the body.
-    fn solve_idle_shape(&mut self) {
-        if self.idle_amount < 0.001 {
-            return;
-        }
-
-        let center = self.center();
-        let count = self.particles.len();
-        let local_time = self.idle_phase.fract();
-        const ACTIVE_PART: f32 = 0.68;
-        if local_time >= ACTIVE_PART {
-            return;
-        }
-
-        // sin² begins and ends with zero slope, preventing mechanical steps.
-        let breath_phase = local_time / ACTIVE_PART * std::f32::consts::PI;
-        let pulse = breath_phase.sin().powi(2) * self.idle_amount;
-        let lobe_index = self.idle_phase.floor() as usize % 4;
-        let lobe_center = idle_lobe_center(lobe_index);
-
-        let mut corrections = vec![Vec2::ZERO; count];
-        let mut active_particles = 0;
-        for (index, particle) in self.particles.iter().enumerate() {
-            let offset = particle.position - center;
-            let distance = offset.length();
-            if distance < 0.001 {
-                continue;
-            }
-
-            // Use the current world-space direction, not the material point's
-            // original index. A blob can rotate while settling after a split;
-            // index-based breathing would then inflate a side or the contact
-            // patch and inject a persistent rolling torque.
-            let angle = offset.y.atan2(offset.x).rem_euclid(std::f32::consts::TAU);
-            let angular_distance = (angle - lobe_center)
-                .abs()
-                .min(std::f32::consts::TAU - (angle - lobe_center).abs());
-            let locality = (-angular_distance.powi(2) / (2.0 * 0.48_f32.powi(2))).exp();
-            let upper_mask = angle.sin().max(0.0).powf(0.7);
-            let target_radius = self.rest_radius * (1.0 + 0.34 * pulse * locality * upper_mask);
-            let radial_error = target_radius - distance;
-            if upper_mask > 0.0 {
-                corrections[index] = offset / distance * radial_error * 0.18 * pulse;
-                active_particles += 1;
-            }
-        }
-
-        // A local bulge must not translate the creature. Balance corrections
-        // only across the free upper membrane, leaving ground contacts intact.
-        if active_particles == 0 {
-            return;
-        }
-        let average = corrections.iter().copied().sum::<Vec2>() / active_particles as f32;
-        for (index, particle) in self.particles.iter_mut().enumerate() {
-            if corrections[index] == Vec2::ZERO {
-                continue;
-            }
-            let balanced = corrections[index] - average;
-            particle.position += balanced;
-            // Shape animation is not physical momentum in Verlet integration.
-            particle.previous += balanced;
-        }
-    }
-
-    /// Second-neighbour constraints resist sharp corners while still allowing
-    /// the membrane to squash into a smooth ellipse.
-    fn solve_curvature(&mut self) {
-        let count = self.particles.len();
-        let mut corrections = vec![Vec2::ZERO; count];
-        for index in 0..count {
-            let next = (index + 2) % count;
-            let delta = self.particles[next].position - self.particles[index].position;
-            let length = delta.length();
-            if length > 0.0001 {
-                let curvature = 0.05 + 0.11 * self.tonicity;
-                let limpness = 1.0 - self.tonicity;
-                let uneven_rest = self.curvature_rest_lengths[index]
-                    * (1.0 + corpse_material_variation(index, 2) * 0.08 * limpness);
-                let correction = delta * ((length - uneven_rest) / length * curvature);
-                corrections[index] += correction;
-                corrections[next] -= correction;
-            }
-        }
-        for (particle, correction) in self.particles.iter_mut().zip(corrections) {
-            particle.position += correction;
-            if self.tonicity < 0.5 {
-                particle.previous += correction;
-            }
-        }
-    }
-
-    /// Prevents a single collision from pulling the membrane into an
-    /// uncontrollable needle. Area conservation alone cannot prevent this.
-    fn limit_stretch(&mut self) {
-        let maximum_radius = self.rest_radius * (MAX_STRETCH_RATIO + (1.0 - self.tonicity) * 0.22);
-        // Recompute the centroid because clamping an extreme point moves it
-        // slightly. A few cheap passes make the bound independent of topology.
-        for _ in 0..4 {
-            let center = self.center();
-            for particle in &mut self.particles {
-                let offset = particle.position - center;
-                if offset.length_squared() > maximum_radius * maximum_radius {
-                    particle.position = center + offset.clamp_length_max(maximum_radius);
-                    let outward_velocity = particle.position - particle.previous;
-                    particle.previous = particle.position - outward_velocity * 0.35;
-                }
-            }
-        }
-    }
-
-    /// Keeps the ordered membrane outside a small core around its centroid.
-    /// Without this bound, a very small blob can fold through itself during a
-    /// powerful launch and briefly produce a figure-eight silhouette.
-    fn limit_collapse(&mut self) {
-        // A corpse may flatten substantially, but retaining a small protected
-        // core prevents the membrane from folding through itself.
-        let minimum_ratio = 0.28 + (MIN_COLLAPSE_RATIO - 0.28) * self.tonicity;
-        let minimum_radius = self.rest_radius * minimum_ratio;
-        for _ in 0..4 {
-            let center = self.center();
-            for particle in &mut self.particles {
-                let offset = particle.position - center;
-                let distance = offset.length();
-                if distance >= minimum_radius {
-                    continue;
-                }
-
-                let direction = if distance > 0.0001 {
-                    offset / distance
-                } else {
-                    Vec2::Y
-                };
-                let velocity = particle.position - particle.previous;
-                particle.position = center + direction * minimum_radius;
-                let outward_speed = velocity.dot(direction).max(0.0);
-                let tangential_velocity = velocity - direction * velocity.dot(direction);
-                particle.previous =
-                    particle.position - tangential_velocity * 0.55 - direction * outward_speed;
-            }
-        }
-    }
-
-    /// Emergency recovery for a folded membrane. Normal constraints preserve
-    /// the material order, but a sufficiently violent or oblique collision can
-    /// make two non-adjacent edges cross. Rebuild a smooth ordered contour only
-    /// in that pathological case, preserving centre-of-mass translation.
-    fn repair_self_intersection(&mut self) -> bool {
-        if !has_self_intersections(&self.particles) {
-            return false;
-        }
-
-        let center = self.center();
-        let velocity = self.velocity();
-        let count = self.particles.len();
-        let mut phase_vector = Vec2::ZERO;
-        let mut average_radius = 0.0;
-        for (index, particle) in self.particles.iter().enumerate() {
-            let offset = particle.position - center;
-            average_radius += offset.length();
-            if offset.length_squared() > 0.0001 {
-                let material_angle = index as f32 / count as f32 * std::f32::consts::TAU;
-                phase_vector += Vec2::from_angle(offset.to_angle() - material_angle);
-            }
-        }
-        average_radius =
-            (average_radius / count as f32).clamp(self.rest_radius * 0.72, self.rest_radius * 1.12);
-        let phase = if phase_vector.length_squared() > 0.0001 {
-            phase_vector.to_angle()
-        } else {
-            0.0
-        };
-
-        for (index, particle) in self.particles.iter_mut().enumerate() {
-            let angle = phase + index as f32 / count as f32 * std::f32::consts::TAU;
-            particle.position = center + Vec2::from_angle(angle) * average_radius;
-            particle.previous = particle.position - velocity;
-        }
-        true
-    }
-
-    fn solve_collisions(
-        &mut self,
-        platforms: &[Platform],
-        ice_platform_indices: &[usize],
-        glue_platform_indices: &[usize],
-    ) {
-        // Keep contact thickness constant while tonicity changes. A growing
-        // collision envelope would move a resting corpse on its own.
-        let skin = (5.0 * self.size_scale()).max(MIN_COLLISION_SKIN);
-        let blob_center = self.center();
-        let mut support_sum = Vec2::ZERO;
-        let mut support_count = 0;
-        for particle in &mut self.particles {
-            for (platform_index, platform) in platforms.iter().enumerate() {
-                let min = platform.center - platform.half_size - Vec2::splat(skin);
-                let max = platform.center + platform.half_size + Vec2::splat(skin);
-                let inside = particle.position.x >= min.x
-                    && particle.position.x <= max.x
-                    && particle.position.y >= min.y
-                    && particle.position.y <= max.y;
-                let swept_entry = swept_aabb_entry(particle.previous, particle.position, min, max);
-                if !inside && swept_entry.is_none() {
-                    continue;
-                }
-
-                // A fast, small blob can cross the middle of a thin platform
-                // in one frame. Use the entry face from its swept path so all
-                // membrane points are returned to the side they came from,
-                // instead of splitting the contour across both faces.
-                let side = swept_entry.map(|(side, _)| side).unwrap_or_else(|| {
-                    collision_side_from_reference(particle, blob_center, min, max)
-                });
-                let normal = [Vec2::NEG_X, Vec2::X, Vec2::NEG_Y, Vec2::Y][side];
-                let impact_speed = -(particle.position - particle.previous).dot(normal);
-                self.last_impact_speed = self.last_impact_speed.max(impact_speed.max(0.0));
-                if !inside && let Some((_, time)) = swept_entry {
-                    particle.position = particle.previous.lerp(particle.position, time);
-                }
-                match side {
-                    0 => {
-                        particle.position.x = min.x;
-                        damp_normal_velocity(particle, Vec2::NEG_X, 0.12 * self.tonicity);
-                    }
-                    1 => {
-                        particle.position.x = max.x;
-                        damp_normal_velocity(particle, Vec2::X, 0.12 * self.tonicity);
-                    }
-                    2 => {
-                        particle.position.y = min.y;
-                        damp_normal_velocity(particle, Vec2::NEG_Y, 0.08 * self.tonicity);
-                    }
-                    _ => {
-                        particle.position.y = max.y;
-                        damp_normal_velocity(particle, Vec2::Y, 0.0);
-                        self.grounded = true;
-                        if ice_platform_indices.contains(&platform_index) {
-                            self.ground_traction = self.ground_traction.min(self.ice_traction);
-                            self.ground_idle_damping = self.ground_idle_damping.max(0.96);
-                        }
-                        if glue_platform_indices.contains(&platform_index) {
-                            // Adhesive sludge resists both translation and
-                            // roll, regardless of whether the spines are out.
-                            // A small fragment offers less contact area to
-                            // spread force through, so it is proportionally
-                            // more stuck than the parent creature.
-                            let size_ratio =
-                                (self.rest_radius / DEFAULT_GAMEPLAY_RADIUS).clamp(0.25, 1.0);
-                            let glue_traction = 0.035 + size_ratio * 0.045;
-                            let glue_damping = 0.05 + size_ratio * 0.05;
-                            self.ground_traction = self.ground_traction.min(glue_traction);
-                            self.ground_idle_damping = self.ground_idle_damping.min(glue_damping);
-                            self.on_glue = true;
-                            self.ground_is_glue = true;
-                        }
-                        support_sum += Vec2::Y;
-                        support_count += 1;
-                    }
-                }
-            }
-        }
-        self.support_normal_sum += support_sum;
-        self.support_contact_count += support_count;
-    }
-
-    fn solve_fixture_collisions(&mut self, fixtures: &[Vec<Vec2>]) {
-        let skin = 0.8 * self.size_scale();
-        let record_impact = self.launch_grace <= 0.0;
-        let mut support_sum = Vec2::ZERO;
-        let mut support_count = 0;
-        for particle in &mut self.particles {
-            for vertices in fixtures {
-                let Some((depth, outward)) = convex_penetration(particle.position, vertices) else {
-                    continue;
-                };
-                let velocity = particle.position - particle.previous;
-                if record_impact {
-                    self.last_impact_speed = self
-                        .last_impact_speed
-                        .max((-velocity.dot(outward)).max(0.0));
-                }
-                particle.position += outward * (depth + skin);
-                let normal_speed = velocity.dot(outward);
-                let corrected_velocity = if normal_speed < 0.0 {
-                    velocity - outward * normal_speed
-                } else {
-                    velocity
-                };
-                particle.previous = particle.position - corrected_velocity * 0.82;
-                self.grounded |= outward.y > 0.55;
-                if outward.y > 0.55 {
-                    support_sum += outward;
-                    support_count += 1;
-                }
-            }
-        }
-        self.support_normal_sum += support_sum;
-        self.support_contact_count += support_count;
-    }
 }
 
+#[cfg(test)]
 fn idle_lobe_center(cycle: usize) -> f32 {
     // Alternate membrane sides on every breath. The two angles used on each
     // side differ, so the result remains organic instead of becoming a
@@ -1368,131 +885,7 @@ fn idle_lobe_center(cycle: usize) -> f32 {
     [0.38, 2.22, 0.92, 2.76][cycle % 4]
 }
 
-/// Stable signed variation tied to membrane material rather than simulation
-/// time. Dead tissue therefore settles asymmetrically without visual jitter.
-fn corpse_material_variation(index: usize, channel: u64) -> f32 {
-    let mut value = (index as u64)
-        .wrapping_mul(0x9e37_79b9_7f4a_7c15)
-        .wrapping_add(channel.wrapping_mul(0xbf58_476d_1ce4_e5b9));
-    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-    value ^= value >> 31;
-    (value as u32) as f32 / u32::MAX as f32 * 2.0 - 1.0
-}
-
-fn collision_entry_side(particle: &Particle, min: Vec2, max: Vec2) -> usize {
-    let movement = particle.position - particle.previous;
-    let mut entry: Option<(f32, usize)> = None;
-    let candidates = [
-        (
-            particle.previous.x < min.x && movement.x > 0.0,
-            (min.x - particle.previous.x) / movement.x,
-            0,
-        ),
-        (
-            particle.previous.x > max.x && movement.x < 0.0,
-            (max.x - particle.previous.x) / movement.x,
-            1,
-        ),
-        (
-            particle.previous.y < min.y && movement.y > 0.0,
-            (min.y - particle.previous.y) / movement.y,
-            2,
-        ),
-        (
-            particle.previous.y > max.y && movement.y < 0.0,
-            (max.y - particle.previous.y) / movement.y,
-            3,
-        ),
-    ];
-    for (valid, time, side) in candidates {
-        if valid && (0.0..=1.0).contains(&time) && entry.is_none_or(|(best, _)| time < best) {
-            entry = Some((time, side));
-        }
-    }
-    entry.map(|(_, side)| side).unwrap_or_else(|| {
-        [
-            (particle.position.x - min.x).abs(),
-            (max.x - particle.position.x).abs(),
-            (particle.position.y - min.y).abs(),
-            (max.y - particle.position.y).abs(),
-        ]
-        .iter()
-        .enumerate()
-        .min_by(|a, b| a.1.total_cmp(b.1))
-        .map(|(side, _)| side)
-        .unwrap_or(3)
-    })
-}
-
-fn collision_side_from_reference(
-    particle: &Particle,
-    reference: Vec2,
-    min: Vec2,
-    max: Vec2,
-) -> usize {
-    let width = (max.x - min.x).max(0.001);
-    let height = (max.y - min.y).max(0.001);
-    let outside = [
-        ((min.x - reference.x) / width, 0),
-        ((reference.x - max.x) / width, 1),
-        ((min.y - reference.y) / height, 2),
-        ((reference.y - max.y) / height, 3),
-    ];
-    let (distance, side) = outside
-        .into_iter()
-        .max_by(|first, second| first.0.total_cmp(&second.0))
-        .unwrap_or((0.0, 0));
-    if distance > 0.0 {
-        side
-    } else {
-        collision_entry_side(particle, min, max)
-    }
-}
-
-fn swept_aabb_entry(start: Vec2, end: Vec2, min: Vec2, max: Vec2) -> Option<(usize, f32)> {
-    if start.x >= min.x && start.x <= max.x && start.y >= min.y && start.y <= max.y {
-        return None;
-    }
-    let movement = end - start;
-    let mut entry_time = 0.0_f32;
-    let mut exit_time = 1.0_f32;
-    let mut entry_side = 0;
-    for axis in 0..2 {
-        let origin = if axis == 0 { start.x } else { start.y };
-        let delta = if axis == 0 { movement.x } else { movement.y };
-        let lower = if axis == 0 { min.x } else { min.y };
-        let upper = if axis == 0 { max.x } else { max.y };
-        if delta.abs() < 0.000_001 {
-            if origin < lower || origin > upper {
-                return None;
-            }
-            continue;
-        }
-        let mut near = (lower - origin) / delta;
-        let mut far = (upper - origin) / delta;
-        let near_side = if axis == 0 {
-            if delta > 0.0 { 0 } else { 1 }
-        } else if delta > 0.0 {
-            2
-        } else {
-            3
-        };
-        if near > far {
-            std::mem::swap(&mut near, &mut far);
-        }
-        if near > entry_time {
-            entry_time = near;
-            entry_side = near_side;
-        }
-        exit_time = exit_time.min(far);
-        if entry_time > exit_time {
-            return None;
-        }
-    }
-    (entry_time <= 1.0 && exit_time >= 0.0).then_some((entry_side, entry_time.max(0.0)))
-}
-
+#[cfg(test)]
 fn has_self_intersections(particles: &[Particle]) -> bool {
     let count = particles.len();
     for first in 0..count {
@@ -1526,58 +919,11 @@ fn jump_size_factor(radius: f32) -> f32 {
         .clamp(0.72, 1.90)
 }
 
-fn convex_penetration(point: Vec2, vertices: &[Vec2]) -> Option<(f32, Vec2)> {
-    if vertices.len() < 3 {
-        return None;
-    }
-    let signed_area = vertices
-        .iter()
-        .zip(vertices.iter().cycle().skip(1))
-        .take(vertices.len())
-        .map(|(first, second)| first.perp_dot(*second))
-        .sum::<f32>();
-    let orientation = signed_area.signum();
-    if orientation == 0.0 {
-        return None;
-    }
-    let mut nearest = f32::INFINITY;
-    let mut outward = Vec2::Y;
-    for (first, second) in vertices
-        .iter()
-        .zip(vertices.iter().cycle().skip(1))
-        .take(vertices.len())
-    {
-        let edge = *second - *first;
-        let length = edge.length();
-        if length <= f32::EPSILON {
-            continue;
-        }
-        let inward_distance = edge.perp_dot(point - *first) * orientation / length;
-        if inward_distance < 0.0 {
-            return None;
-        }
-        if inward_distance < nearest {
-            nearest = inward_distance;
-            outward = -edge.perp() * orientation / length;
-        }
-    }
-    nearest.is_finite().then_some((nearest, outward))
-}
-
 fn jump_speed_for_charge(charge: f32, radius: f32) -> f32 {
     // Short taps remain small, the middle range stays broad and controllable,
     // and only a complete charge reaches maximum launch speed.
     let response = charge.clamp(0.0, 1.0).powf(1.2);
     (JUMP_MIN_SPEED + (JUMP_MAX_SPEED - JUMP_MIN_SPEED) * response) * jump_size_factor(radius)
-}
-
-fn damp_normal_velocity(particle: &mut Particle, normal: Vec2, restitution: f32) {
-    let velocity = particle.position - particle.previous;
-    let normal_speed = velocity.dot(normal);
-    if normal_speed < 0.0 {
-        let corrected_velocity = velocity - normal * normal_speed * (1.0 + restitution);
-        particle.previous = particle.position - corrected_velocity;
-    }
 }
 
 pub fn polygon_area(particles: &[Particle]) -> f32 {

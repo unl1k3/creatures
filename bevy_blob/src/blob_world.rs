@@ -5,6 +5,7 @@
 
 use super::*;
 
+#[cfg(feature = "dev-tools")]
 pub(crate) const BLOB_START: Vec2 = Vec2::new(0.0, -280.0);
 pub(crate) const INITIAL_RADIUS: f32 = REFERENCE_RADIUS * DEFAULT_CREATURE_SCALE;
 pub(crate) const MAX_ACTIVE_BLOBS: usize = 4;

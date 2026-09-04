@@ -3,6 +3,12 @@ name = "bevy-blob-prototype"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Development keeps the laboratory levels and their keyboard selector. A
+# production build uses `--no-default-features` and embeds only game levels.
+default = ["dev-tools"]
+dev-tools = []
+
 [dependencies]
 bevy = { version = "0.19", default-features = false, features = ["2d", "bevy_text", "default_font", "bevy_audio", "mp3", "wav"] }
 avian2d = "0.7"

@@ -88,6 +88,17 @@ cd bevy_blob
 cargo run
 ```
 
+The default build enables `dev-tools`, which keeps the laboratory-level
+selector and regression scenarios available while developing. A production
+build excludes that code path:
+
+```bash
+cargo build --release --no-default-features
+```
+
+The release packaging step must likewise omit `assets/levels/*_lab` and
+`assets/levels/regression_*`; they are development assets, not game content.
+
 The game opens three native desktop windows. At startup, the 900 x 900 game
 window is placed on the left, while the controls and live metrics are stacked
 on the right. The layout reserves additional room for native title bars and
@@ -267,7 +278,7 @@ bevy_blob/
 Use [PHYSICS_TEST_SCENARIOS.md](PHYSICS_TEST_SCENARIOS.md) as the shared manual
 test plan for irregular supports, blob stacks, and movable corpses.
 
-Press `1` through `9` to load the standard level or a laboratory. `0` is
+With `dev-tools` enabled, press `1` through `9` to load the standard level or a laboratory. `0` is
 reserved for the physics overlay.
 `1` now crosses both lateral wings of the sewer before continuing
 through its vertical platforms. `2` combines narrow supports, stairs, corners, and a bridge; `3`
@@ -363,7 +374,7 @@ metrics window.
 
 ## Validation
 
-The current automated suite contains 127 tests covering soft-body constraints,
+The current automated suite contains 118 tests covering soft-body constraints,
 jump charging and size scaling, rolling, collision recovery, topology repair,
 recursive splitting, hierarchical merging, camera targeting, dynamic mesh
 generation, acid bursts, vitality states, death causes, and complete weapon
