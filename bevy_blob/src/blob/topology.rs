@@ -41,6 +41,8 @@ impl Blob {
             ground_idle_damping: 0.72,
             ice_traction: 0.0,
             on_ice: false,
+            ground_is_ice: false,
+            ice_slide_velocity: 0.0,
             on_glue: false,
             ground_is_glue: false,
             charge_direction: 0.0,

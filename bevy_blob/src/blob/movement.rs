@@ -1,6 +1,7 @@
 //! Player locomotion, jump charging, and material-aware movement.
 
 use super::jump::JumpParticleFrame;
+use super::locomotion::GroundLocomotion;
 use super::*;
 
 /// Player or scripted intent applied during one fixed physics step.
@@ -122,12 +123,16 @@ impl Blob {
         if self.support_contact_count > 0 {
             self.support_normal = self.support_normal_sum.normalize_or(Vec2::Y);
         }
-        let previous_ground_traction = self.ground_traction;
-        let previous_ground_idle_damping = self.ground_idle_damping;
-        let previous_ground_is_glue = self.ground_is_glue;
+        let previous_ground = GroundLocomotion {
+            traction: self.ground_traction,
+            idle_damping: self.ground_idle_damping,
+            is_ice: self.ground_is_ice,
+            is_glue: self.ground_is_glue,
+        };
         self.ground_traction = 1.0;
         self.ground_idle_damping = 0.72;
         self.on_ice = false;
+        self.ground_is_ice = false;
         self.on_glue = false;
         self.ground_is_glue = false;
         self.support_normal_sum = Vec2::ZERO;
@@ -150,15 +155,8 @@ impl Blob {
             self.idle_amount = 0.0;
         }
 
-        let jump = self.prepare_jump_step(dt, horizontal, charging, previous_ground_is_glue);
-        let locomotion = self.prepare_locomotion_step(
-            dt,
-            horizontal,
-            vigor,
-            previous_ground_traction,
-            previous_ground_idle_damping,
-            previous_ground_is_glue,
-        );
+        let jump = self.prepare_jump_step(dt, horizontal, charging, previous_ground.is_glue);
+        let locomotion = self.prepare_locomotion_step(dt, horizontal, vigor, previous_ground);
         let jump_particle_frame = JumpParticleFrame {
             center: locomotion.center,
             rest_edge: self.rest_edge,
@@ -196,5 +194,37 @@ impl Blob {
         }
         self.finish_jump_step(charging, jump);
         self.solve_movement_constraints(environment, animate_idle, idle_anchor_x, dt);
+        if self.on_ice && self.ice_traction <= 0.001 {
+            let measured_inertia = locomotion.center_velocity.x;
+            if !previous_ground.is_ice || (measured_inertia - self.ice_slide_velocity).abs() > 0.05
+            {
+                // Capture the translation present at the moment of contact.
+                // This also accepts an external impulse while already on
+                // ice. Player input alone cannot overwrite the momentum.
+                self.ice_slide_velocity = measured_inertia;
+            }
+            if horizontal == 0.0 {
+                // Releasing input on ice stops the empty spin immediately.
+                // `remove_angular_velocity` deliberately keeps the body's
+                // centre-of-mass velocity, so an existing slide continues.
+                self.remove_angular_velocity();
+            }
+            let expected_center_x = locomotion.center.x + self.ice_slide_velocity;
+            self.translate(Vec2::X * (expected_center_x - self.center().x));
+            // The membrane is still allowed to spin visually on bare ice,
+            // but that spin must not create centre-of-mass motion. Preserve
+            // only the horizontal inertia that existed before this step.
+            self.set_horizontal_inertia(self.ice_slide_velocity);
+        } else {
+            self.ice_slide_velocity = self.velocity().x;
+        }
+    }
+
+    fn set_horizontal_inertia(&mut self, horizontal_velocity: f32) {
+        let current_velocity = self.velocity().x;
+        let correction = horizontal_velocity - current_velocity;
+        for particle in &mut self.particles {
+            particle.previous.x -= correction;
+        }
     }
 }

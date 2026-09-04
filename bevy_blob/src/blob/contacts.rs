@@ -56,8 +56,11 @@ impl Blob {
                         self.grounded = true;
                         if ice_platform_indices.contains(&platform_index) {
                             self.on_ice = true;
+                            self.ground_is_ice = true;
                             self.ground_traction = self.ground_traction.min(self.ice_traction);
-                            self.ground_idle_damping = self.ground_idle_damping.max(0.96);
+                            // Ice must preserve existing translation; only a
+                            // spine-assisted contact may create new traction.
+                            self.ground_idle_damping = self.ground_idle_damping.max(1.0);
                         }
                         if glue_platform_indices.contains(&platform_index) {
                             let size_ratio =

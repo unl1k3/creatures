@@ -2,6 +2,15 @@
 
 use super::*;
 
+/// Material response remembered from the previous contact pass.
+#[derive(Clone, Copy)]
+pub(super) struct GroundLocomotion {
+    pub(super) traction: f32,
+    pub(super) idle_damping: f32,
+    pub(super) is_ice: bool,
+    pub(super) is_glue: bool,
+}
+
 pub(super) struct LocomotionStep {
     pub(super) center: Vec2,
     pub(super) center_velocity: Vec2,
@@ -15,6 +24,7 @@ pub(super) struct LocomotionStep {
     maximum_speed: f32,
     previous_ground_traction: f32,
     previous_ground_idle_damping: f32,
+    previous_ground_is_ice: bool,
     previous_ground_is_glue: bool,
 }
 
@@ -24,9 +34,7 @@ impl Blob {
         dt: f32,
         horizontal: f32,
         vigor: f32,
-        previous_ground_traction: f32,
-        previous_ground_idle_damping: f32,
-        previous_ground_is_glue: bool,
+        previous_ground: GroundLocomotion,
     ) -> LocomotionStep {
         let center = self.center();
         let center_velocity = self
@@ -53,7 +61,7 @@ impl Blob {
             AIR_ACCELERATION
         } * vigor
             * if has_support {
-                previous_ground_traction
+                previous_ground.traction
             } else {
                 1.0
             };
@@ -85,9 +93,10 @@ impl Blob {
             rim_progress,
             acceleration,
             maximum_speed,
-            previous_ground_traction,
-            previous_ground_idle_damping,
-            previous_ground_is_glue,
+            previous_ground_traction: previous_ground.traction,
+            previous_ground_idle_damping: previous_ground.idle_damping,
+            previous_ground_is_ice: previous_ground.is_ice,
+            previous_ground_is_glue: previous_ground.is_glue,
         }
     }
 }
@@ -123,8 +132,15 @@ impl LocomotionStep {
                 * GROUND_ROLL_RATE
                 * if self.previous_ground_is_glue {
                     (self.previous_ground_traction * 2.0).min(0.18)
-                } else {
+                } else if self.previous_ground_is_ice {
+                    // On bare ice the membrane may spin without translating.
+                    // Its existing centre-of-mass momentum remains untouched.
                     1.0
+                } else {
+                    // Traction determines both translation and the rolling
+                    // torque. Bare ice is deliberately zero; deployed spines
+                    // supply a small, readable rolling grip.
+                    self.previous_ground_traction
                 }
                 * self.dt;
             let angular_correction =

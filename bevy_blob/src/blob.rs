@@ -97,6 +97,8 @@ pub struct Blob {
     ground_idle_damping: f32,
     ice_traction: f32,
     on_ice: bool,
+    ground_is_ice: bool,
+    ice_slide_velocity: f32,
     on_glue: bool,
     ground_is_glue: bool,
     charge_direction: f32,
