@@ -54,6 +54,7 @@ impl Blob {
             water_submerged: false,
             water_exit_elapsed: 0.0,
             spider_cling: None,
+            dance_tentacle: None,
         }
     }
 

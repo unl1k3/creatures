@@ -4,7 +4,7 @@ use super::geometry::{circle_aabb_penetration, circle_convex_penetration, point_
 use super::*;
 
 /// Finds the membrane edge nearest to a target without mutating the blob.
-pub(super) fn membrane_anchor(blob: &Blob, target: Vec2) -> (usize, f32) {
+pub(crate) fn membrane_anchor(blob: &Blob, target: Vec2) -> (usize, f32) {
     let count = blob.particles.len();
     (0..count)
         .map(|index| {

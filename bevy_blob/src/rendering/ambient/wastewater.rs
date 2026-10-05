@@ -2,7 +2,6 @@
 
 use crate::level_format::WastewaterAreaDefinition;
 use bevy::ecs::system::SystemParam;
-use bevy::prelude::*;
 use std::collections::HashMap;
 
 use super::*;

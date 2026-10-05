@@ -56,8 +56,9 @@ pub(super) fn rendered_membrane_points(
     blob: &Blob,
     load: Option<(Vec2, f32, f32, f32, usize, f32)>,
 ) -> Vec<RenderedMembranePoint> {
-    let Some((load_position, load_radius, strength, variation, anchor_edge, anchor_t)) =
-        load.filter(|(_, _, value, _, _, _)| *value > 0.01)
+    let Some((load_position, load_radius, strength, variation, anchor_edge, anchor_t)) = load
+        .or_else(|| blob.dance_tentacle_load())
+        .filter(|(_, _, value, _, _, _)| *value > 0.01)
     else {
         return blob
             .particles
