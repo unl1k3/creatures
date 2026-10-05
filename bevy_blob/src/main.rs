@@ -79,7 +79,7 @@ fn main() {
         .add_message::<BlobSoundEvent>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Blob — X divide, E ricongiunge, R reset, TAB seleziona".into(),
+                title: "Jeffrey 2".into(),
                 resolution: WindowResolution::new(900, 900),
                 position: WindowPosition::At(IVec2::new(20, 30)),
                 ..default()

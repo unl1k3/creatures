@@ -16,16 +16,19 @@ use self::environment_contacts::{
 };
 use self::platform_context::build_collision_platforms;
 use super::*;
+use crate::dance::DanceMusic;
+use bevy::audio::{AudioSink, AudioSinkPlayback};
 use bevy::ecs::system::SystemParam;
 
 /// Resources that define one fixed-step update of the controllable blobs.
 /// Grouping them keeps the system boundary readable without hiding ownership:
 /// mutable resources remain visibly mutable fields.
 #[derive(SystemParam)]
-pub(crate) struct BlobSimulationParams<'w> {
+pub(crate) struct BlobSimulationParams<'w, 's> {
     time: Res<'w, Time<Fixed>>,
     keyboard: Res<'w, ButtonInput<KeyCode>>,
     dance: ResMut<'w, BlobDancePreview>,
+    dance_music: Query<'w, 's, &'static AudioSink, With<DanceMusic>>,
     level: Res<'w, Level>,
     shields: Res<'w, ShieldWorld>,
     nutrition: Res<'w, NutritionWorld>,
@@ -45,6 +48,7 @@ pub(crate) fn simulate_blob(
         time,
         keyboard,
         mut dance,
+        dance_music,
         level,
         shields,
         nutrition,
@@ -54,10 +58,17 @@ pub(crate) fn simulate_blob(
         mut wastewater_effects,
     } = simulation;
     dance.advance(time.delta_secs());
+    dance.synchronize_to_music(
+        dance_music
+            .iter()
+            .next()
+            .map(|sink| sink.position().as_secs_f32()),
+    );
     let dance_movement = blobs
         .active
         .get(blobs.selected)
         .and_then(|active_blob| dance.movement_intent(active_blob.body.center().x));
+    let dance_tentacle = dance.tentacle_cue();
     advance_rejoin_timeout(&mut blobs, time.delta_secs());
     tick_audio_cooldowns(&mut blob_audio, time.delta_secs());
 
@@ -148,6 +159,9 @@ pub(crate) fn simulate_blob(
         if scripted_movement.is_some() && active_blob.body.grounded && dance.take_tiny_hop() {
             let _ = active_blob.body.tiny_ground_hop(time.delta_secs());
         }
+        active_blob
+            .body
+            .set_dance_tentacle((is_selected && alive).then_some(dance_tentacle).flatten());
         if active_blob.body.on_glue() && movement.abs() > 0.01 {
             // Working against adhesive sludge is tiring whether the spines
             // are deployed or not; spines improve control, not efficiency.

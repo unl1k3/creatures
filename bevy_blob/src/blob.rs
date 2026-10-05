@@ -1,3 +1,5 @@
+use crate::dance::DanceTentacleCue;
+use crate::nutrition::membrane_anchor;
 use bevy::prelude::*;
 
 mod contacts;
@@ -110,6 +112,7 @@ pub struct Blob {
     water_submerged: bool,
     water_exit_elapsed: f32,
     spider_cling: Option<SpiderCling>,
+    dance_tentacle: Option<DanceTentacle>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -118,7 +121,54 @@ struct SpiderCling {
     wall_top: f32,
 }
 
+/// A dance arm retains the same membrane seam throughout its phrase, exactly
+/// like a nutrient probe. Keeping the anchor stable prevents visual sliding.
+#[derive(Clone, Copy, Debug)]
+struct DanceTentacle {
+    cue: DanceTentacleCue,
+    anchor_edge: usize,
+    anchor_t: f32,
+}
+
 impl Blob {
+    /// Selects the temporary visual tentacle used by the dance preview.
+    /// It is deliberately presentation-only and never affects simulation.
+    pub(crate) fn set_dance_tentacle(&mut self, cue: Option<DanceTentacleCue>) {
+        self.dance_tentacle = cue.map(|cue| {
+            let keep_anchor = self
+                .dance_tentacle
+                .is_some_and(|current| current.cue.side == cue.side);
+            let (anchor_edge, anchor_t) = if keep_anchor {
+                let current = self.dance_tentacle.expect("anchor checked above");
+                (current.anchor_edge, current.anchor_t)
+            } else {
+                let target = self.center() + Vec2::new(cue.side, 0.0) * self.rest_radius * 2.0;
+                membrane_anchor(self, target)
+            };
+            DanceTentacle {
+                cue,
+                anchor_edge,
+                anchor_t,
+            }
+        });
+    }
+
+    pub(crate) fn dance_tentacle_load(&self) -> Option<(Vec2, f32, f32, f32, usize, f32)> {
+        let tentacle = self.dance_tentacle?;
+        let cue = tentacle.cue;
+        let center = self.center();
+        let direction = Vec2::new(cue.side, 0.20 + cue.wave.sin() * 0.24).normalize_or(Vec2::X);
+        let tip = center + direction * self.rest_radius * (1.20 + cue.extension * 1.05);
+        Some((
+            tip,
+            self.rest_radius * 0.20,
+            cue.extension,
+            (cue.wave * 0.1618).fract(),
+            tentacle.anchor_edge,
+            tentacle.anchor_t,
+        ))
+    }
+
     pub fn velocity(&self) -> Vec2 {
         self.particles
             .iter()

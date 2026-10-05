@@ -1,19 +1,37 @@
-//! Optional visual-motion preview for inspecting the soft body in isolation.
+//! Optional choreography preview for inspecting the soft body in isolation.
 
-use bevy::prelude::*;
-use std::time::{SystemTime, UNIX_EPOCH};
+use bevy::{audio::Volume, prelude::*};
 
-/// Self-contained movement loop: alternating roll, tiny hop, rest.
+const DANCE_COUNT: u64 = 3;
+/// The bundled loop is 120 BPM, so one eight-beat phrase lasts four seconds.
+const DANCE_BPM: f32 = 120.0;
+const BEAT_SECONDS: f32 = 60.0 / DANCE_BPM;
+const ROUTINE_SECONDS: f32 = 8.0 * BEAT_SECONDS;
+const MUSIC_LOOP_SECONDS: f32 = ROUTINE_SECONDS * DANCE_COUNT as f32;
+const MAX_EXCURSION: f32 = 7.0;
+
+/// A temporary membrane extension used exclusively by the renderer.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct DanceTentacleCue {
+    pub(crate) side: f32,
+    pub(crate) extension: f32,
+    pub(crate) wave: f32,
+}
+
+/// Repeating collection of small, readable dances for animation review.
 #[derive(Resource, Default)]
 pub(crate) struct BlobDancePreview {
     enabled: bool,
     elapsed: f32,
-    tiny_hop_pending: bool,
     origin_x: Option<f32>,
-    direction: f32,
-    last_cycle: u64,
-    random_state: u64,
+    routine: u64,
+    tiny_hop_pending: bool,
+    last_hop_phase: bool,
 }
+
+/// Looping music that exists only while the dance preview is active.
+#[derive(Component)]
+pub(crate) struct DanceMusic;
 
 impl BlobDancePreview {
     pub(crate) fn advance(&mut self, delta_seconds: f32) {
@@ -21,53 +39,73 @@ impl BlobDancePreview {
             return;
         }
 
-        const CYCLE_SECONDS: f32 = 2.45;
-        const HOP_PHASE: f32 = 0.98;
-        let previous_phase = self.elapsed.rem_euclid(CYCLE_SECONDS);
-        self.elapsed += delta_seconds;
-        let current_phase = self.elapsed.rem_euclid(CYCLE_SECONDS);
-        let cycle = (self.elapsed / CYCLE_SECONDS).floor() as u64;
-        if cycle != self.last_cycle {
-            self.last_cycle = cycle;
-            self.direction = if self.next_random() & 1 == 0 {
-                1.0
-            } else {
-                -1.0
-            };
-        }
-        // Queue one hop per cycle. It is consumed only after the selected
-        // blob has a supporting surface, so it can never become an air jump.
-        if (previous_phase < HOP_PHASE && current_phase >= HOP_PHASE)
-            || (current_phase < previous_phase && current_phase >= HOP_PHASE)
-        {
-            self.tiny_hop_pending = true;
+        self.set_elapsed(self.elapsed + delta_seconds);
+    }
+
+    /// Makes the choreography follow the audio device clock rather than the
+    /// physics clock. This keeps visual accents on the audible downbeats.
+    pub(crate) fn synchronize_to_music(&mut self, music_seconds: Option<f32>) {
+        if let Some(seconds) = music_seconds.filter(|_| self.enabled) {
+            self.set_elapsed(seconds.rem_euclid(MUSIC_LOOP_SECONDS));
         }
     }
 
-    /// Horizontal intent only: each short excursion is pulled back towards
-    /// the point at which the preview was enabled, avoiding visual drift.
+    fn set_elapsed(&mut self, elapsed: f32) {
+        let previous_phase = self.phase();
+        self.elapsed = elapsed;
+        let phase = self.phase();
+        self.routine = (self.elapsed / ROUTINE_SECONDS).floor() as u64 % DANCE_COUNT;
+        let hop_phase = self.routine == 2 && (1.50..1.63).contains(&phase);
+        if hop_phase && !self.last_hop_phase {
+            self.tiny_hop_pending = true;
+        }
+        self.last_hop_phase = hop_phase;
+        if phase < previous_phase {
+            self.origin_x = None;
+        }
+    }
+
+    /// Horizontal intent only; the choreography sways around its start point.
     pub(crate) fn movement_intent(&mut self, center_x: f32) -> Option<f32> {
         if !self.enabled {
             return None;
         }
-        const CYCLE_SECONDS: f32 = 2.45;
-        const MAX_EXCURSION: f32 = 18.0;
+
         let origin_x = *self.origin_x.get_or_insert(center_x);
         let offset = center_x - origin_x;
-        let phase = self.elapsed.rem_euclid(CYCLE_SECONDS);
-        let movement = match phase {
-            // Short, varied outward roll. It immediately eases if the blob
-            // has already travelled far enough away from its origin.
-            0.0..0.92 if offset * self.direction < MAX_EXCURSION => self.direction * 0.48,
-            0.0..0.92 => -self.direction * 0.30,
-            // The tiny hop occurs here; the body remains horizontally quiet.
-            0.92..1.28 => 0.0,
-            // Return with a proportional correction so inertia cannot build
-            // up over many dance cycles.
-            1.28..2.16 if offset.abs() > 1.5 => -offset.signum() * 0.58,
-            _ => 0.0,
+        let beat = self.beat_phase();
+        // These are body leans, not travel commands. Every target passes
+        // through the origin before reversing direction.
+        let target_offset = match self.routine {
+            0 => (beat * std::f32::consts::FRAC_PI_4).sin() * 3.8,
+            1 => (beat * std::f32::consts::FRAC_PI_2).sin() * 3.1,
+            _ => (beat * std::f32::consts::FRAC_PI_4).sin() * 2.4,
         };
-        Some(movement)
+        let correction = (target_offset - offset) * 0.040;
+        let intent = if offset.abs() > MAX_EXCURSION {
+            -offset.signum() * 0.14
+        } else {
+            correction.clamp(-0.12, 0.12)
+        };
+        Some(intent)
+    }
+
+    /// The current render-only tentacle, if the active routine calls for it.
+    pub(crate) fn tentacle_cue(&self) -> Option<DanceTentacleCue> {
+        if !self.enabled {
+            return None;
+        }
+        let beat = self.beat_phase();
+        match self.routine {
+            0 if beat < 2.6 => Some(tentacle(-1.0, beat / 2.6, beat * 2.5)),
+            0 if (3.0..5.8).contains(&beat) => Some(tentacle(1.0, (beat - 3.0) / 2.8, beat * 2.5)),
+            1 if beat < 2.2 => Some(tentacle(-1.0, beat / 2.2, beat * 3.5)),
+            1 if (2.0..4.1).contains(&beat) => Some(tentacle(1.0, (beat - 2.0) / 2.1, beat * 3.5)),
+            1 if (4.0..6.2).contains(&beat) => Some(tentacle(-1.0, (beat - 4.0) / 2.2, beat * 3.5)),
+            2 if beat < 1.8 => Some(tentacle(-1.0, beat / 1.8, beat * 3.0)),
+            2 if (2.6..4.8).contains(&beat) => Some(tentacle(1.0, (beat - 2.6) / 2.2, beat * 3.0)),
+            _ => None,
+        }
     }
 
     pub(crate) fn take_tiny_hop(&mut self) -> bool {
@@ -76,39 +114,135 @@ impl BlobDancePreview {
         hop
     }
 
+    fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn phase(&self) -> f32 {
+        self.elapsed.rem_euclid(ROUTINE_SECONDS)
+    }
+
+    fn beat_phase(&self) -> f32 {
+        self.phase() / BEAT_SECONDS
+    }
+
     fn toggle(&mut self) {
         self.enabled = !self.enabled;
         self.elapsed = 0.0;
-        self.tiny_hop_pending = false;
         self.origin_x = None;
-        self.last_cycle = 0;
-        // A local generator avoids adding a dependency solely for this
-        // optional preview. The activation time changes the initial seed,
-        // while each following cycle still varies its direction.
-        self.random_state = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0x9e37_79b9_7f4a_7c15, |elapsed| elapsed.as_nanos() as u64)
-            ^ 0x9e37_79b9_7f4a_7c15;
-        self.direction = if self.next_random() & 1 == 0 {
-            1.0
-        } else {
-            -1.0
-        };
+        self.routine = 0;
+        self.tiny_hop_pending = false;
+        self.last_hop_phase = false;
     }
+}
 
-    fn next_random(&mut self) -> u64 {
-        self.random_state ^= self.random_state << 13;
-        self.random_state ^= self.random_state >> 7;
-        self.random_state ^= self.random_state << 17;
-        self.random_state
+fn tentacle(side: f32, progress: f32, wave: f32) -> DanceTentacleCue {
+    let progress = progress.clamp(0.0, 1.0);
+    DanceTentacleCue {
+        side,
+        extension: (progress * std::f32::consts::PI).sin().powf(0.62),
+        wave,
     }
 }
 
 pub(crate) fn toggle_blob_dance(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut dance: ResMut<BlobDancePreview>,
+    asset_server: Res<AssetServer>,
+    mut commands: Commands,
+    music: Query<Entity, With<DanceMusic>>,
 ) {
     if keyboard.just_pressed(KeyCode::KeyT) {
         dance.toggle();
+        if dance.is_enabled() {
+            commands.spawn((
+                DanceMusic,
+                AudioPlayer::new(asset_server.load("audio/music/blob-dance.wav")),
+                PlaybackSettings::LOOP.with_volume(Volume::Linear(0.24)),
+            ));
+        } else {
+            for entity in &music {
+                commands.entity(entity).despawn();
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_routine_presents_left_then_right_tentacle() {
+        let mut dance = BlobDancePreview {
+            enabled: true,
+            ..default()
+        };
+        dance.elapsed = 0.35;
+        assert!(dance.tentacle_cue().is_some_and(|cue| cue.side < 0.0));
+        dance.elapsed = 2.10;
+        assert!(dance.tentacle_cue().is_some_and(|cue| cue.side > 0.0));
+    }
+
+    #[test]
+    fn first_routine_overlaps_arms_with_body_motion() {
+        let mut dance = BlobDancePreview {
+            enabled: true,
+            ..default()
+        };
+        dance.elapsed = 0.75;
+        assert!(dance.tentacle_cue().is_some_and(|cue| cue.side < 0.0));
+        assert!(
+            dance
+                .movement_intent(0.0)
+                .is_some_and(|intent| intent > 0.0)
+        );
+
+        dance.elapsed = 1.55;
+        assert!(dance.tentacle_cue().is_some_and(|cue| cue.side > 0.0));
+        assert!(
+            dance
+                .movement_intent(0.0)
+                .is_some_and(|intent| intent > 0.0)
+        );
+    }
+
+    #[test]
+    fn music_clock_places_the_right_arm_on_the_fourth_downbeat() {
+        let mut dance = BlobDancePreview {
+            enabled: true,
+            ..default()
+        };
+        dance.synchronize_to_music(Some(1.5));
+        assert!(dance.tentacle_cue().is_some_and(|cue| cue.side > 0.0));
+        assert!(
+            dance
+                .movement_intent(0.0)
+                .is_some_and(|intent| intent > 0.0)
+        );
+    }
+
+    #[test]
+    fn dance_sway_is_limited_and_returns_to_the_origin() {
+        let mut dance = BlobDancePreview {
+            enabled: true,
+            ..default()
+        };
+        dance.elapsed = 1.0;
+        let first_push = dance.movement_intent(0.0).unwrap();
+        assert!((0.0..=0.12).contains(&first_push));
+
+        let return_push = dance.movement_intent(MAX_EXCURSION + 1.0).unwrap();
+        assert!(return_push < 0.0);
+    }
+
+    #[test]
+    fn routines_rotate_after_each_phrase() {
+        let mut dance = BlobDancePreview {
+            enabled: true,
+            ..default()
+        };
+        dance.advance(ROUTINE_SECONDS + 0.01);
+        assert_eq!(dance.routine, 1);
     }
 }

@@ -22,9 +22,10 @@ use geometry::circle_convex_penetration;
 pub(super) use membrane::circle_blob_penetration;
 #[cfg(test)]
 use membrane::circle_intersects_blob_membrane;
+pub(crate) use membrane::membrane_anchor;
 use membrane::{
-    circle_outside_blob_membrane, constrain_protrusion_load, membrane_anchor,
-    membrane_lower_boundary, phagocytosis_path_clear,
+    circle_outside_blob_membrane, constrain_protrusion_load, membrane_lower_boundary,
+    phagocytosis_path_clear,
 };
 use physics::{
     FreeNutrientFrame, free_nutrient_contact_radius, sync_free_nutrients_before_digestion,
